@@ -25,7 +25,10 @@ English: [README.md](README.md).
 - **Rappels** compris en français naturel (« rappelle-moi demain à 9h de... »),
   délivrés en notification macOS.
 - **Glossaire** de noms propres et de termes métier, appliqué à chaque transcription.
-- **Connecteur Obsidian** : les dictées peuvent être rangées dans un coffre local.
+- **Connecteur Obsidian** : les dictées peuvent être rangées dans un coffre existant,
+  ou Vlocal crée le coffre « Vlocal, ma voix » où dictées, réunions (par locuteur)
+  et rappels sont conservés en Markdown, avec un CLAUDE.md qui décrit la
+  structure à un assistant qui travaille sur vos fichiers.
 - Interface en français et en anglais.
 
 ## Prérequis

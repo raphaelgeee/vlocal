@@ -31,6 +31,12 @@ _IS_MAC = sys.platform == "darwin"
 _overlay = None  # instance unique (_Overlay)
 _anchor_provider = None  # callable -> (x, y, w, h) de l'icône menu bar (ou None)
 
+# Géométrie verticale de la bulle (dictation_overlay.html) : le corps (.wrap)
+# commence à 44 px du haut du panneau (marge pour l'aura) ; le bec (.point, carré
+# de 14 px tourné de 45°) déborde de 6 px au-dessus du corps, son sommet est donc
+# à 44 - 6 - (7·√2 - 7) ≈ 35 px du haut du panneau. Cf. _Overlay._top_offset.
+_TIP_APEX_PX = 35.0
+
 
 def set_anchor_provider(fn):
     """Fournit la position de l'icône Vlocal de la barre des menus, pour ancrer
@@ -176,20 +182,17 @@ if _IS_MAC:
 
         @staticmethod
         def _top_offset(scr, vf):
-            """v1.0.9 — décalage vertical ADAPTATIF à la hauteur de la barre des
-            menus, pour que la pastille soit au MÊME niveau sous la barre quel que
-            soit l'écran. Calé sur les Mac à ENCOCHE (barre ~37 px, ex. 14"/16")
-            où +36 est correct ; sur un Mac SANS encoche (barre ~24 px, ex. 13"
-            Air) la barre est plus courte -> on remonte la pastille d'autant
-            (sinon elle descendait trop bas). Plafonné, et NO-OP sur l'écran à
-            encoche (zéro risque pour celui qui est déjà bon)."""
-            try:
-                fr = scr.frame()
-                mbh = (fr.origin.y + fr.size.height) - (vf.origin.y + vf.size.height)
-                extra = max(0.0, min(16.0, 37.0 - mbh))
-            except Exception:
-                extra = 0.0
-            return 36.0 + extra
+            """v1.1.0 — décalage vertical CONSTANT : le sommet du bec vient se poser
+            1 px sous le bord de la barre des menus, quelle que soit sa hauteur.
+
+            L'ancien calcul (v1.0.9) supposait une barre de 37 px et remontait la
+            bulle de la différence : sur un 14" à encoche (barre 33 px) le bec
+            remontait de 4 px SOUS la barre, où il était masqué (« engloutie ») ;
+            sur un 13" sans encoche (24 px) il disparaissait entièrement. Le
+            panneau est positionné par rapport à visibleFrame, dont le haut EST le
+            bas de la barre des menus : la distance bec / barre ne dépend donc pas
+            de la hauteur de la barre, il n'y a rien à compenser."""
+            return _TIP_APEX_PX - 1.0
 
         def __init__(self):
             # Résolution UNIQUE du HTML (mémoïsée), sur le main thread, avant

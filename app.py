@@ -1988,6 +1988,37 @@ def _post_process_by_mode(raw: str, mode: str):
         print(f"[dictée] capture Obsidian ignorée ({e}).")
 
 
+def _obsidian_meeting_sync(meeting_id):
+    """v1.1.0 — Écrit (ou met à jour) la note Obsidian d'une réunion si un coffre
+    est connecté. Appelé à la fin du pipeline, après une ré-analyse et après un
+    renommage de locuteur. Thread daemon, échec silencieux : la réunion est déjà
+    en base quoi qu'il arrive."""
+    try:
+        _s = _load_settings()
+        if not (_s.get("obsidian_enabled") and _s.get("obsidian_vault")) or _store is None:
+            return
+        vault = _s.get("obsidian_vault")
+        def _run():
+            try:
+                m = _store.get_meeting(int(meeting_id))
+                if not m:
+                    return
+                blocks, names = None, {}
+                try:
+                    payload = json.loads(m.get("speaker_blocks_json") or "null")
+                    if isinstance(payload, dict):
+                        blocks = payload.get("blocks") or None
+                        names = payload.get("names") or {}
+                except Exception:
+                    pass
+                obsidian.capture_meeting(m, vault, blocks=blocks, names=names)
+            except Exception as e:
+                print(f"[reunion] note Obsidian ignorée ({e}).")
+        threading.Thread(target=_run, name="obsidian-meeting", daemon=True).start()
+    except Exception:
+        pass
+
+
 def _create_reminder_from_text(raw: str):
     """Crée un rappel depuis un texte dicté (parseur local). Notif planifiée à
     l'heure dite ; confirmation in-app QUOI + QUAND."""
@@ -2013,6 +2044,13 @@ def _create_reminder_from_text(raw: str):
                               source_raw_text=raw)
     except Exception:
         return
+    # v1.1.0 — coffre « Vlocal, ma voix » : le rappel y est aussi consigné.
+    try:
+        _s = _load_settings()
+        if _s.get("obsidian_enabled") and _s.get("obsidian_vault"):
+            obsidian.capture_reminder(titre, echeance_naturelle, _s.get("obsidian_vault"))
+    except Exception:
+        pass
     iso_ts = notifier.parse_iso(datetime_iso)
     if iso_ts and iso_ts > now_ts:
         when = reminders.humanize_when(datetime_iso, now_ts)
@@ -2845,6 +2883,7 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
         if speaker_blocks_json is not None:
             fields["speaker_blocks_json"] = speaker_blocks_json
         _store.update_meeting(meeting_id, **fields)
+        _obsidian_meeting_sync(meeting_id)   # v1.1.0 — coffre « Vlocal, ma voix »
 
     # Notif + refresh UI.
     mins = int(audio_duree // 60)
@@ -3696,6 +3735,7 @@ class Api:
                 _store.update_meeting(int(mid), speaker_blocks_json=json.dumps(
                     {"blocks": blocks, "names": auto_names, "voices": voices_map},
                     ensure_ascii=False))
+                _obsidian_meeting_sync(mid)
                 return len({b["speaker"] for b in blocks})
             finally:
                 # Déchargement CAM++ + rechargement turbo GARANTIS, y compris
@@ -3939,6 +3979,7 @@ class Api:
             data["names"].pop(speaker_id, None)
         _store.update_meeting(int(mid), speaker_blocks_json=json.dumps(
             data, ensure_ascii=False))
+        _obsidian_meeting_sync(mid)
         # Enrôlement / apprentissage de la voix (centroïde stocké avec la réunion).
         # v29.9 — gaté par le toggle « Mémoriser les voix » (Réglages > Voix
         # connues) : si OFF, on nomme le locuteur dans CETTE réunion mais on
@@ -3997,6 +4038,7 @@ class Api:
             return False
         _store.update_meeting(int(mid), speaker_blocks_json=json.dumps(
             data, ensure_ascii=False))
+        _obsidian_meeting_sync(mid)
         return True
 
     # ------------------------ v13 : Glossaire personnel ----------------------
@@ -4345,6 +4387,17 @@ class Api:
         return {"enabled": bool(s.get("obsidian_enabled")),
                 "path": path,
                 "valid": bool(path) and os.path.isdir(path)}
+
+    @_api_safe(default=lambda: {"ok": False, "error": "Création du coffre impossible."})
+    def create_obsidian_vault(self):
+        """v1.1.0 — Crée le coffre « Vlocal, ma voix » dans Documents (ou le
+        complète s'il existe), l'inscrit dans Obsidian et le connecte. Tout ce qui
+        est dit dans Vlocal y est ensuite rangé : dictées, réunions, rappels."""
+        r = obsidian.create_voice_vault()
+        if not r.get("ok"):
+            return {"ok": False, "error": r.get("error") or "Création du coffre impossible."}
+        _save_settings({"obsidian_vault": r["path"], "obsidian_enabled": True})
+        return {"ok": True, "path": r["path"], "created": bool(r.get("created"))}
 
     @_api_safe(default=lambda: {"ok": False, "error": "Connexion à Obsidian impossible."})
     def connect_obsidian(self):

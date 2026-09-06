@@ -28,6 +28,14 @@ Free and open source.
   (0.296 versus 0.289) and chose 2; the spectral estimate finds 4, keeps 2 on
   five two-speaker meetings and 1 on single-voice subsets. Region-level speaker
   accuracy on the annotated windows: 81.6 % to 94.0 % (same as forcing 4).
+- Dictation overlay: the pointer now sits on the menu bar edge on every screen.
+  The previous offset assumed a 37 px menu bar and pushed the tip 4 px under
+  the bar on 14-inch notch Macs (33 px), entirely under it on 13-inch Macs.
+- Obsidian: a "Vlocal, ma voix" vault can be created from Settings. Dictations
+  go to a daily note, each meeting gets a note with speakers, reminders are
+  listed; a CLAUDE.md at the root describes the structure for an assistant.
+- Admin console: token stored as a SHA-256 hash, per-IP and global lockouts.
+- Meeting import: GPU timeout proportional to the block length (was 60 s).
 - Code: live-tail extracted to `livetail.py`, backend coordinates centralized in
   `supabase_config.py`, Nuitka compilation removed from the build, usage
   counters table (`usage_days`) in SQLite.

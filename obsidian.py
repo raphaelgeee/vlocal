@@ -261,3 +261,216 @@ def capture(text, vault, now_ts=None, routing=None):
     except Exception as e:
         return {"ok": False, "error": str(e)}
     return {"ok": True, "path": note_path, "bucket": r["bucket"]}
+
+
+# --- Coffre « Vlocal, ma voix » (v1.1.0) ---------------------------------------
+#
+# Un coffre dédié, créé par Vlocal, où TOUT ce qui est dit dans l'app est rangé
+# de façon structurée : dictées (note du jour), réunions (une note par réunion,
+# avec les locuteurs) et rappels. Le but est double : relire dans Obsidian, et
+# donner à un assistant (Claude Code ouvert sur le coffre) le contexte réel de
+# ce sur quoi la personne travaille. Un CLAUDE.md à la racine explique la
+# structure. Tout reste local ; le partage est décidé par l'utilisateur.
+
+VOICE_VAULT_NAME = "Vlocal, ma voix"
+DICTATIONS_DIR = "Dictées"
+MEETINGS_DIR = "Réunions"
+REMINDERS_DIR = "Rappels"
+
+_VOICE_ROUTING = {
+    "version": 1,
+    "default": {"note": DAILY, "section": "## Dictées"},
+    "buckets": [
+        {
+            "name": "Taches",
+            "note": DAILY,
+            "section": "## À faire",
+            "as_task": True,
+            "keywords": [
+                "a faire", "rappelle-moi", "rappelle moi", "rappel", "deadline",
+                "todo", "penser a", "ne pas oublier", "il faut que", "noter de",
+            ],
+        },
+    ],
+}
+
+_VOICE_README = """# Vlocal, ma voix
+
+Ce coffre est écrit par Vlocal, l'application de dictée et de transcription
+100 % locale. Rien ici n'a transité par un serveur : chaque note vient d'une
+dictée, d'une réunion ou d'un rappel enregistré sur ce Mac.
+
+## Structure
+
+- `Dictées/AAAA-MM-JJ.md` : une note par jour. Section « Dictées » (horodatées)
+  et section « À faire » (les phrases qui ressemblent à une tâche, en cases à
+  cocher).
+- `Réunions/AAAA-MM-JJ HHMM Titre.md` : une note par réunion, avec la date, la
+  durée, les participants reconnus et la transcription par locuteur.
+- `Rappels/Rappels.md` : les rappels créés à la voix, avec leur échéance.
+- `.vlocal/routing.json` : règles de rangement des dictées (modifiables).
+
+Les fichiers sont du Markdown ordinaire : ils se lisent dans Obsidian, dans un
+éditeur, ou par un assistant à qui vous donnez accès au dossier.
+"""
+
+_VOICE_CLAUDE_MD = """# Contexte : coffre « Vlocal, ma voix »
+
+Ce dossier contient tout ce que son propriétaire a dicté ou enregistré avec
+Vlocal (dictée vocale et transcription de réunions, traitement 100 % local).
+Il sert de mémoire de travail : ce que la personne fait, à qui elle parle, ce
+qu'elle a décidé.
+
+Comment l'utiliser :
+- `Dictées/` : notes quotidiennes, les plus récentes d'abord pour comprendre
+  le contexte du moment. Les lignes « - [ ] » sont des tâches ouvertes.
+- `Réunions/` : transcriptions par locuteur. Les noms viennent de la
+  reconnaissance des voix de Vlocal ; « Voix 1 », « Voix 2 » sont des
+  locuteurs non nommés.
+- `Rappels/` : rappels datés.
+
+Ces textes sont des transcriptions automatiques : noms propres et homophones
+peuvent être approximatifs. Ne pas réécrire ces fichiers, Vlocal les complète
+au fil de l'eau.
+"""
+
+
+def default_voice_vault_path():
+    return os.path.join(os.path.expanduser("~/Documents"), VOICE_VAULT_NAME)
+
+
+def _register_in_obsidian(path):
+    """Ajoute le coffre à la liste des coffres connus d'Obsidian (obsidian.json),
+    pour qu'il apparaisse dans le sélecteur. Best-effort : si le fichier de
+    config n'existe pas (Obsidian jamais lancé), on ne crée rien."""
+    try:
+        if not os.path.exists(_OBSIDIAN_CONFIG):
+            return False
+        with open(_OBSIDIAN_CONFIG, "r", encoding="utf-8") as f:
+            data = json.load(f) or {}
+        vaults = data.setdefault("vaults", {})
+        for v in vaults.values():
+            if isinstance(v, dict) and os.path.realpath(v.get("path") or "") == os.path.realpath(path):
+                return True
+        import secrets
+        vaults[secrets.token_hex(8)] = {"path": path,
+                                        "ts": int(_dt.datetime.now().timestamp() * 1000)}
+        tmp = _OBSIDIAN_CONFIG + ".vlocal.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        os.replace(tmp, _OBSIDIAN_CONFIG)
+        return True
+    except Exception:
+        return False
+
+
+def create_voice_vault(base=None):
+    """Crée (ou complète) le coffre « Vlocal, ma voix ». Idempotent : ne touche
+    jamais une note existante. Renvoie {ok, path, created}."""
+    path = base or default_voice_vault_path()
+    try:
+        created = not os.path.isdir(path)
+        for sub in (".obsidian", ".vlocal", DICTATIONS_DIR, MEETINGS_DIR, REMINDERS_DIR):
+            os.makedirs(os.path.join(path, sub), exist_ok=True)
+        daily_cfg = os.path.join(path, ".obsidian", "daily-notes.json")
+        if not os.path.exists(daily_cfg):
+            with open(daily_cfg, "w", encoding="utf-8") as f:
+                json.dump({"folder": DICTATIONS_DIR, "format": "YYYY-MM-DD"}, f)
+        app_cfg = os.path.join(path, ".obsidian", "app.json")
+        if not os.path.exists(app_cfg):
+            with open(app_cfg, "w", encoding="utf-8") as f:
+                json.dump({}, f)
+        for name, body in (("README.md", _VOICE_README), ("CLAUDE.md", _VOICE_CLAUDE_MD)):
+            p = os.path.join(path, name)
+            if not os.path.exists(p):
+                with open(p, "w", encoding="utf-8") as f:
+                    f.write(body)
+        seed_routing(path, _VOICE_ROUTING)
+        _register_in_obsidian(path)
+        return {"ok": True, "path": path, "created": created}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def _safe_title(s, limit=60):
+    s = re.sub(r"[\\/:*?\"<>|\n\r\t]+", " ", (s or "")).strip()
+    s = re.sub(r"\s+", " ", s)
+    return (s[:limit].rstrip() or "Réunion")
+
+
+def capture_meeting(meeting, vault, blocks=None, names=None):
+    """Écrit (ou réécrit) la note d'une réunion : Réunions/AAAA-MM-JJ HHMM Titre.md.
+    `meeting` = ligne SQLite (dict) ; `blocks` = [{speaker,start,end,text}] ;
+    `names` = {speaker_id: nom}. Une note par réunion (fichier stable via l'id),
+    remplacée à chaque ré-analyse ou renommage. Ne lève jamais."""
+    try:
+        if not vault or not os.path.isdir(vault) or not meeting:
+            return {"ok": False, "error": "coffre introuvable"}
+        mid = int(meeting.get("id") or 0)
+        try:
+            when = _dt.datetime.fromtimestamp(float(meeting.get("created_at") or 0))
+        except Exception:
+            when = _dt.datetime.now()
+        title = _safe_title(meeting.get("titre") or "Réunion")
+        folder = os.path.join(vault, MEETINGS_DIR)
+        os.makedirs(folder, exist_ok=True)
+        stem = when.strftime("%Y-%m-%d %H%M") + " " + title
+        path = os.path.join(folder, stem + ".md")
+        # fichier stable par réunion : un marqueur d'id retrouve l'ancien nom
+        marker = f"vlocal_meeting_id: {mid}"
+        for fn in os.listdir(folder):
+            fp = os.path.join(folder, fn)
+            if fn.endswith(".md") and fp != path:
+                try:
+                    with open(fp, "r", encoding="utf-8") as f:
+                        head = f.read(400)
+                    if marker in head:
+                        path = fp
+                        break
+                except Exception:
+                    pass
+        names = names or {}
+        dur = float(meeting.get("duree_audio_s") or 0)
+        speakers = []
+        if blocks:
+            for b in blocks:
+                sid = b.get("speaker")
+                if sid not in speakers:
+                    speakers.append(sid)
+        parts = ["---", marker, f"date: {when.strftime('%Y-%m-%d %H:%M')}",
+                 f"durée_min: {int(round(dur / 60.0))}",
+                 "participants: [" + ", ".join(
+                     f"\"{names.get(s) or ('Voix ' + str(i + 1))}\"" for i, s in enumerate(speakers)) + "]",
+                 "---", "", "# " + title, ""]
+        if blocks:
+            for b in blocks:
+                who = names.get(b.get("speaker")) or ("Voix %d" % (speakers.index(b.get("speaker")) + 1))
+                t = int(float(b.get("start") or 0))
+                parts.append(f"**{who}** ({t // 60:02d}:{t % 60:02d})")
+                parts.append((b.get("text") or "").strip())
+                parts.append("")
+        else:
+            parts.append((meeting.get("transcription_structuree")
+                          or meeting.get("transcription_brute") or "").strip())
+            parts.append("")
+        with _WRITE_LOCK:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("\n".join(parts))
+        return {"ok": True, "path": path}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def capture_reminder(titre, echeance, vault, now_ts=None):
+    """Ajoute un rappel à Rappels/Rappels.md (case à cocher, échéance). Ne lève jamais."""
+    try:
+        if not vault or not os.path.isdir(vault):
+            return {"ok": False, "error": "coffre introuvable"}
+        now = _dt.datetime.fromtimestamp(now_ts) if now_ts else _dt.datetime.now()
+        path = os.path.join(vault, REMINDERS_DIR, "Rappels.md")
+        line = f"- [ ] {(titre or '').strip()} (échéance : {(echeance or '').strip() or 'non précisée'}, dicté le {now.strftime('%Y-%m-%d %H:%M')})"
+        with _WRITE_LOCK:
+            _append_under_section(path, "## Rappels", line)
+        return {"ok": True, "path": path}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}

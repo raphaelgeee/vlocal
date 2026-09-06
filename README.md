@@ -24,7 +24,10 @@ Français : [README.fr.md](README.fr.md).
 - **Reminders** parsed from natural French ("rappelle-moi demain à 9h de ...") and
   delivered as native macOS notifications.
 - **Glossary** of proper nouns and domain terms, applied to every transcription.
-- **Obsidian** connector: dictations can be filed in a local vault.
+- **Obsidian** connector: dictations can be filed in an existing vault, or Vlocal
+  creates a "Vlocal, ma voix" vault where dictations, meetings (by speaker) and
+  reminders are kept as Markdown, with a CLAUDE.md describing the layout for an
+  assistant working on your files.
 - Interface in French and English.
 
 ## Requirements

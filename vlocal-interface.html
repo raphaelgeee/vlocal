@@ -812,7 +812,8 @@
             <div class="sh" data-i18n="set.obs.d">Rangez vos dictées dans un coffre Obsidian, en local. Rien ne quitte votre Mac.</div>
             <div class="sh" id="obs-info" style="margin-top:6px">·</div>
             <div class="set-row" style="border-bottom:none"><div class="si"><div class="sl" data-i18n="set.obs.on">Activer la capture Obsidian</div><div class="sd" data-i18n="set.obs.on.d">Chaque dictée est rangée au bon endroit de votre coffre.</div></div><div class="tog" data-setting="obsidian_enabled"></div></div>
-            <div class="field" style="margin-top:8px"><button class="btn primary" id="obs-connect" data-i18n="set.obs.connect">Détecter mon coffre</button><button class="btn" id="obs-pick" data-i18n="set.obs.pick">Choisir manuellement</button></div>
+            <div class="field" style="margin-top:8px"><button class="btn primary" id="obs-create" data-i18n="set.obs.create">Créer le coffre « Vlocal, ma voix »</button><button class="btn" id="obs-connect" data-i18n="set.obs.connect">Détecter mon coffre</button><button class="btn" id="obs-pick" data-i18n="set.obs.pick">Choisir manuellement</button></div>
+            <div class="sd" style="margin-top:8px" data-i18n="set.obs.create.d">Le coffre « Vlocal, ma voix » range tout ce que vous dites dans Vlocal : dictées par jour, réunions par locuteur, rappels. Un fichier CLAUDE.md à sa racine explique la structure à un assistant qui travaille sur vos fichiers.</div>
           </div>
           <div class="card sec">
             <div class="st" data-i18n="set.data">Données &amp; stockage</div>
@@ -1173,7 +1174,7 @@
       "js.storage.unavailable":"Stockage indisponible",
       "js.unit.gb":" Go",
       "js.unit.mb":" Mo",
-      "set.obs":"Connexion Obsidian","set.obs.d":"Rangez vos dictées dans un coffre Obsidian, en local. Rien ne quitte votre Mac.","set.obs.on":"Activer la capture Obsidian","set.obs.on.d":"Chaque dictée est rangée au bon endroit de votre coffre.","set.obs.connect":"Détecter mon coffre","set.obs.pick":"Choisir manuellement","status.obs.on":"Coffre connecté · {0}","status.obs.off":"Aucun coffre connecté.","toast.obs-connected":"Coffre Obsidian connecté.","toast.obs-fail":"Connexion impossible. Réessayez.",
+      "set.obs":"Connexion Obsidian","set.obs.d":"Rangez vos dictées, vos réunions et vos rappels dans un coffre Obsidian, en local. Rien ne quitte votre Mac.","set.obs.create":"Créer le coffre « Vlocal, ma voix »","set.obs.create.d":"Le coffre « Vlocal, ma voix » range tout ce que vous dites dans Vlocal : dictées par jour, réunions par locuteur, rappels. Un fichier CLAUDE.md à sa racine explique la structure à un assistant qui travaille sur vos fichiers.","toast.obs-created":"Coffre « Vlocal, ma voix » créé dans Documents et connecté.","set.obs.on":"Activer la capture Obsidian","set.obs.on.d":"Chaque dictée est rangée au bon endroit de votre coffre.","set.obs.connect":"Détecter mon coffre","set.obs.pick":"Choisir manuellement","status.obs.on":"Coffre connecté · {0}","status.obs.off":"Aucun coffre connecté.","toast.obs-connected":"Coffre Obsidian connecté.","toast.obs-fail":"Connexion impossible. Réessayez.",
       "side.free":"Gratuit et open source","side.local":"100 % local · sur votre Mac",
       "set.share":"Données partagées","set.share.d":"Vlocal est gratuit et open source. Pour savoir qui l'utilise et le temps qu'il fait gagner, l'app peut envoyer une fois par jour : votre prénom et nom, la version, le nombre de dictées, le nombre de mots et le temps gagné estimé. Jamais de texte, jamais d'audio.",
       "set.share.on":"Partager mon usage","set.share.on.d":"Désactivable à tout moment. Sans effet sur le fonctionnement de l'app.",
@@ -1391,7 +1392,7 @@
       "js.storage.unavailable":"Storage unavailable",
       "js.unit.gb":" GB",
       "js.unit.mb":" MB",
-      "set.obs":"Obsidian connection","set.obs.d":"Save your dictations to an Obsidian vault, locally. Nothing leaves your Mac.","set.obs.on":"Enable Obsidian capture","set.obs.on.d":"Each dictation is filed in the right place in your vault.","set.obs.connect":"Detect my vault","set.obs.pick":"Choose manually","status.obs.on":"Vault connected · {0}","status.obs.off":"No vault connected.","toast.obs-connected":"Obsidian vault connected.","toast.obs-fail":"Connection failed. Try again.",
+      "set.obs":"Obsidian connection","set.obs.d":"Save your dictations, meetings and reminders to an Obsidian vault, locally. Nothing leaves your Mac.","set.obs.create":"Create the \"Vlocal, my voice\" vault","set.obs.create.d":"The \"Vlocal, my voice\" vault keeps everything you say in Vlocal: dictations by day, meetings by speaker, reminders. A CLAUDE.md file at its root explains the structure to an assistant working on your files.","toast.obs-created":"\"Vlocal, my voice\" vault created in Documents and connected.","set.obs.on":"Enable Obsidian capture","set.obs.on.d":"Each dictation is filed in the right place in your vault.","set.obs.connect":"Detect my vault","set.obs.pick":"Choose manually","status.obs.on":"Vault connected · {0}","status.obs.off":"No vault connected.","toast.obs-connected":"Obsidian vault connected.","toast.obs-fail":"Connection failed. Try again.",
       "side.free":"Free and open source","side.local":"100% local · on your Mac",
       "set.share":"Shared data","set.share.d":"Vlocal is free and open source. To know who uses it and how much time it saves, the app can send once a day: your first and last name, the version, the number of dictations, the number of words and the estimated time saved. Never any text, never any audio.",
       "set.share.on":"Share my usage","set.share.on.d":"Can be turned off at any time. Has no effect on how the app works.",
@@ -2500,6 +2501,12 @@
     });
   });
   // v1.0.13 — Connexion Obsidian : détection auto + choix manuel du coffre
+  var obsCreate = document.getElementById('obs-create');
+  if(obsCreate) obsCreate.addEventListener('click', async function(){
+    var r = await call('create_obsidian_vault', [], {ok:false});
+    if(r && r.ok){ showToast(t(r.created ? 'toast.obs-created' : 'toast.obs-connected'), 'success'); loadReglages(); }
+    else { showToast((r && r.error) ? r.error : t('toast.obs-fail'), 'error'); }
+  });
   var obsConnect = document.getElementById('obs-connect');
   if(obsConnect) obsConnect.addEventListener('click', async function(){
     var r = await call('connect_obsidian', [], {ok:false});
