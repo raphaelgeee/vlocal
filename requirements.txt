@@ -1,0 +1,30 @@
+# Vlocal : dépendances Python (moteur vocal + app desktop macOS).
+# faster-whisper : moteur Whisper sur CTranslate2 (CPU natif, int8).
+#   Embarque ctranslate2, tokenizers et huggingface_hub (téléchargement + cache).
+faster-whisper>=1.1.0
+sounddevice>=0.4.6
+numpy>=1.24.0
+psutil>=5.9      # log RSS au démarrage (diagnostic RAM) + harness de tests
+# App desktop
+pywebview>=5.0      # fenêtre native + pont JS <-> Python (pyobjc sur macOS)
+#
+# v18 — Diarisation locale « qui parle quand ». Backend LÉGER :
+#   sherpa-onnx (ONNX, zéro torch, zéro modèle gated). Optionnel : si absent,
+#   les réunions s'affichent en texte continu (repli silencieux).
+#   Modèles ONNX (~30 Mo) à placer dans models/diarization/ :
+#     - sherpa-onnx-pyannote-segmentation-3-0/model.int8.onnx (ou model.onnx en repli)
+#     - embedding.onnx (3D-Speaker CAM++ 192-d, cf. diarizer.py v18.6)
+#   cf. github.com/k2-fsa/sherpa-onnx/releases (non-gated).
+sherpa-onnx>=1.10
+#
+# v23 — Moteur GPU OPTIONNEL : Whisper turbo sur le GPU Apple (MLX/Metal),
+#   ~7x plus rapide que le CPU à qualité identique. macOS Apple Silicon
+#   uniquement. Si absent, repli automatique et silencieux sur faster-whisper
+#   (CPU). Modèle MLX à placer via download_mlx.py avant le build.
+mlx-whisper>=0.4 ; platform_machine == "arm64" and sys_platform == "darwin"
+# v3.2.8 — ÉPINGLÉ : core + backend Metal en 0.31.2. NB le tag macOS du wheel
+#   dépend de la machine de build (macOS 26 -> wheel macos26 = GPU KO < macOS 26) :
+#   c'est le GARDE-FOU de build_app.sh (étape 3ter) qui empêche un mauvais ciblage
+#   de sortir. Installer le core macOS 14 : cf. mémoire vlocal-mlx-metallib-target.
+mlx==0.31.2 ; platform_machine == "arm64" and sys_platform == "darwin"
+mlx-metal==0.31.2 ; platform_machine == "arm64" and sys_platform == "darwin"

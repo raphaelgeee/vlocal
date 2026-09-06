@@ -1,0 +1,109 @@
+{
+  "schema": 1,
+  "model_set": "v1",
+  "base_url": "https://pub-4359855167d74cdca4c20e25f70b3c9a.r2.dev/models",
+  "models": {
+    "whisper-large-v3-turbo-mlx-q8": {
+      "weights.safetensors": {
+        "size": 863659156,
+        "sha256": "1dffa280543756dcdd5324250c811c2a1ba8654c363d7d0b1a5da2b1563629df"
+      },
+      "config.json": {
+        "size": 269,
+        "sha256": "87d130d7942bff70fbd79330899959360a5515351af4ab3b5d074b397c7a2179"
+      }
+    },
+    "whisper-large-v3-turbo-int8": {
+      "model.bin": {
+        "size": 1617884929,
+        "sha256": "e76620f83d5f5b69efd3d87e3dc180c1bd21df9fbebacfd4335e5e1efcc018da"
+      },
+      "vocabulary.json": {
+        "size": 1068114,
+        "sha256": "c69260f2ab26d659b7c398f9a2b2b48ed0df16c3b47d7326782fd9cba71690c1"
+      },
+      "config.json": {
+        "size": 2263,
+        "sha256": "b0253ea6c0d3bea6b1e19e91a02acfd3b53f4467362efcb5a3e6b16c9b3a9b7e"
+      },
+      "tokenizer.json": {
+        "size": 2710337,
+        "sha256": "297b13372ac43916285644fb9687add3cc62ee2a1adb60da3dc25cc94c1871fd"
+      },
+      "preprocessor_config.json": {
+        "size": 340,
+        "sha256": "7ccc62c6f2765af1f3b46c00c9b5894426835a05021c8b9c01eecb6dfb542711"
+      },
+      ".cache/huggingface/CACHEDIR.TAG": {
+        "size": 191,
+        "sha256": "f6572428f6d5e1575e73a1502895a8731f10757dfbb634909c6e154b849af91d"
+      },
+      ".cache/huggingface/.gitignore": {
+        "size": 1,
+        "sha256": "684888c0ebb17f374298b65ee2807526c066094c701bcc7ebbe1c1095f494fc1"
+      },
+      ".cache/huggingface/download/preprocessor_config.json.metadata": {
+        "size": 101,
+        "sha256": "aaf89cab1ecb1c781a09ff77f68c6c6dd07237d4a6897cf4255e45d775d93c0f"
+      },
+      ".cache/huggingface/download/config.json.metadata": {
+        "size": 101,
+        "sha256": "21e67bcb6b6b2e7fe9708947886b67613f31e47ab1d02811043adb68a4a89c30"
+      },
+      ".cache/huggingface/download/tokenizer.json.metadata": {
+        "size": 100,
+        "sha256": "f3eb89709cfdad99555bee9efe729a74c3ec411dd7ea92fbb8156b2af1cc20e3"
+      },
+      ".cache/huggingface/download/model.bin.metadata": {
+        "size": 124,
+        "sha256": "2a873e0d63e2da7ccad02f54e0cbdf3d27714ca118f35dd399174ef13e304f1e"
+      },
+      ".cache/huggingface/download/vocabulary.json.metadata": {
+        "size": 101,
+        "sha256": "ccdc815167aa54429c4dd0b2ebf888b30ee49215d8fbcfc01ef8df9d0622ba2b"
+      }
+    },
+    "whisper-small-int8": {
+      "model.bin": {
+        "size": 483546902,
+        "sha256": "3e305921506d8872816023e4c273e75d2419fb89b24da97b4fe7bce14170d671"
+      },
+      "config.json": {
+        "size": 2370,
+        "sha256": "b55496ac7940a7ae47d2c01eab40edfd8701feec1229d9cce3b40014383fb828"
+      },
+      "tokenizer.json": {
+        "size": 2203239,
+        "sha256": "fb7b63191e9bb045082c79fd742a3106a12c99513ab30df4a0d47fa6cb6fd0ab"
+      },
+      "vocabulary.txt": {
+        "size": 459861,
+        "sha256": "34ce3fe1c5041027b3f8d42912270993f986dbc4bb34cf27f951e34a1e453913"
+      },
+      ".cache/huggingface/CACHEDIR.TAG": {
+        "size": 191,
+        "sha256": "f6572428f6d5e1575e73a1502895a8731f10757dfbb634909c6e154b849af91d"
+      },
+      ".cache/huggingface/.gitignore": {
+        "size": 1,
+        "sha256": "684888c0ebb17f374298b65ee2807526c066094c701bcc7ebbe1c1095f494fc1"
+      },
+      ".cache/huggingface/download/config.json.metadata": {
+        "size": 100,
+        "sha256": "171e56847d36915195a1eba0497cbc7553f1b77b33bd37a4b760ba1c7698e406"
+      },
+      ".cache/huggingface/download/tokenizer.json.metadata": {
+        "size": 100,
+        "sha256": "ce106fe8a7cc36d23f00c4fd5246523796eafbe9122844ba35370b8193823585"
+      },
+      ".cache/huggingface/download/vocabulary.txt.metadata": {
+        "size": 99,
+        "sha256": "34186d692787c5946e188f8be00a1c25739a475b71de3004a25e90ab8ab2da8e"
+      },
+      ".cache/huggingface/download/model.bin.metadata": {
+        "size": 125,
+        "sha256": "64326c64c59fe8155c96d2776cde00913b1cd5acdfdf404918384bdecce9f065"
+      }
+    }
+  }
+}

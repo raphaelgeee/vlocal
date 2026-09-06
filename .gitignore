@@ -1,0 +1,55 @@
+# Vlocal : dépôt de code source. Tout ce qui est lourd, généré ou personnel
+# reste hors du dépôt.
+
+# Modèles (plusieurs Go) : téléchargés au premier lancement (model_store.py)
+# ou via download_whisper.py / download_mlx.py pour le développement.
+models
+models/
+*.bin
+
+# Artefacts de build et de packaging (PyInstaller, DMG, binaire syscapture)
+dist
+dist/
+build
+build/*
+!build/make_icon.py
+*.app/
+*.dmg
+*.pkg
+/syscapture
+
+# Environnement virtuel et caches
+venv
+venv/
+.venv/
+env/
+.cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+__pycache__/
+*.py[cod]
+
+# Données d'évaluation : enregistrements réels et références (non publiables)
+eval/
+tests/rd/real/
+tests/rd/corpus/
+tests/rd/*.json
+tests/rd/*.npz
+*.wav
+!tests/fixtures/*.wav
+*.npz
+
+# Notes de travail et documents internes
+_private/
+*.bak.html
+
+# Système
+.DS_Store
+supabase/.temp/
+tests/rd/
+.claude/
+.metadata_never_index
+
+# Dossiers lourds sortis d'iCloud (suffixe .nosync), pointés par des liens symboliques
+*.nosync/

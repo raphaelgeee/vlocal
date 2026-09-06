@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+/* =============================================================================
+   Vlocal — Overlay de dictée (design "pilule" Apple Intelligence, validé en artefact).
+   - FOND 100% TRANSPARENT : aucune carte/cadre noir autour. Seule la pilule a un fond.
+   - Police SYSTÈME (-apple-system / SF) : zéro police embarquée, zéro requête réseau.
+   - Icônes en SVG INLINE (glyph V, check) : aucune police d'icônes -> jamais de "□".
+   - 3 états : recording (waveform + timer), transcribing (chrono s,cc), result (carte texte).
+   - Halo iridescent : scintille + bounce + RÉAGIT À LA VOIX via --lvl (poussé par ovLevel).
+   - API ov* identique à ce que pilote overlay.py (aucun changement côté Python requis).
+   ========================================================================== */
+:root{
+  --irid:linear-gradient(180deg,#5b8cff,#9d7bff 28%,#ff77c2 55%,#ffb06b 78%,#5be3c0);
+  --glass:linear-gradient(160deg,rgba(25,26,33,.96),rgba(11,11,15,.975));
+  --font:-apple-system,BlinkMacSystemFont,'SF Pro Display','SF Pro Text',system-ui,sans-serif;
+  --mono:'SF Mono',ui-monospace,'SFMono-Regular',Menlo,monospace;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:transparent}
+body{
+  font-family:var(--font);
+  display:flex;align-items:flex-start;justify-content:center;
+  padding-top:44px;overflow:hidden;   /* marge HAUTE élargie : l'aura se fond au-dessus sans être coupée */
+  -webkit-font-smoothing:antialiased;
+  --lvl:.15;                         /* niveau de voix 0..1 (poussé par ovLevel) */
+}
+.wrap{position:relative;transition:opacity .22s cubic-bezier(.16,1,.3,1),transform .22s cubic-bezier(.16,1,.3,1)}
+body[data-state="idle"] .wrap{opacity:0;transform:translateY(-6px) scale(.985);pointer-events:none}
+
+/* bec d'ancrage (masqué par défaut ; ovTail/ovAnchor le pilotent) */
+.point{position:absolute;top:-6px;left:50%;margin-left:-7px;width:14px;height:14px;border-radius:4px;
+  transform:rotate(45deg);background:linear-gradient(135deg,rgba(27,28,36,.97),rgba(15,15,20,.98));
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.13);z-index:3;display:none}
+
+/* ---- halo (lumière derrière) + contour iridescent, réactifs à la voix ----
+   v1.0.6 — LIQUID GLASS. gA = halo qui ÉPOUSE le contour (rond-rect flouté : il se
+   fond tout seul -> AUCUNE délimitation, fini le masque radial « effet cadre »).
+   gB = liseré qui flue le long du bord (brillant mais feutré : lumière de bord,
+   jamais un trait CAO). Le dégradé conique TOURNE lentement (--hang) -> flux
+   « Apple Intelligence » vivant. On NE touche QU'À ça : surface, pilule, waveform,
+   badge, timer, position -> inchangés. */
+@property --hang{syntax:'<angle>';inherits:false;initial-value:205deg}
+.glow{position:absolute;pointer-events:none;will-change:transform,opacity;
+  background:conic-gradient(from var(--hang) at 50% 50%,#6f9bff,#9d7bff,#c77bff,#ff8ad0,#6fe0ff,#6f9bff)}
+.gA{--hang:205deg;inset:-7px;z-index:0;filter:blur(16px) saturate(1.25);
+  opacity:calc(.5 + var(--lvl) * .26);
+  animation:hang 9s linear infinite,hbreath 3.4s ease-in-out infinite;transition:opacity .12s linear}
+.gB{--hang:205deg;inset:0;z-index:2;filter:blur(2px);
+  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
+  -webkit-mask-composite:xor;mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
+  mask-composite:exclude;padding:2.2px;opacity:calc(.6 + var(--lvl) * .2);
+  animation:hang 9s linear infinite;transition:opacity .12s linear}
+@keyframes hang{to{--hang:565deg}}
+@keyframes hbreath{0%,100%{transform:scale(.992)}50%{transform:scale(1.012)}}
+/* v3.3 — VITESSE : pendant la transcription, MLX a besoin du GPU. On met le halo
+   animé en PAUSE (il reste visible, statique, mais ne se recompose plus à chaque
+   frame) -> un peu de GPU rendu à MLX. ZÉRO impact qualité/RAM/moteur. */
+body[data-state="transcribing"] .gA,body[data-state="transcribing"] .gB{animation-play-state:paused}
+
+/* ---- stages : pilule (recording/transcribing) et carte (result/messages) ---- */
+.stage{position:relative;display:none}
+body[data-state="recording"] #stage-pill,
+body[data-state="transcribing"] #stage-pill{display:block}
+body[data-state="result"] #stage-card,
+body[data-state="tooshort"] #stage-card,
+body[data-state="error"] #stage-card,
+body[data-state="mic"] #stage-card,
+body[data-state="info"] #stage-card{display:block}
+#stage-pill .gA{border-radius:41px}#stage-pill .gB{border-radius:34px}
+#stage-card .gA{border-radius:34px}#stage-card .gB{border-radius:27px}
+
+.surface{position:relative;z-index:1;background:var(--glass);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.12),0 22px 46px -16px rgba(0,0,0,.72)}
+
+/* ---- PILULE ---- */
+.pill{width:404px;height:68px;border-radius:34px;display:flex;align-items:center;gap:14px;
+  justify-content:space-between;padding:0 24px 0 11px}
+.badge{flex:0 0 auto;width:46px;height:46px;border-radius:50%;display:grid;place-items:center;
+  background:rgba(255,255,255,.055);border:.5px solid rgba(255,255,255,.2);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.12)}
+.gl{display:block;color:#f2f3f5}
+.wave{flex:1;display:flex;align-items:center;justify-content:space-between;height:32px}
+.wb{width:3px;border-radius:2px;background:#fff}
+@keyframes wv{0%,100%{transform:scaleY(.26)}50%{transform:scaleY(1)}}
+.worklabel{position:absolute;left:0;right:0;text-align:center;font-size:14.5px;color:rgba(255,255,255,.72);
+  font-weight:450;pointer-events:none;display:none}
+body[data-state="recording"] .wave{display:flex}
+body[data-state="transcribing"] .wave{display:none}
+body[data-state="transcribing"] .worklabel{display:block}
+.timer{flex:0 0 auto;font:500 14px/1 var(--mono);color:rgba(255,255,255,.6);
+  font-variant-numeric:tabular-nums;letter-spacing:.5px;min-width:38px;text-align:right}
+body[data-state="transcribing"] .timer{min-width:56px}
+
+/* ---- CARTE (result / messages) ---- */
+.card{width:404px;border-radius:27px;padding:17px 21px 15px}
+.crow{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+.badge.sm{width:40px;height:40px}
+.icon{width:27px;height:27px;border-radius:50%;display:none;place-items:center;
+  background:rgba(255,255,255,.1);color:#fff}
+body[data-state="result"] .icon{display:grid}
+.ctext{font-size:15.5px;line-height:1.5;color:rgba(255,255,255,.95);font-weight:450;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.cfoot{display:flex;align-items:center;gap:7px;margin-top:13px;font-size:11.5px;color:rgba(255,255,255,.42)}
+.cfoot:empty{display:none}
+</style>
+</head>
+<body data-state="idle">
+  <div class="wrap" id="wrap">
+    <div class="point" id="point"></div>
+
+    <!-- PILULE : recording + transcribing -->
+    <div class="stage" id="stage-pill">
+      <div class="glow gA"></div><div class="glow gB"></div>
+      <div class="surface pill">
+        <div class="badge"><svg class="gl" width="23" height="23" viewBox="0 0 2000 2000" aria-hidden="true"><g transform="translate(0,2000) scale(1,-1)" fill="currentColor"><path d="M89 2000 c0 -1 -3 -1 -5 -1 -40 -6 -76 -41 -83 -82 0 -3 0 -417 0 -919 l0 -913 2 -9 c5 -19 12 -32 27 -46 13 -14 26 -22 46 -27 7 -2 8 -2 96 -3 l88 0 837 837 c461 460 839 839 842 842 9 11 17 31 19 47 1 9 0 24 -2 33 -2 13 -10 29 -17 39 -5 6 -128 129 -135 135 -26 21 -65 27 -97 15 -7 -3 -19 -9 -24 -13 -1 -1 -285 -285 -631 -631 l-629 -628 0 614 c0 338 0 617 -1 620 -2 22 -12 44 -29 61 -12 12 -27 21 -45 26 l-9 2 -125 1 c-69 0 -125 0 -125 0z"/><path d="M802 219 l-218 -219 666 0 666 1 9 2 c38 11 66 41 74 80 1 11 1 261 -1 272 -5 31 -25 58 -54 73 -5 2 -15 6 -18 7 -2 0 -5 1 -8 1 -4 1 -108 1 -451 1 l-446 1 -219 -219z"/></g></svg></div>
+        <div class="wave" id="wave"></div>
+        <div class="worklabel">Transcription</div>
+        <div class="timer" id="rtimer">0:00</div>
+      </div>
+    </div>
+
+    <!-- CARTE : result + messages -->
+    <div class="stage" id="stage-card">
+      <div class="glow gA"></div><div class="glow gB"></div>
+      <div class="surface card">
+        <div class="crow">
+          <div class="badge sm"><svg class="gl" width="20" height="20" viewBox="0 0 2000 2000" aria-hidden="true"><g transform="translate(0,2000) scale(1,-1)" fill="currentColor"><path d="M89 2000 c0 -1 -3 -1 -5 -1 -40 -6 -76 -41 -83 -82 0 -3 0 -417 0 -919 l0 -913 2 -9 c5 -19 12 -32 27 -46 13 -14 26 -22 46 -27 7 -2 8 -2 96 -3 l88 0 837 837 c461 460 839 839 842 842 9 11 17 31 19 47 1 9 0 24 -2 33 -2 13 -10 29 -17 39 -5 6 -128 129 -135 135 -26 21 -65 27 -97 15 -7 -3 -19 -9 -24 -13 -1 -1 -285 -285 -631 -631 l-629 -628 0 614 c0 338 0 617 -1 620 -2 22 -12 44 -29 61 -12 12 -27 21 -45 26 l-9 2 -125 1 c-69 0 -125 0 -125 0z"/><path d="M802 219 l-218 -219 666 0 666 1 9 2 c38 11 66 41 74 80 1 11 1 261 -1 272 -5 31 -25 58 -54 73 -5 2 -15 6 -18 7 -2 0 -5 1 -8 1 -4 1 -108 1 -451 1 l-446 1 -219 -219z"/></g></svg></div>
+          <div class="icon" id="cardicon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 13l4 4L19 7"/></svg></div>
+        </div>
+        <div class="ctext" id="ctext"></div>
+        <div class="cfoot" id="cfoot"></div>
+      </div>
+    </div>
+  </div>
+
+<script>
+(function(){
+  "use strict";
+  var body=document.body, wrap=document.getElementById('wrap');
+  var rtimer=document.getElementById('rtimer');
+  var ctext=document.getElementById('ctext'), cfoot=document.getElementById('cfoot');
+  var point=document.getElementById('point');
+  var _iv=null;            // intervalle actif (timer ou chrono)
+  var _hotkey=null;        // libellé du raccourci (gardé pour compat ; non affiché dans la pilule compacte)
+
+  // --------- i18n (fr/en) : la langue est poussée par overlay.py via ovLang() ---------
+  var OV = {
+    fr:{ work:'Transcription', wait:'Encore un instant…', inserted:'Texte inséré', copied:'Copié',
+         tooshort:'C’est un peu court.', tooshort_sub:'Maintiens le raccourci un peu plus longtemps.',
+         error:'Une erreur est survenue.', retry_hk:'Réessaie : maintiens {0}', retry:'Réessaie quand tu veux.',
+         mic:'Micro requis.', mic_sub:'Autorise le microphone dans Réglages.' },
+    en:{ work:'Transcribing', wait:'One more moment…', inserted:'Text inserted', copied:'Copied',
+         tooshort:'That was a bit short.', tooshort_sub:'Hold the shortcut a little longer.',
+         error:'Something went wrong.', retry_hk:'Try again: hold {0}', retry:'Try again whenever you like.',
+         mic:'Microphone needed.', mic_sub:'Allow the microphone in Settings.' }
+  };
+  var OVLANG='fr';
+  function tt(k,a){ var m=OV[OVLANG]||OV.fr; var s=m[k]; if(s===undefined)s=OV.fr[k]; if(s===undefined)return k; if(a!==undefined)s=String(s).split('{0}').join(a); return s; }
+  window.ovLang=function(l){ if(l==='fr'||l==='en') OVLANG=l; };
+
+  // ---- waveform : VU-mètre VIVANT — chaque barre suit le niveau de la voix (--lvl),
+  //      forme de lentille, vie proportionnelle au volume (calme en silence, animé quand on parle) ----
+  (function(){
+    var w=document.getElementById('wave'); if(!w) return; var N=40, bars=[], env=[], ph=[];
+    for(var i=0;i<N;i++){
+      var b=document.createElement('span'); b.className='wb'; w.appendChild(b); bars.push(b);
+      env.push(0.40+0.60*Math.sin((i/(N-1))*Math.PI));   // lentille : plus haut au centre
+      ph.push((i*1.7)%6.283);                            // phase propre par barre
+    }
+    if(matchMedia('(prefers-reduced-motion: reduce)').matches){
+      bars.forEach(function(b,i){ b.style.height=(16+env[i]*46).toFixed(0)+'%'; b.style.opacity='.7'; });
+      return;
+    }
+    var shown=new Array(N).fill(0.12), t=0;
+    function frame(){
+      t++;
+      var lvl=parseFloat(document.body.style.getPropertyValue('--lvl'))||0.10;
+      var amp=Math.min(1, lvl*4.2);                        // RMS parole (~0.02-0.25) -> 0..1
+      for(var i=0;i<N;i++){
+        var life=0.5+0.5*Math.sin(ph[i]+t*0.11);           // oscillation douce, propre à chaque barre
+        // base lentille x niveau, + vie PROPORTIONNELLE au niveau -> calme en silence, animé en parlant
+        var target=env[i]*(0.16+0.84*amp)*(0.66+0.34*life*Math.min(1,amp*1.4));
+        shown[i]+=(target-shown[i])*0.3;                   // lissage
+        bars[i].style.height=(7+shown[i]*93).toFixed(1)+'%';
+        bars[i].style.opacity=(0.42+Math.min(1,shown[i]*1.5)*0.58).toFixed(2);
+      }
+      requestAnimationFrame(frame);
+    }
+    frame();
+  })();
+
+  function _clear(){ if(_iv){clearInterval(_iv);_iv=null;} }
+  function setState(s){ _clear(); body.setAttribute('data-state', s); }
+  function clamp(v){ v=parseFloat(v); if(isNaN(v))v=0; return v<0?0:(v>1?1:v); }
+  function fmtMMSS(s){ var m=Math.floor(s/60), ss=s%60; return m+':'+(ss<10?'0':'')+ss; }
+  function fmtS(x){ var v=(Math.round(x*100)/100).toFixed(2); return (OVLANG==='en'?v:v.replace('.',','))+' s'; }
+
+  // --------- API pilotée par overlay.py ---------
+  window.ovRecording=function(){
+    setState('recording'); setLvl(.25);
+    var s=0; rtimer.textContent='0:00';
+    _iv=setInterval(function(){ s++; rtimer.textContent=fmtMMSS(s); },1000);
+  };
+  function setLvl(v){ body.style.setProperty('--lvl', clamp(v).toFixed(3)); }
+  window.ovLevel=function(v){ setLvl(v); };
+  window.ovTranscribing=function(rec_s){
+    setState('transcribing'); setLvl(.18);
+    var wl=document.querySelector('.worklabel'); if(wl) wl.textContent=tt('work');
+    var ms=80; rtimer.textContent='0,08 s';
+    _iv=setInterval(function(){ ms+=50; rtimer.textContent=fmtS(ms/1000);
+      // rassure si c'est anormalement long (avant le watchdog) : pas figé, juste plus long.
+      if(wl && ms>8000){ wl.textContent=tt('wait'); }
+    },50);
+  };
+  window.ovResult=function(trans_s, inserted, branch, text){
+    setState('result'); setLvl(.14);
+    ctext.textContent = text || '';
+    cfoot.textContent = (inserted ? tt('inserted') : tt('copied')) + ' · ' + fmtS(Number(trans_s)||0);
+  };
+  window.ovTooShort=function(){
+    setState('tooshort'); setLvl(.12);
+    ctext.textContent = tt('tooshort');
+    cfoot.textContent = tt('tooshort_sub');
+  };
+  window.ovError=function(msg){
+    setState('error'); setLvl(.12);
+    ctext.textContent = msg || tt('error');
+    cfoot.textContent = _hotkey ? tt('retry_hk', _hotkey) : tt('retry');
+  };
+  window.ovMicNeeded=function(){
+    setState('mic'); setLvl(.12);
+    ctext.textContent = tt('mic');
+    cfoot.textContent = tt('mic_sub');
+  };
+  window.ovInfo=function(title, sub){
+    setState('info'); setLvl(.12);
+    ctext.textContent = title || '';
+    cfoot.textContent = sub || '';
+  };
+  window.ovHotkey=function(label){ _hotkey = label || null; };
+  window.ovTail=function(show){ point.style.display = show ? 'block' : 'none'; };
+  window.ovAnchor=function(px){ var v=parseFloat(px); if(!isNaN(v)){ point.style.left=v+'px'; point.style.marginLeft='-7px'; } };
+  window.ovFadeOut=function(){ wrap.style.opacity='0'; wrap.style.transform='translateY(-6px) scale(.985)'; };
+  window.ovReset=function(){ _clear(); wrap.style.opacity=''; wrap.style.transform=''; setState('idle'); setLvl(.15); };
+})();
+</script>
+</body>
+</html>

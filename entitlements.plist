@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- v3.1 — Entitlements indispensables pour que MLX (Metal JIT) + Python/PyInstaller
+       fonctionnent SOUS hardened runtime (exigé par la notarisation Apple).
+       Sans eux : "Failed to compile Metal" / "killed: 9" au lancement notarisé. -->
+  <key>com.apple.security.cs.allow-jit</key><true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/>
+  <key>com.apple.security.cs.disable-library-validation</key><true/>
+  <key>com.apple.security.cs.allow-dyld-environment-variables</key><true/>
+  <!-- v3.2.8 — CRITIQUE : accès MICRO sous hardened runtime. SANS lui, la dictée est
+       muette ("aucun son capté") sur TOUTE version notarisée. Les builds DEV (non
+       durcis) marchaient sans -> le bug restait masqué jusqu'au test sur notarisé. -->
+  <key>com.apple.security.device.audio-input</key><true/>
+</dict>
+</plist>
