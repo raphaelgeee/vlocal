@@ -1709,9 +1709,15 @@ class VlocalEngine:
         # v28 — anti-hallucination RÉUNION : saute les passages de silence que
         # Whisper « remplit » (ex. « Sous-titrage Société Radio-Canada »). Sans
         # effet sur la dictée (qui n'appelle pas ce chemin).
+        # v1.1.0 — délai proportionnel à l'audio (blocs d'import jusqu'à 450 s,
+        # horodatage des mots plus lent) : le plafond fixe de 60 s était atteint
+        # sur une machine chargée, et déclaré « gel Metal » à tort.
+        _budget = max(mlx_engine._MLX_JOB_TIMEOUT,
+                      dictation_gpu_timeout(len(audio_np) / float(SAMPLE_RATE)))
         r = mlx_engine.transcribe(audio_np, language="fr", initial_prompt=prompt,
                                   word_timestamps=True,
-                                  hallucination_silence_threshold=2.0)
+                                  hallucination_silence_threshold=2.0,
+                                  _timeout=_budget)
         seg_list, all_probs = [], []
         for seg in r.get("segments", []):
             words = []

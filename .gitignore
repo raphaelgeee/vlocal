@@ -50,6 +50,3 @@ supabase/.temp/
 tests/rd/
 .claude/
 .metadata_never_index
-
-# Dossiers lourds sortis d'iCloud (suffixe .nosync), pointés par des liens symboliques
-*.nosync/
