@@ -12,9 +12,9 @@ vulnerability before it is fixed. You will get an answer within a week.
   the `get-latest-version` edge function. The in-app updater verifies the
   Developer ID signature and Apple notarization of the downloaded DMG before
   installing it.
-- The telemetry endpoint (Supabase tables `installs` and `usage_days`). Writes
-  are allowed with the public anon key; reads are not. See
-  `supabase/migrations`.
+- The telemetry endpoint: the `vlocal_report_usage` function (Supabase). The
+  public key can only call it; the `installs` and `usage_days` tables are not
+  readable or writable with that key. See `supabase/migrations`.
 
 ## What the app does not do
 

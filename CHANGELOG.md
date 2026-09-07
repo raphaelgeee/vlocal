@@ -3,6 +3,15 @@
 Dates are publication dates on the update channel. Earlier internal versions
 (3.x, June 2026) are not listed.
 
+## 1.1.1, 7 September 2026
+
+Telemetry transport fixed. 1.1.0 wrote its daily counters with a direct
+PostgREST upsert; under row-level security that upsert needs read access to the
+row, which would have exposed names to anyone holding the public key. The app
+now calls a single `security definer` function (`vlocal_report_usage`) and the
+tables are not readable or writable with the public key at all. Nothing else
+changes.
+
 ## 1.1.0, 6 September 2026
 
 Free and open source.

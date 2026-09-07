@@ -85,25 +85,24 @@ class PayloadTests(unittest.TestCase):
 
     def test_disabled_or_undecided_sends_nothing(self):
         calls = []
-        fake = lambda table, rows, oc: calls.append(table)
+        fake = lambda install, usage: calls.append(install)
         for value in (None, False):
             s = dict(self.settings, telemetry_enabled=value)
-            self.assertFalse(telemetry.sync_once(s, self.store, "1.1.0", "15", upsert=fake))
+            self.assertFalse(telemetry.sync_once(s, self.store, "1.1.0", "15", send=fake))
         self.assertEqual(calls, [])
 
-    def test_enabled_upserts_both_tables_and_never_raises(self):
+    def test_enabled_sends_once_and_never_raises(self):
         calls = []
-        fake = lambda table, rows, oc: calls.append((table, oc, len(rows)))
+        fake = lambda install, usage: calls.append((install["install_id"], len(usage)))
         self.store.record_usage(3)
         self.assertTrue(telemetry.sync_once(self.settings, self.store, "1.1.0", "15",
-                                            upsert=fake))
-        self.assertEqual(calls, [("installs", "install_id", 1),
-                                 ("usage_days", "install_id,day", 1)])
+                                            send=fake))
+        self.assertEqual(calls, [(self.settings["install_id"], 1)])
 
-        def boom(table, rows, oc):
+        def boom(install, usage):
             raise OSError("offline")
         self.assertFalse(telemetry.sync_once(self.settings, self.store, "1.1.0", "15",
-                                             upsert=boom))
+                                             send=boom))
 
 
 if __name__ == "__main__":
