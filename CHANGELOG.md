@@ -3,6 +3,18 @@
 Dates are publication dates on the update channel. Earlier internal versions
 (3.x, June 2026) are not listed.
 
+## 1.1.2, 8 September 2026
+
+Security review before the public announcement.
+
+- In-app updater: the downloaded update must be signed by this project's Apple
+  team (Team ID pinned), in addition to the Developer ID and notarization
+  checks. A notarized app from another developer is refused.
+- Backend: public roles hold no table privilege at all; the telemetry function
+  is the only surface open to the app's public key (300 new installs per hour,
+  sanitized names, capped values); feedback endpoint rate-limited; paid-era
+  functions answer 410; admin console served with a Content-Security-Policy.
+
 ## 1.1.1, 7 September 2026
 
 Telemetry transport fixed. 1.1.0 wrote its daily counters with a direct

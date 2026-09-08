@@ -37,6 +37,22 @@ BACKUP = "/Applications/.Vlocal-backup.app"          # filet de restauration
 _UA = "Vlocal-Updater (macOS)"
 
 
+# v1.1.2 — ÉPINGLAGE de l'éditeur : au-delà de « signé par un Developer ID et
+# notarisé », la mise à jour doit être signée par CETTE équipe Apple. Sans ce
+# contrôle, quiconque publierait une URL de DMG vers une app notarisée par un
+# autre développeur passerait les deux vérifications précédentes.
+EXPECTED_TEAM_ID = "LW8B2TTQ4W"
+
+
+def team_id_matches(codesign_output: str, expected: str = EXPECTED_TEAM_ID) -> bool:
+    """True si la sortie de `codesign -dv --verbose=2` porte TeamIdentifier=expected."""
+    for line in (codesign_output or "").splitlines():
+        line = line.strip()
+        if line.startswith("TeamIdentifier="):
+            return line.split("=", 1)[1].strip() == expected
+    return False
+
+
 class UpdateError(Exception):
     """Échec MAJ avec message CLAIR destiné à l'utilisateur (déjà en français)."""
 
@@ -110,7 +126,7 @@ def _detach(mount):
 
 
 def verify_and_stage(dmg_path, on_stage=None):
-    """Monte le DMG, vérifie l'app (codesign --strict + spctl notarisation),
+    """Monte le DMG, vérifie l'app (codesign --strict, spctl notarisation, Team ID),
     en copie une réplique exacte dans UPDATES/Vlocal.app. Renvoie ce chemin.
     Lève UpdateError au moindre doute (rien n'est installé)."""
     import plistlib
@@ -152,7 +168,11 @@ def verify_and_stage(dmg_path, on_stage=None):
                           "--verbose=2", app], timeout=120)
         if code != 0:
             raise UpdateError("Mise à jour non notarisée par Apple — installation refusée.")
-        # (c) réplique EXACTE hors du DMG (ditto préserve la signature).
+        # (c) v1.1.2 — l'éditeur est le nôtre (TeamIdentifier épinglé).
+        code, out5 = _run(["/usr/bin/codesign", "-dv", "--verbose=2", app], timeout=60)
+        if code != 0 or not team_id_matches(out5):
+            raise UpdateError("Mise à jour signée par un autre éditeur — installation refusée.")
+        # (d) réplique EXACTE hors du DMG (ditto préserve la signature).
         if on_stage:
             on_stage("stage")
         staged = os.path.join(UPDATES, "Vlocal.app")
