@@ -33,3 +33,19 @@ app.
    `submit-feedback`, or drop the features you do not need.
 3. Set `VLOCAL_SUPABASE_URL` and `VLOCAL_SUPABASE_ANON_KEY` in the environment,
    or edit `supabase_config.py`.
+
+## Retired functions
+
+`validate-license`, `get-license`, `stripe-webhook`, `public-config` and
+`announce` belonged to the paid product. Since 8 September 2026 they answer
+`410 Gone`. Versions up to 1.0.26 treat that as an offline check and keep
+working until they update.
+
+## Abuse limits
+
+- `vlocal_report_usage`: at most 300 new installations per hour, values capped,
+  names stripped of control characters, callable by the anon role only.
+- `submit-feedback`: at most 30 stored reports per hour, 10 e-mail
+  notifications per hour, honeypot field.
+- `admin`: token compared by SHA-256 hash, 5 failures per IP per 15 minutes,
+  30 failures per hour overall.
