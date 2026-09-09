@@ -179,5 +179,49 @@ class PayloadTests(unittest.TestCase):
                                              send=boom))
 
 
+class SchedulerTests(unittest.TestCase):
+    """Le planificateur doit VRAIMENT transporter le profil machine jusqu'à
+    l'envoi. Un `get_profile` non branché ne casse rien de visible : les colonnes
+    restent simplement vides pour tout le monde, en silence."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.store = storage.Store(os.path.join(self.tmp.name, "t.db"))
+        self.store.record_usage(4)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_profile_reaches_the_payload(self):
+        vu = {}
+        settings = {"install_id": telemetry.new_install_id(), "first_name": "A",
+                    "last_name": "B", "telemetry_enabled": True}
+        t = telemetry.Telemetry(lambda: settings, lambda p: settings.update(p or {}),
+                                lambda: self.store, "1.3.0", "15.5",
+                                get_profile=lambda: {"mac_model": "Apple M5", "ui_lang": "en",
+                                                     "hotkey": "right_opt", "engine": "cpu"})
+        original = telemetry.sync_once
+        telemetry.sync_once = lambda *a, **k: vu.update(k.get("profile") or {}) or True
+        try:
+            self.assertTrue(t.sync_now())
+        finally:
+            telemetry.sync_once = original
+        self.assertEqual(vu, {"mac_model": "Apple M5", "ui_lang": "en",
+                              "hotkey": "right_opt", "engine": "cpu"})
+
+    def test_a_failing_profile_never_blocks_the_send(self):
+        settings = {"install_id": telemetry.new_install_id(), "telemetry_enabled": True}
+        def explose():
+            raise RuntimeError("sysctl indisponible")
+        t = telemetry.Telemetry(lambda: settings, lambda p: None, lambda: self.store,
+                                "1.3.0", "15.5", get_profile=explose)
+        original = telemetry.sync_once
+        telemetry.sync_once = lambda *a, **k: True
+        try:
+            self.assertTrue(t.sync_now())
+        finally:
+            telemetry.sync_once = original
+
+
 if __name__ == "__main__":
     unittest.main()
