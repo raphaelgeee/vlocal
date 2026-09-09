@@ -71,6 +71,10 @@ rm -f  dist/Vlocal-*.dmg dist/Vlocal\ *.dmg 2>/dev/null || true
 echo "==> 1bis  Cohérence i18n du dashboard (fr/en alignés, aucune clé manquante)"
 $PY tests/check_i18n.py || { echo "  >>> i18n incohérent, build STOPPÉ."; exit 1; }
 
+echo "==> 1ter  Cohérence des versions (fichier VERSION = APP_VERSION = CHANGELOG)"
+$PY -m unittest tests.test_version_sync -q >/dev/null 2>&1 \
+  || { echo "  >>> VERSION et APP_VERSION divergent (le DMG serait mal nommé), build STOPPÉ."; exit 1; }
+
 echo "==> 2/6  Icône (V sur charbon)"
 $PY tools/make_icon.py
 
