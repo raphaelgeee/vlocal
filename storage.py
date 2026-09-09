@@ -20,7 +20,7 @@ from pathlib import Path
 
 APP_DIR = Path(os.path.expanduser("~/Library/Application Support/Vlocal"))
 DB_PATH = APP_DIR / "vlocal.db"
-SCHEMA_VERSION = 8  # v1.1.0 : compteurs d'usage journaliers (table usage_days)
+SCHEMA_VERSION = 9  # v1.2.0 : compteurs d'usage complets (réunions) + reprise de l'historique
 
 # Temps gagné par mot dicté, en secondes : frappe à 40 mots/min contre voix à
 # 150 mots/min, soit 1,5 s - 0,4 s. Même formule que le tableau de bord (accueil).
@@ -193,6 +193,20 @@ class Store:
                     );
                     """
                 )
+            if v < 9:
+                # v1.2.0 — les RÉUNIONS comptent aussi (mots transcrits, durée
+                # d'audio), et l'historique déjà en base est repris : le tableau
+                # de bord n'est plus calculé sur les 400 dernières entrées
+                # AFFICHÉES (d'où des totaux très sous-évalués), mais sur ces
+                # compteurs, exacts et indépendants du réglage d'historique.
+                for _sql in ("ALTER TABLE usage_days ADD COLUMN meetings INTEGER NOT NULL DEFAULT 0",
+                             "ALTER TABLE usage_days ADD COLUMN meeting_words INTEGER NOT NULL DEFAULT 0",
+                             "ALTER TABLE usage_days ADD COLUMN meeting_seconds REAL NOT NULL DEFAULT 0"):
+                    try:
+                        self._conn.execute(_sql)
+                    except Exception:
+                        pass          # colonne déjà présente
+                self._backfill_usage_locked()
             self._conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
 
     # ---------------- meetings (v12) ---------------- #
@@ -323,6 +337,91 @@ class Store:
     def word_count(text) -> int:
         return len((text or "").split())
 
+    def _backfill_usage_locked(self) -> None:
+        """v1.2.0 — Reprend l'historique DÉJÀ en base (dictées et réunions) dans
+        usage_days, pour les jours ANTÉRIEURS au premier jour déjà compté (les
+        jours suivants ont été alimentés en direct : on ne recompte jamais).
+        Appelé une seule fois, sous le verrou de migration. Ne lève jamais."""
+        try:
+            row = self._conn.execute("SELECT MIN(day) FROM usage_days").fetchone()
+            first = row[0] if row else None
+            agg = {}
+            def _add(day, key, value):
+                if first and day >= first:
+                    return                      # déjà compté en direct
+                agg.setdefault(day, {"dictations": 0, "words": 0,
+                                     "meetings": 0, "meeting_words": 0,
+                                     "meeting_seconds": 0.0})[key] += value
+            for content, created in self._conn.execute(
+                    "SELECT content, created_at FROM dictations"):
+                day = time.strftime("%Y-%m-%d", time.localtime(created or 0))
+                _add(day, "dictations", 1)
+                _add(day, "words", len((content or "").split()))
+            for txt, brut, created, dur in self._conn.execute(
+                    "SELECT transcription_structuree, transcription_brute, "
+                    "created_at, duree_audio_s FROM meetings"):
+                day = time.strftime("%Y-%m-%d", time.localtime(created or 0))
+                _add(day, "meetings", 1)
+                _add(day, "meeting_words", len(((txt or brut) or "").split()))
+                _add(day, "meeting_seconds", float(dur or 0))
+            for day, v in agg.items():
+                self._conn.execute(
+                    "INSERT INTO usage_days(day,dictations,words,seconds_saved,"
+                    "meetings,meeting_words,meeting_seconds) VALUES(?,?,?,?,?,?,?) "
+                    "ON CONFLICT(day) DO UPDATE SET "
+                    "dictations=dictations+excluded.dictations, "
+                    "words=words+excluded.words, "
+                    "seconds_saved=seconds_saved+excluded.seconds_saved, "
+                    "meetings=meetings+excluded.meetings, "
+                    "meeting_words=meeting_words+excluded.meeting_words, "
+                    "meeting_seconds=meeting_seconds+excluded.meeting_seconds",
+                    (day, v["dictations"], v["words"],
+                     v["words"] * SECONDS_SAVED_PER_WORD,
+                     v["meetings"], v["meeting_words"], v["meeting_seconds"]))
+            if agg:
+                print(f"[usage] historique repris : {len(agg)} jour(s).")
+        except Exception as e:
+            print(f"[usage] reprise de l'historique ignorée ({e}).")
+
+    def record_meeting(self, words: int, audio_s: float = 0.0, day: str = None) -> None:
+        """Ajoute une réunion transcrite au compteur du jour (aucun contenu)."""
+        words = max(0, int(words or 0))
+        day = day or time.strftime("%Y-%m-%d")
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO usage_days(day,meetings,meeting_words,meeting_seconds) "
+                "VALUES(?,1,?,?) "
+                "ON CONFLICT(day) DO UPDATE SET "
+                "meetings=meetings+1, meeting_words=meeting_words+excluded.meeting_words, "
+                "meeting_seconds=meeting_seconds+excluded.meeting_seconds",
+                (day, words, max(0.0, float(audio_s or 0))),
+            )
+
+    def usage_stats(self, days_back: int = 30) -> dict:
+        """v1.2.0 — Chiffres EXACTS du tableau de bord, lus dans usage_days :
+        totaux depuis le début du comptage, mois en cours, et série journalière.
+        Indépendant de l'historique conservé (qui peut être désactivé ou effacé)."""
+        month = time.strftime("%Y-%m-01")
+        since_day = time.strftime("%Y-%m-%d",
+                                  time.localtime(time.time() - days_back * 86400))
+        cols = ("dictations", "words", "seconds_saved", "meetings",
+                "meeting_words", "meeting_seconds")
+        sel = ", ".join(f"COALESCE(SUM({c}),0)" for c in cols)
+        with self._lock:
+            first = (self._conn.execute("SELECT MIN(day) FROM usage_days").fetchone() or [None])[0]
+            tot = self._conn.execute(f"SELECT {sel} FROM usage_days").fetchone()
+            mon = self._conn.execute(f"SELECT {sel} FROM usage_days WHERE day>=?",
+                                     (month,)).fetchone()
+            series = [dict(r) for r in self._conn.execute(
+                "SELECT day,dictations,words,seconds_saved,meetings,meeting_words "
+                "FROM usage_days WHERE day>=? ORDER BY day", (since_day,))]
+        def pack(r):
+            d = {c: (float(v) if "seconds" in c else int(v)) for c, v in zip(cols, r)}
+            d["total_words"] = d["words"] + d["meeting_words"]
+            return d
+        return {"since_day": first, "total": pack(tot), "month": pack(mon),
+                "series": series}
+
     def record_usage(self, words: int, day: str = None) -> None:
         """Ajoute une dictée de `words` mots au compteur du jour (YYYY-MM-DD,
         heure locale). Idempotence non requise : un appel = une dictée."""
@@ -339,13 +438,14 @@ class Store:
             )
 
     def usage_days(self, since_day: str):
-        """Lignes {day, dictations, words, seconds_saved} depuis since_day inclus."""
+        """Lignes {day, dictations, words, seconds_saved, meetings, meeting_words}
+        depuis since_day inclus (ce que la télémétrie envoie, cf. telemetry.py)."""
         with self._lock:
             return [
                 dict(r)
                 for r in self._conn.execute(
-                    "SELECT day,dictations,words,seconds_saved FROM usage_days "
-                    "WHERE day>=? ORDER BY day",
+                    "SELECT day,dictations,words,seconds_saved,meetings,meeting_words "
+                    "FROM usage_days WHERE day>=? ORDER BY day",
                     (since_day,),
                 )
             ]

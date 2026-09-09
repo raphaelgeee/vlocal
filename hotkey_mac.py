@@ -32,7 +32,39 @@ import time
 _IS_MAC = sys.platform == "darwin"
 
 
-def start(on_begin, on_end, mods=("ctrl", "cmd"), trigger_vk=None, max_seconds=600.0):
+# v1.2.0 — DÉCISION PURE (testable sans Cocoa) : faut-il démarrer, arrêter, ou
+# ignorer cet événement ? Sortie : "begin", "end" ou None.
+#
+# `chord_vk` sert au raccourci TOUCHE FN (Globe) : le drapeau Function est aussi
+# posé par les flèches et les touches F1-F12, donc on n'accepte le changement de
+# modificateurs QUE s'il vient de la touche Fn elle-même (keyCode 63). Sans ce
+# filtre, une flèche pourrait démarrer une dictée.
+FN_KEYCODE = 63          # kVK_Function (touche Fn / Globe)
+RIGHT_CMD_KEYCODE = 54   # kVK_RightCommand (Cmd gauche = 55)
+RIGHT_OPT_KEYCODE = 61   # kVK_RightOption  (Option gauche = 58)
+
+
+def decide(event_type, key_code, flags, want, chord, trigger_vk=None,
+           chord_vk=None, T=None):
+    T = T or {}
+    if event_type == T.get("flags"):
+        if chord_vk is not None and key_code != chord_vk:
+            return None
+        mods_ok = (flags & want) == want
+        if chord:
+            return "begin" if mods_ok else "end"
+        return None if mods_ok else "end"
+    if chord:
+        return None
+    if event_type == T.get("down"):
+        return "begin" if (key_code == trigger_vk and (flags & want) == want) else None
+    if event_type == T.get("up"):
+        return "end" if key_code == trigger_vk else None
+    return None
+
+
+def start(on_begin, on_end, mods=("ctrl", "cmd"), trigger_vk=None, max_seconds=600.0,
+          chord_vk=None):
     if not _IS_MAC:
         return None
     try:
@@ -48,6 +80,9 @@ def start(on_begin, on_end, mods=("ctrl", "cmd"), trigger_vk=None, max_seconds=6
         "cmd":   AppKit.NSEventModifierFlagCommand,
         "alt":   AppKit.NSEventModifierFlagOption,
         "shift": AppKit.NSEventModifierFlagShift,
+        # v1.2.0 — touche Fn / Globe (raccourci « fn »). Voir decide() et
+        # FN_KEYCODE : on exige que l'événement vienne de la touche elle-même.
+        "fn":    AppKit.NSEventModifierFlagFunction,
     }
     want = 0
     for m in mods:
@@ -141,22 +176,19 @@ def start(on_begin, on_end, mods=("ctrl", "cmd"), trigger_vk=None, max_seconds=6
                 pass
         _async(on_end, "end")
 
+    _TYPES = {"flags": int(AppKit.NSEventTypeFlagsChanged),
+              "down": int(AppKit.NSEventTypeKeyDown),
+              "up": int(AppKit.NSEventTypeKeyUp)}
+
     def _handle(event):
         try:
-            et = int(event.type())
-            if et == AppKit.NSEventTypeFlagsChanged:
-                mods_ok = (int(event.modifierFlags()) & want) == want
-                if chord:
-                    _begin() if mods_ok else _end()
-                elif not mods_ok:
-                    _end()   # combo à touche : relâcher un modificateur coupe aussi
-            elif (not chord) and et == AppKit.NSEventTypeKeyDown:
-                if int(event.keyCode()) == trigger_vk \
-                        and (int(event.modifierFlags()) & want) == want:
-                    _begin()
-            elif (not chord) and et == AppKit.NSEventTypeKeyUp:
-                if int(event.keyCode()) == trigger_vk:
-                    _end()
+            action = decide(int(event.type()), int(event.keyCode()),
+                            int(event.modifierFlags()), want, chord,
+                            trigger_vk, chord_vk, _TYPES)
+            if action == "begin":
+                _begin()
+            elif action == "end":
+                _end()
         except Exception as e:
             print(f"[hotkey] handler KO (ignoré) : {e}")
 

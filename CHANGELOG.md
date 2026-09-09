@@ -3,6 +3,22 @@
 Dates are publication dates on the update channel. Earlier internal versions
 (3.x, June 2026) are not listed.
 
+## 1.2.0, 9 September 2026
+
+- **Dashboard numbers are now exact.** They were recomputed from the history
+  entries on screen: capped at 400, and empty when history is off. On a real
+  database the app showed 50 minutes saved for a month where the counters held
+  4 h 05. They now read the per-day counters, which also take over the history
+  already in the database on upgrade, and count meetings.
+- **Three shortcuts that never worked.** Settings offered "Fn", "Right Cmd" and
+  "Right Option"; the backend did not know them and silently fell back to
+  Ctrl + Cmd. Each is now a real shortcut, identified by its own key code so a
+  cursor key or the left modifier cannot trigger a dictation. The Fn key needs
+  "Press Fn key to: Do Nothing" in System Settings, which the app now says.
+- Optional contact email at install time and in Settings, validated on both
+  sides, added to the declared telemetry along with the timestamp of the last
+  dictation and meeting counters.
+
 ## 1.1.2, 8 September 2026
 
 Security review before the public announcement.

@@ -797,7 +797,7 @@
           <div class="card sec">
             <div class="st" data-i18n="set.hotkey">Raccourci global</div>
             <div class="sh" data-i18n="set.hotkey.d">Combinaison push-to-talk pour la dictée, depuis n'importe où.</div>
-            <select class="sel" id="set-hotkey" style="width:100%"></select>
+            <select class="sel" id="set-hotkey" style="width:100%"></select><div class="sd" id="set-hotkey-note" style="margin-top:6px"></div>
           </div>
           <div class="card sec" id="set-reunion-card">
             <div class="st" data-i18n="set.reunion">Mode Réunion</div>
@@ -828,6 +828,8 @@
             <div class="sh" data-i18n="set.share.d">Vlocal est gratuit et open source. Pour savoir qui l'utilise et le temps qu'il fait gagner, l'app peut envoyer une fois par jour : votre prénom et nom, la version, le nombre de dictées, le nombre de mots et le temps gagné estimé. Jamais de texte, jamais d'audio.</div>
             <div class="set-row"><div class="si"><div class="sl" data-i18n="set.share.on">Partager mon usage</div><div class="sd" data-i18n="set.share.on.d">Désactivable à tout moment. Sans effet sur le fonctionnement de l'app.</div></div><div class="tog" data-setting="telemetry_enabled"></div></div>
             <div class="field" style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap"><input class="inp" id="share-first" style="flex:1;min-width:140px" placeholder="Prénom" data-i18n-ph="set.share.first" autocomplete="given-name"/><input class="inp" id="share-last" style="flex:1;min-width:140px" placeholder="Nom" data-i18n-ph="set.share.lastname" autocomplete="family-name"/></div>
+            <div class="field" style="margin-top:8px"><input class="inp" id="share-email" style="width:100%" type="email" placeholder="Adresse e-mail" data-i18n-ph="set.share.email" autocomplete="email"/></div>
+            <div class="sd" id="share-email-err" style="margin-top:6px;color:#ff8d8d"></div>
             <div class="sd" id="share-last-sync" style="margin-top:8px"></div>
           </div>
           <div class="card sec">
@@ -913,6 +915,7 @@
           <div class="card form">
             <input class="inp" id="onb-first" type="text" placeholder="Prénom" data-i18n-ph="onb.2.first" autocomplete="given-name"/>
             <input class="inp" id="onb-last" type="text" placeholder="Nom" data-i18n-ph="onb.2.last" autocomplete="family-name"/>
+            <input class="inp" id="onb-email" type="email" placeholder="Adresse e-mail" data-i18n-ph="onb.2.email" autocomplete="email"/>
             <div class="err-line" id="onb-err"></div>
             <button class="pill primary" id="onb-identity" style="width:100%;margin-top:2px" data-i18n="onb.2.continue">Continuer</button>
           </div>
@@ -1182,6 +1185,12 @@
       "onb.2.lead":"Vlocal est <b>gratuit et open source</b>. Pour savoir qui l'utilise et le temps qu'il fait gagner, l'app envoie une fois par jour votre prénom et nom, le nombre de dictées, de mots et le temps gagné. <b>Jamais de texte, jamais d'audio.</b>",
       "onb.2.first":"Prénom","onb.2.last":"Nom","onb.2.continue":"Continuer","onb.2.skip":"Continuer sans partager",
       "js.identity.missing":"Indiquez votre prénom et votre nom, ou continuez sans partager.",
+      "onb.2.email":"Adresse e-mail","set.share.email":"Adresse e-mail",
+      "js.identity.email":"Indiquez une adresse e-mail valide (elle sert à vous contacter, jamais à autre chose).",
+      "js.home.words-detail":"{0} dictés, {1} en réunion",
+      "js.home.sessions-detail":"{0} dictées, {1} réunions",
+      "js.home.since":"Depuis le {2} : <b>{0}</b> mots transcrits, <b>{1}</b> gagnées",
+      "set.hotkey.fn":"Touche Fn : réglez d'abord Réglages Système, Clavier, « Appuyer sur la touche Fn pour » sur « Ne rien faire », sinon macOS déclenche aussi sa propre action.",
       /* @@FR_END@@ */
     },
     en: {
@@ -1400,6 +1409,12 @@
       "onb.2.lead":"Vlocal is <b>free and open source</b>. To know who uses it and how much time it saves, the app sends once a day your first and last name, the number of dictations, words and time saved. <b>Never any text, never any audio.</b>",
       "onb.2.first":"First name","onb.2.last":"Last name","onb.2.continue":"Continue","onb.2.skip":"Continue without sharing",
       "js.identity.missing":"Enter your first and last name, or continue without sharing.",
+      "onb.2.email":"Email address","set.share.email":"Email address",
+      "js.identity.email":"Enter a valid email address (used to reach you, nothing else).",
+      "js.home.words-detail":"{0} dictated, {1} in meetings",
+      "js.home.sessions-detail":"{0} dictations, {1} meetings",
+      "js.home.since":"Since {2}: <b>{0}</b> words transcribed, <b>{1}</b> saved",
+      "set.hotkey.fn":"Fn key: first set System Settings, Keyboard, \"Press Fn key to\" to \"Do Nothing\", otherwise macOS also triggers its own action.",
       /* @@EN_END@@ */
     }
   };
@@ -1619,50 +1634,50 @@
     var storage = await call('get_storage_info', [], null);
     if(!Array.isArray(hist)) hist = [];
 
-    // Stats dérivées
-    var som = startOfMonth();
-    var sinceTs = (storage && storage.stats_since) ? storage.stats_since : 0;
-    var floorTs = Math.max(som, sinceTs);   // v3.2.8 — réinitialisation des stats (sans effacer l'historique)
-    var wordsMonth = 0, sessionsMonth = 0;
-    hist.forEach(function(it){
-      var t = (it && it.type) || '';
-      if(t !== 'dictee' && t !== 'reunion') return;
-      var d = toDate(it.ts);
-      if(!d || d.getTime() < floorTs) return;
-      sessionsMonth++;
-      var txt = it.full || it.apercu || it.titre || '';
-      wordsMonth += wordCount(txt);
-    });
-
-    // Mots ce mois
-    document.getElementById('st-words').textContent = wordsMonth ? wordsMonth.toLocaleString(getLang()==='en'?'en-US':'fr-FR') : '0';
-
-    // Temps gagné : mots/40 (frappe) - mots/150 (voix), en minutes
-    var savedMin = Math.max(0, wordsMonth/40 - wordsMonth/150);
-    var timeEl = document.getElementById('st-time');
-    if(savedMin >= 60){
-      var h = Math.floor(savedMin/60), m = Math.round(savedMin%60);
-      timeEl.innerHTML = h+' h '+pad2(m)+' <small>min</small>';
-    }else{
-      timeEl.innerHTML = Math.round(savedMin)+' <small>min</small>';
+    // v1.2.0 — CHIFFRES EXACTS. Avant, ces trois nombres étaient recalculés sur
+    // les entrées d'historique AFFICHÉES : plafonnées à 400, et vides si
+    // l'utilisateur avait désactivé l'historique. Sur une base réelle, l'accueil
+    // annonçait 50 minutes gagnées là où le compteur en avait 4 h 05. On lit
+    // désormais les compteurs (usage_days), tenus à jour à chaque dictée et à
+    // chaque réunion, quel que soit le réglage d'historique.
+    var stats = await call('usage_stats', [], null) || {};
+    var mon = stats.month || {}, tot = stats.total || {};
+    var lang = getLang()==='en' ? 'en-US' : 'fr-FR';
+    var nb = function(n){ return Number(n||0).toLocaleString(lang); };
+    function hm(seconds){
+      var min = Math.max(0, Math.round((seconds||0)/60));
+      if(min >= 60){ return Math.floor(min/60)+' h '+pad2(min%60)+' <small>min</small>'; }
+      return min+' <small>min</small>';
     }
+    var sessionsMonth = Number(mon.dictations||0) + Number(mon.meetings||0);
+
+    document.getElementById('st-words').textContent = nb(mon.total_words);
+    document.getElementById('st-words-d').textContent = mon.meeting_words
+      ? t('js.home.words-detail', nb(mon.words), nb(mon.meeting_words))
+      : t('home.words.d');
+    document.getElementById('st-time').innerHTML = hm(mon.seconds_saved);
     document.getElementById('st-time-d').textContent = t('js.home.time-detail');
 
-    // v1.0.11 — indicateur de période : les cumuls ci-dessus repartent à zéro au
-    // changement de mois (calcul depuis startOfMonth). On le dit clairement pour que
-    // l'utilisateur sache sur quelle durée porte « le temps gagné » / « les mots ».
+    // v1.2.0 — le cumul DEPUIS LE DÉBUT, sous les trois cartes du mois : c'est
+    // le chiffre qui dit ce que l'outil a réellement apporté.
     try {
-      var _now = new Date();
-      var _next = new Date(_now.getFullYear(), _now.getMonth() + 1, 1);
-      var _dleft = Math.max(0, Math.ceil((_next - _now) / 86400000));
       var _pe = document.getElementById('st-period');
-      if(_pe) _pe.textContent = t('home.reset').replace('{0}', _dleft);
+      if(_pe){
+        if(tot.total_words){
+          var since = stats.since_day ? new Date(stats.since_day + 'T12:00:00') : null;
+          var sinceTxt = since ? since.toLocaleDateString(lang, {day:'numeric', month:'long', year:'numeric'}) : '';
+          _pe.innerHTML = t('js.home.since', nb(tot.total_words),
+                            hm(tot.seconds_saved).replace(/<\/?small>/g, ''), sinceTxt);
+        } else { _pe.textContent = ''; }
+      }
     } catch(e) {}
 
-    // 3e stat : Sessions ce mois
+    // 3e stat : sessions du mois (dictées + réunions), comptées elles aussi
     document.getElementById('st3-l').textContent = t('home.sessions');
-    document.getElementById('st-sessions').textContent = String(sessionsMonth);
-    document.getElementById('st-sessions-d').textContent = t('home.sessions.d');
+    document.getElementById('st-sessions').textContent = nb(sessionsMonth);
+    document.getElementById('st-sessions-d').textContent = mon.meetings
+      ? t('js.home.sessions-detail', nb(mon.dictations), nb(mon.meetings))
+      : t('home.sessions.d');
 
     // Heatmap : items par jour sur ~52 semaines
     var counts = {};
@@ -2355,6 +2370,9 @@
     if(speed && s.dictation_speed){ for(var i=0;i<speed.options.length;i++){ if(speed.options[i].value===s.dictation_speed){ speed.selectedIndex=i; break; } } }
     // raccourci
     fillHotkeys(s.hotkey);
+    // Touche Fn : macOS lui donne une action par défaut, on le dit à l'écran.
+    var hkNote = document.getElementById('set-hotkey-note');
+    if(hkNote){ hkNote.textContent = (s.hotkey === 'fn') ? t('set.hotkey.fn') : ''; }
     // micro de la réunion (v1.0.1) : liste les entrées audio réelles + sélection courante
     var micSel = document.getElementById('set-mic');
     if(micSel){
@@ -2396,6 +2414,8 @@
     var sf = document.getElementById('share-first'), sl = document.getElementById('share-last');
     if(sf) sf.value = ts.first_name || '';
     if(sl) sl.value = ts.last_name || '';
+    var se = document.getElementById('share-email');
+    if(se) se.value = ts.email || '';
     var lsy = document.getElementById('share-last-sync');
     if(lsy){
       lsy.textContent = ts.last_sync ? t('set.share.last', new Date(ts.last_sync*1000).toLocaleString(getLang()==='en'?'en-US':'fr-FR')) : '';
@@ -2484,6 +2504,8 @@
   var hotkeySel = document.getElementById('set-hotkey');
   if(hotkeySel) hotkeySel.addEventListener('change', async function(){
     await call('save_settings', [{hotkey: hotkeySel.value}], null);
+    var _n = document.getElementById('set-hotkey-note');
+    if(_n){ _n.textContent = (hotkeySel.value === 'fn') ? t('set.hotkey.fn') : ''; }
     showToast(t('toast.hotkey-updated'), 'success');
   });
   var langSel = document.getElementById('set-lang');
@@ -2492,13 +2514,25 @@
     langSel.addEventListener('change', function(){ setLang(langSel.value); });
   }
   // v1.1.0 — données partagées : prénom et nom enregistrés à la modification
-  [['share-first','first_name'],['share-last','last_name']].forEach(function(pair){
+  [['share-first','first_name',80],['share-last','last_name',80]].forEach(function(pair){
     var el = document.getElementById(pair[0]);
     if(!el) return;
     el.addEventListener('change', function(){
-      var patch = {}; patch[pair[1]] = el.value.trim().slice(0, 80);
+      var patch = {}; patch[pair[1]] = el.value.trim().slice(0, pair[2]);
       call('save_settings', [patch], null);
     });
+  });
+  var shareEmail = document.getElementById('share-email');
+  if(shareEmail) shareEmail.addEventListener('change', function(){
+    var v = shareEmail.value.trim().toLowerCase().slice(0, 200);
+    var err = document.getElementById('share-email-err');
+    if(err) err.textContent = '';
+    if(v && !/^[^@\s]{1,64}@[^@\s.]+(\.[^@\s.]+)+$/.test(v)){
+      if(err) err.textContent = t('js.identity.email');
+      return;
+    }
+    call('save_settings', [{email: v}], null);
+    showToast(t('toast.setting-saved'), 'success');
   });
   // v1.0.13 — Connexion Obsidian : détection auto + choix manuel du coffre
   var obsCreate = document.getElementById('obs-create');
@@ -2742,18 +2776,24 @@
   document.getElementById('onb-identity').addEventListener('click', async function(){
     var first = document.getElementById('onb-first').value.trim();
     var last = document.getElementById('onb-last').value.trim();
+    var email = document.getElementById('onb-email').value.trim();
     var err = document.getElementById('onb-err');
     err.textContent = '';
     if(!first || !last){ err.textContent = t('js.identity.missing'); return; }
+    if(!validEmail(email)){ err.textContent = t('js.identity.email'); return; }
     var btn = this; btn.disabled = true;
-    await call('save_identity', [first, last, true], null);
+    var r = await call('save_identity', [first, last, email, true], {ok:false});
     btn.disabled = false;
+    if(r && r.ok === false){ err.textContent = (r.error || t('js.identity.email')); return; }
     onbIdentityDone();
   });
   document.getElementById('onb-skip').addEventListener('click', async function(){
-    await call('save_identity', ['', '', false], null);
+    await call('save_identity', ['', '', '', false], null);
     onbIdentityDone();
   });
+  // Même validation que le serveur : une adresse mal formée est refusée à la
+  // saisie plutôt que stockée puis inexploitable (cf. telemetry.valid_email).
+  function validEmail(v){ return /^[^@\s]{1,64}@[^@\s.]+(\.[^@\s.]+)+$/.test((v||'').trim()) && v.trim().length <= 200; }
 
   // étape autorisations
   document.getElementById('onb-acc-btn').addEventListener('click', async function(){

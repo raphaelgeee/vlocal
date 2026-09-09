@@ -57,8 +57,10 @@ data), the app sends once a day:
 | --- | --- |
 | a random install identifier (UUID) | count installs, no link to the machine |
 | first name, last name, as typed | know who uses Vlocal |
+| email address, if you give one | reach you; optional, validated, never used for anything else |
 | Vlocal version, macOS version | support |
-| per day: number of dictations, number of words, estimated time saved | measure real use |
+| timestamp of your last dictation | know whether an installation is still in use |
+| per day: dictations, words, estimated time saved, meetings and meeting words | measure real use |
 
 Nothing else. The exact payload is built in [telemetry.py](telemetry.py)
 (`build_rows`) and covered by [tests/test_telemetry.py](tests/test_telemetry.py),

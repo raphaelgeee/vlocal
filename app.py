@@ -160,7 +160,7 @@ _window_visible = True   # suivi de visibilité (fenêtre naît affichée)
 WIN_W = 1180            # v3.1 — dashboard plein écran (était 380, carte flottante)
 WIN_H = 780             # v3.1 — (était 720)
 PANEL_W = 840            # (hérité ; set_meeting_panel neutralisé en v3.1)
-APP_VERSION = "1.1.2"   # 8 septembre 2026. Synchrone avec le fichier VERSION (build) ;
+APP_VERSION = "1.2.0"   # 9 septembre 2026. Synchrone avec le fichier VERSION (build) ;
                         # affiché dans l'onglet « Mises à jour ». Historique : CHANGELOG.md.
 # Libellé humain du raccourci global actif (posé par start_global_hotkey,
 # consommé par le message de permission _check_hotkey_perm).
@@ -1566,6 +1566,10 @@ class DictationController:
         try:
             if _store is not None and raw:
                 _store.record_usage(_store.word_count(raw))
+                # v1.2.0 — horodatage de la DERNIÈRE dictée : c'est lui qui est
+                # partagé (si l'utilisateur l'accepte), pas l'heure d'envoi ;
+                # la console peut donc dire « utilisé il y a 12 minutes » juste.
+                _save_settings({"last_used_at": time.time()})
                 if _telemetry is not None:
                     _telemetry.notify_usage()
         except Exception:
@@ -2883,6 +2887,13 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
         if speaker_blocks_json is not None:
             fields["speaker_blocks_json"] = speaker_blocks_json
         _store.update_meeting(meeting_id, **fields)
+        try:    # v1.2.0 — compteur d'usage : mots transcrits et durée d'audio
+            _store.record_meeting(_store.word_count(structured or ""), audio_duree)
+            _save_settings({"last_used_at": time.time()})
+            if _telemetry is not None:
+                _telemetry.notify_usage()
+        except Exception:
+            pass
         _obsidian_meeting_sync(meeting_id)   # v1.1.0 — coffre « Vlocal, ma voix »
 
     # Notif + refresh UI.
@@ -4357,6 +4368,7 @@ class Api:
         s.setdefault("telemetry_enabled", None)         # v1.1.0 : None = pas encore choisi
         s.setdefault("first_name", "")
         s.setdefault("last_name", "")
+        s.setdefault("email", "")                       # v1.2.0 : contact (partagé si accepté)
         return s
 
     def save_settings(self, patch):
@@ -4445,6 +4457,16 @@ class Api:
         return {"ok": True, "path": path}
 
     # ── v1.0 — Activation par clé de licence ────────────────────────────────
+    @_api_safe(default=lambda: {"since_day": None, "total": {}, "month": {}, "series": []})
+    def usage_stats(self):
+        """v1.2.0 — Chiffres EXACTS de l'accueil : lus dans les compteurs
+        (usage_days), pas recalculés sur les entrées d'historique affichées.
+        L'ancien calcul ne voyait que les 400 dernières et rien du tout si
+        l'historique était désactivé : sur une base réelle il affichait 50 min
+        là où l'utilisateur avait gagné 4 h 05 dans le mois."""
+        return _store.usage_stats() if _store is not None else {
+            "since_day": None, "total": {}, "month": {}, "series": []}
+
     # ------------------- v1.1.0 : identité et télémétrie déclarée -------------
     def telemetry_state(self):
         """Ce que l'utilisateur a choisi de partager, et les compteurs locaux.
@@ -4455,18 +4477,25 @@ class Api:
             return {"enabled": s.get("telemetry_enabled"),
                     "first_name": s.get("first_name") or "",
                     "last_name": s.get("last_name") or "",
+                    "email": s.get("email") or "",
                     "install_id": s.get("install_id") or "",
                     "last_sync": float(s.get("telemetry_last_sync") or 0),
                     "totals": totals}
         except Exception:
             return {"enabled": None, "first_name": "", "last_name": "",
-                    "install_id": "", "last_sync": 0, "totals": {}}
+                    "email": "", "install_id": "", "last_sync": 0, "totals": {}}
 
-    def save_identity(self, first_name="", last_name="", enabled=True):
-        """Enregistre prénom, nom et le choix de partage. Si le partage est
-        activé, un envoi part tout de suite (thread, jamais bloquant)."""
+    def save_identity(self, first_name="", last_name="", email="", enabled=True):
+        """Enregistre prénom, nom, e-mail et le choix de partage. Si le partage
+        est activé, un envoi part tout de suite (thread, jamais bloquant).
+        L'e-mail est validé ici comme côté serveur : une valeur mal formée est
+        refusée plutôt que stockée."""
+        email = (email or "").strip().lower()[:200]
+        if enabled and email and not telemetry.valid_email(email):
+            return {"ok": False, "error": _te("Cette adresse e-mail n'est pas valide.")}
         patch = {"first_name": (first_name or "").strip()[:80],
                  "last_name": (last_name or "").strip()[:80],
+                 "email": email,
                  "telemetry_enabled": bool(enabled)}
         try:
             _save_settings(patch)
@@ -4995,9 +5024,23 @@ def start_global_hotkey():
         "ctrl_alt_space": ({"ctrl", "alt"}, 49, "Ctrl + Option + Espace", "⌃ ⌥ ␣"),
         "ctrl_cmd_space": ({"ctrl", "cmd"}, 49, "Ctrl + Cmd + Espace", "⌃ ⌘ ␣"),
         "cmd_shift_x":    ({"cmd", "shift"}, 7, "Cmd + Maj + X", "⌘ ⇧ X"),
+        # v1.2.0 — TROIS RACCOURCIS QUI NE MARCHAIENT PAS. Le menu des Réglages
+        # proposait « Fn », « Cmd droite » et « Option droite » depuis des mois,
+        # mais cette table ne les contenait pas : HOTKEYS.get(...) retombait en
+        # SILENCE sur Ctrl + Cmd. L'utilisateur choisissait Fn et voyait Ctrl+Cmd.
+        # Chacun est un chord identifié par SA touche (keyCode), pas seulement par
+        # son drapeau : le drapeau Function est aussi posé par les flèches et
+        # F1-F12, et Cmd droite est indistinguable de Cmd gauche au drapeau seul.
+        "fn":             ({"fn"},           None, "Touche Fn", "fn"),
+        "right_cmd":      ({"cmd"},          None, "Cmd droite", "⌘"),
+        "right_opt":      ({"alt"},          None, "Option droite", "⌥"),
     }
     required, trigger_vk, hotkey_label, hotkey_badge = \
         HOTKEYS.get(hotkey_name, HOTKEYS["ctrl_cmd"])
+    # keyCode de la touche EXACTE pour les chords à touche unique (cf. ci-dessus).
+    chord_vk = {"fn": hotkey_mac.FN_KEYCODE,
+                "right_cmd": hotkey_mac.RIGHT_CMD_KEYCODE,
+                "right_opt": hotkey_mac.RIGHT_OPT_KEYCODE}.get(hotkey_name)
     _hotkey_label = hotkey_label
     # Pousse le libellé RÉEL du raccourci à l'UI (la pastille « ⌃ ⌘ » statique
     # du markup n'est qu'un défaut d'affichage). Best-effort, garde typeof.
@@ -5237,7 +5280,7 @@ def start_global_hotkey():
     # longue, tout en restant protégé contre une touche bloquée.
     t = hotkey_mac.start(_begin_safe, _end_safe,
                          mods=tuple(required), trigger_vk=trigger_vk,
-                         max_seconds=600.0)
+                         max_seconds=600.0, chord_vk=chord_vk)
     if t is None:
         print("[hotkey] raccourci inactif — accorde l'Accessibilité à Vlocal, "
               "ou utilise le bouton Dicter.")

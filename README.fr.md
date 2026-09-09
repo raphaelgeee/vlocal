@@ -59,8 +59,10 @@ Données partagées), l'app envoie une fois par jour :
 | --- | --- |
 | un identifiant d'installation aléatoire (UUID) | compter les installations, sans lien avec la machine |
 | prénom et nom, tels que saisis | savoir qui utilise Vlocal |
+| adresse e-mail, si vous en donnez une | vous joindre ; facultative, validée, jamais utilisée pour autre chose |
 | version de Vlocal et de macOS | support |
-| par jour : nombre de dictées, nombre de mots, temps gagné estimé | mesurer l'usage réel |
+| horodatage de votre dernière dictée | savoir si une installation sert encore |
+| par jour : dictées, mots, temps gagné estimé, réunions et mots de réunion | mesurer l'usage réel |
 
 Rien d'autre. Le contenu exact de l'envoi est construit dans
 [telemetry.py](telemetry.py) (`build_rows`) et verrouillé par
