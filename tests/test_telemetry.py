@@ -14,9 +14,12 @@ import telemetry  # noqa: E402
 # décidée, écrite dans le README et dans la page Confidentialité, puis ajoutée
 # ici : ce test échoue tant que ce n'est pas fait.
 ALLOWED_INSTALL_KEYS = {"install_id", "first_name", "last_name", "email",
-                        "app_version", "os_version", "last_seen_at", "last_used_at"}
+                        "app_version", "os_version", "last_seen_at", "last_used_at",
+                        "mac_model", "ui_lang", "hotkey", "engine"}
 ALLOWED_USAGE_KEYS = {"install_id", "day", "dictations", "words", "seconds_saved",
-                      "meetings", "meeting_words"}
+                      "audio_seconds", "meetings", "meeting_words"}
+# Les incidents ne voyagent qu'en compteurs : jamais le contexte d'un événement.
+ALLOWED_INCIDENT_KEYS = {"day", "code", "count"}
 
 
 class UsageCountersTests(unittest.TestCase):
@@ -70,7 +73,7 @@ class PayloadTests(unittest.TestCase):
 
     def test_rows_contain_only_declared_fields(self):
         self.store.record_usage(20)
-        install, usage = telemetry.build_rows(self.settings, self.store, "1.1.0", "15.5")
+        install, usage, _ = telemetry.build_rows(self.settings, self.store, "1.1.0", "15.5")
         self.assertEqual(set(install), ALLOWED_INSTALL_KEYS)
         self.assertEqual(install["first_name"], "Raphael")
         self.assertEqual(len(usage), 1)
@@ -85,33 +88,78 @@ class PayloadTests(unittest.TestCase):
     def test_invalid_email_is_dropped_not_sent(self):
         for bad in ("pas-une-adresse", "a@b", "deux@@arobases.fr", "espace @x.fr", "x" * 250):
             s = dict(self.settings, email=bad)
-            install, _ = telemetry.build_rows(s, self.store, "1.2.0", "15.5")
+            install, _, _ = telemetry.build_rows(s, self.store, "1.2.0", "15.5")
             self.assertEqual(install["email"], "", f"adresse refusée attendue : {bad!r}")
         self.assertTrue(telemetry.valid_email("Prenom.Nom+tag@sous.domaine.fr"))
 
     def test_last_used_at_is_sent_when_known(self):
         s = dict(self.settings, last_used_at=1_800_000_000)
-        install, _ = telemetry.build_rows(s, self.store, "1.2.0", "15.5")
+        install, _, _ = telemetry.build_rows(s, self.store, "1.2.0", "15.5")
         self.assertTrue(install["last_used_at"].startswith("20"))
-        install2, _ = telemetry.build_rows(self.settings, self.store, "1.2.0", "15.5")
+        install2, _, _ = telemetry.build_rows(self.settings, self.store, "1.2.0", "15.5")
         self.assertIsNone(install2["last_used_at"])
 
     def test_meeting_counters_travel(self):
         self.store.record_meeting(300, 1200.0)
-        _, usage = telemetry.build_rows(self.settings, self.store, "1.2.0", "15.5")
+        _, usage, _ = telemetry.build_rows(self.settings, self.store, "1.2.0", "15.5")
         self.assertEqual(usage[-1]["meetings"], 1)
         self.assertEqual(usage[-1]["meeting_words"], 300)
 
-    def test_usage_window_is_last_three_days(self):
-        old = time.strftime("%Y-%m-%d", time.localtime(time.time() - 10 * 86400))
-        self.store.record_usage(5, day=old)
+    def test_machine_profile_travels_and_stays_technical(self):
+        prof = {"mac_model": "Apple M2 Pro", "ui_lang": "fr", "hotkey": "fn",
+                "engine": "mlx", "serial": "C02XXXX"}  # champ inconnu : ignoré
+        install, _, _ = telemetry.build_rows(self.settings, self.store, "1.3.0", "15.5",
+                                             profile=prof)
+        self.assertEqual(set(install), ALLOWED_INSTALL_KEYS)
+        self.assertEqual(install["mac_model"], "Apple M2 Pro")
+        self.assertEqual(install["engine"], "mlx")
+        self.assertNotIn("C02XXXX", repr(install))
+
+    def test_machine_profile_is_optional(self):
+        install, _, _ = telemetry.build_rows(self.settings, self.store, "1.3.0", "15.5")
+        self.assertEqual(install["mac_model"], "")
+        self.assertEqual(install["engine"], "")
+
+    def test_audio_seconds_travels(self):
+        self.store.record_usage(20, audio_s=12.5)
+        _, usage, _ = telemetry.build_rows(self.settings, self.store, "1.3.0", "15.5")
+        self.assertEqual(set(usage[0]), ALLOWED_USAGE_KEYS)
+        self.assertAlmostEqual(usage[0]["audio_seconds"], 12.5, places=1)
+
+    def test_incidents_are_counters_only(self):
+        log = os.path.join(self.tmp.name, "events.jsonl")
+        today = time.strftime("%Y-%m-%d")
+        with open(log, "w", encoding="utf-8") as f:
+            f.write('{"ts": "%sT10:00:00", "code": "mic_busy", "ctx": "MacBook de Raphael"}\n' % today)
+            f.write('{"ts": "%sT11:00:00", "code": "mic_busy", "ctx": "secret"}\n' % today)
+            f.write('{"ts": "%sT11:30:00", "code": "gpu_fallback"}\n' % today)
+            f.write('pas du json\n')
+            f.write('{"ts": "2020-01-01T00:00:00", "code": "vieux"}\n')
+        rows = telemetry.read_incidents(today, path=log)
+        self.assertEqual(rows, [{"day": today, "code": "gpu_fallback", "count": 1},
+                                {"day": today, "code": "mic_busy", "count": 2}])
+        for r in rows:
+            self.assertEqual(set(r), ALLOWED_INCIDENT_KEYS)
+        self.assertNotIn("MacBook", repr(rows))
+
+    def test_incidents_never_raise_without_log(self):
+        self.assertEqual(telemetry.read_incidents("2026-01-01", path="/nope/nope.jsonl"), [])
+
+    def test_usage_window_covers_a_month_not_a_year(self):
+        """Assez large pour réparer un trou (Mac éteint une semaine), assez
+        étroite pour ne jamais dépasser la borne de la fonction serveur."""
+        recent = time.strftime("%Y-%m-%d", time.localtime(time.time() - 10 * 86400))
+        ancient = time.strftime("%Y-%m-%d", time.localtime(time.time() - 400 * 86400))
+        self.store.record_usage(5, day=ancient)
+        self.store.record_usage(11, day=recent)
         self.store.record_usage(7)
-        _, usage = telemetry.build_rows(self.settings, self.store, "1.1.0", "15.5")
-        self.assertEqual([u["words"] for u in usage], [7])
+        _, usage, _ = telemetry.build_rows(self.settings, self.store, "1.1.0", "15.5")
+        self.assertEqual(sorted(u["words"] for u in usage), [7, 11])
+        self.assertLessEqual(len(usage), 31)
 
     def test_disabled_or_undecided_sends_nothing(self):
         calls = []
-        fake = lambda install, usage: calls.append(install)
+        fake = lambda install, usage, inc: calls.append(install)
         for value in (None, False):
             s = dict(self.settings, telemetry_enabled=value)
             self.assertFalse(telemetry.sync_once(s, self.store, "1.1.0", "15", send=fake))
@@ -119,13 +167,13 @@ class PayloadTests(unittest.TestCase):
 
     def test_enabled_sends_once_and_never_raises(self):
         calls = []
-        fake = lambda install, usage: calls.append((install["install_id"], len(usage)))
+        fake = lambda install, usage, inc: calls.append((install["install_id"], len(usage)))
         self.store.record_usage(3)
         self.assertTrue(telemetry.sync_once(self.settings, self.store, "1.1.0", "15",
                                             send=fake))
         self.assertEqual(calls, [(self.settings["install_id"], 1)])
 
-        def boom(install, usage):
+        def boom(install, usage, inc):
             raise OSError("offline")
         self.assertFalse(telemetry.sync_once(self.settings, self.store, "1.1.0", "15",
                                              send=boom))

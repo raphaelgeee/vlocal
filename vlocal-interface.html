@@ -455,6 +455,22 @@
   .md-pct{margin-top:9px;font-size:12px;color:var(--txt2);font-variant-numeric:tabular-nums}
   #md-retry{margin:14px auto 0}
 
+  /* v1.3.0 — Encadré « redémarrage requis ». macOS ne rend PAS l'autorisation
+     d'Accessibilité à un process déjà lancé : la case cochée ne change rien tant
+     que Vlocal n'a pas redémarré. C'était la marche invisible de l'onboarding.
+     On la rend explicite, numérotée, et le redémarrage devient l'action mise en
+     avant tant qu'elle n'est pas faite. */
+  .rst{margin:-2px 2px 6px;padding:13px 15px 14px;border-radius:14px;
+       border:1px solid rgba(255,214,120,.28);background:rgba(255,196,80,.07)}
+  .rst .rst-h{display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:650;color:#ffd98a;margin-bottom:8px}
+  .rst .rst-h svg{width:14px;height:14px;flex:none}
+  .rst ol{margin:0;padding-left:19px;font-size:12.5px;line-height:1.65;color:var(--txt2)}
+  .rst ol li+li{margin-top:2px}
+  .rst ol b{color:var(--txt);font-weight:600}
+  .rst .rst-act{margin-top:11px}
+  .rst .rst-act .btn{border-color:rgba(255,214,120,.45);color:#ffe4a8;background:rgba(255,196,80,.12)}
+  .rst .rst-act .btn:hover{background:rgba(255,196,80,.2)}
+
   /* ===== Onboarding overlay (design identique au dashboard) ===== */
   .onb{position:fixed;inset:0;z-index:7000;display:none}
   .onb.show{display:block}
@@ -825,7 +841,7 @@
           </div>
           <div class="card sec" id="set-share-card">
             <div class="st" data-i18n="set.share">Données partagées</div>
-            <div class="sh" data-i18n="set.share.d">Vlocal est gratuit et open source. Pour savoir qui l'utilise et le temps qu'il fait gagner, l'app peut envoyer une fois par jour : votre prénom et nom, la version, le nombre de dictées, le nombre de mots et le temps gagné estimé. Jamais de texte, jamais d'audio.</div>
+            <div class="sh" data-i18n="set.share.d">Vlocal est gratuit et open source. Pour savoir qui l'utilise, le temps qu'il fait gagner et sur quel matériel il tourne mal, l'app peut envoyer une fois par jour : votre prénom, votre nom, votre e-mail si vous en donnez un, les versions, le modèle de votre Mac, la langue, le raccourci et le moteur utilisés, puis par jour vos compteurs d'usage et le nombre d'incidents techniques. Jamais de texte, jamais d'audio, jamais le détail d'un incident.</div>
             <div class="set-row"><div class="si"><div class="sl" data-i18n="set.share.on">Partager mon usage</div><div class="sd" data-i18n="set.share.on.d">Désactivable à tout moment. Sans effet sur le fonctionnement de l'app.</div></div><div class="tog" data-setting="telemetry_enabled"></div></div>
             <div class="field" style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap"><input class="inp" id="share-first" style="flex:1;min-width:140px" placeholder="Prénom" data-i18n-ph="set.share.first" autocomplete="given-name"/><input class="inp" id="share-last" style="flex:1;min-width:140px" placeholder="Nom" data-i18n-ph="set.share.lastname" autocomplete="family-name"/></div>
             <div class="field" style="margin-top:8px"><input class="inp" id="share-email" style="width:100%" type="email" placeholder="Adresse e-mail" data-i18n-ph="set.share.email" autocomplete="email"/></div>
@@ -911,7 +927,7 @@
         </section>
         <!-- 2 -->
         <section class="step" data-s="1">
-          <div class="lead" data-i18n-html="onb.2.lead">Vlocal est <b>gratuit et open source</b>. Pour savoir qui l'utilise et le temps qu'il fait gagner, l'app envoie une fois par jour votre prénom et nom, le nombre de dictées, de mots et le temps gagné. <b>Jamais de texte, jamais d'audio.</b></div>
+          <div class="lead" data-i18n-html="onb.2.lead">Vlocal est <b>gratuit et open source</b>. Pour savoir qui l'utilise et l'aider quand il tourne mal, l'app envoie une fois par jour votre prénom, votre nom, vos compteurs d'usage et des caractéristiques techniques de votre Mac. <b>Jamais de texte, jamais d'audio.</b> Le détail est dans les Réglages, et vous pouvez refuser.</div>
           <div class="card form">
             <input class="inp" id="onb-first" type="text" placeholder="Prénom" data-i18n-ph="onb.2.first" autocomplete="given-name"/>
             <input class="inp" id="onb-last" type="text" placeholder="Nom" data-i18n-ph="onb.2.last" autocomplete="family-name"/>
@@ -926,9 +942,17 @@
           <div class="lead" data-i18n-html="onb.3.lead">Vlocal en a besoin pour <b>écrire à votre place</b> et <b>vous entendre</b>. Tout est traité localement.</div>
           <div class="card perm" id="onb-perm-acc">
             <div class="perm-tx"><div class="n" data-i18n="onb.3.acc">Accessibilité</div><div class="d" data-i18n="onb.3.acc.d">Pour insérer le texte dicté directement au curseur.</div></div>
-            <button class="btn" id="onb-acc-btn" data-i18n="onb.openset">Ouvrir les Réglages</button><button class="btn" id="onb-acc-restart" style="display:none" data-i18n="onb.restart">Redémarrer Vlocal</button><span class="pstate" data-i18n="onb.allowed"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>Autorisé</span>
+            <button class="btn" id="onb-acc-btn" data-i18n="onb.openset">Ouvrir les Réglages</button><span class="pstate" data-i18n="onb.allowed"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>Autorisé</span>
           </div>
-          <div id="onb-acc-hint" style="display:none;font-size:12px;color:var(--dim);line-height:1.5;margin:-4px 2px 4px" data-i18n-html="onb.3.acc.restart">Activez <b>Vlocal</b> dans la liste. S'il n'y apparaît pas, cliquez le <b>+</b> et ajoutez-le. Puis cliquez <b>Redémarrer Vlocal</b> (macOS l'exige pour l'écriture au curseur).</div>
+          <div class="rst" id="onb-acc-hint" style="display:none">
+            <div class="rst-h"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg><span data-i18n="onb.3.acc.restart.h">Un redémarrage de Vlocal est nécessaire</span></div>
+            <ol>
+              <li data-i18n-html="onb.3.acc.restart.s1">Dans la fenêtre qui vient de s'ouvrir, <b>cochez Vlocal</b>. S'il n'apparaît pas, cliquez le <b>+</b> et ajoutez-le.</li>
+              <li data-i18n-html="onb.3.acc.restart.s2">Revenez sur cette fenêtre.</li>
+              <li data-i18n-html="onb.3.acc.restart.s3">Cliquez <b>Redémarrer Vlocal</b>&nbsp;: macOS n'applique cette autorisation qu'au démarrage de l'app. Vous reviendrez ici, à cette même étape.</li>
+            </ol>
+            <div class="rst-act"><button class="btn" id="onb-acc-restart2" data-i18n="onb.restart">Redémarrer Vlocal</button></div>
+          </div>
           <div class="card perm" id="onb-perm-mic">
             <div class="perm-tx"><div class="n" data-i18n="onb.3.mic">Microphone</div><div class="d" data-i18n="onb.3.mic.d">Pour capter votre voix. Jamais envoyée en ligne.</div></div>
             <button class="btn" id="onb-mic-btn" data-i18n="onb.openset">Ouvrir les Réglages</button><span class="pstate" data-i18n="onb.allowed"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>Autorisé</span>
@@ -1049,7 +1073,11 @@
       "onb.1.start":"Commencer","onb.1.thanks":"Merci de faire confiance à l'équipe <b>Vlocal</b>.",
       "onb.3.lead":"Vlocal en a besoin pour <b>écrire à votre place</b> et <b>vous entendre</b>. Tout est traité localement.",
       "onb.3.acc":"Accessibilité","onb.3.acc.d":"Pour insérer le texte dicté directement au curseur.",
-      "onb.restart":"Redémarrer Vlocal","onb.3.acc.restart":"Activez <b>Vlocal</b> dans la liste. S'il n'y apparaît pas, cliquez le <b>+</b> et ajoutez-le. Puis cliquez <b>Redémarrer Vlocal</b> (macOS l'exige pour l'écriture au curseur).",
+      "onb.restart":"Redémarrer Vlocal",
+      "onb.3.acc.restart.h":"Un redémarrage de Vlocal est nécessaire",
+      "onb.3.acc.restart.s1":"Dans la fenêtre qui vient de s'ouvrir, <b>cochez Vlocal</b>. S'il n'apparaît pas, cliquez le <b>+</b> et ajoutez-le.",
+      "onb.3.acc.restart.s2":"Revenez sur cette fenêtre.",
+      "onb.3.acc.restart.s3":"Cliquez <b>Redémarrer Vlocal</b> : macOS n'applique cette autorisation qu'au démarrage de l'app. Vous reviendrez ici, à cette même étape.",
       "onb.openset":"Ouvrir les Réglages","onb.allowed":"Autorisé",
       "onb.3.mic":"Microphone","onb.3.mic.d":"Pour capter votre voix. Jamais envoyée en ligne.","onb.3.continue":"Continuer",
       "onb.4.lead":"Tout est prêt. Voici comment dicter, dans n'importe quelle app :",
@@ -1179,10 +1207,10 @@
       "js.unit.mb":" Mo",
       "set.obs":"Connexion Obsidian","set.obs.d":"Rangez vos dictées, vos réunions et vos rappels dans un coffre Obsidian, en local. Rien ne quitte votre Mac.","set.obs.create":"Créer le coffre « Vlocal, ma voix »","set.obs.create.d":"Le coffre « Vlocal, ma voix » range tout ce que vous dites dans Vlocal : dictées par jour, réunions par locuteur, rappels. Un fichier CLAUDE.md à sa racine explique la structure à un assistant qui travaille sur vos fichiers.","toast.obs-created":"Coffre « Vlocal, ma voix » créé dans Documents et connecté.","set.obs.on":"Activer la capture Obsidian","set.obs.on.d":"Chaque dictée est rangée au bon endroit de votre coffre.","set.obs.connect":"Détecter mon coffre","set.obs.pick":"Choisir manuellement","status.obs.on":"Coffre connecté · {0}","status.obs.off":"Aucun coffre connecté.","toast.obs-connected":"Coffre Obsidian connecté.","toast.obs-fail":"Connexion impossible. Réessayez.",
       "side.free":"Gratuit et open source","side.local":"100 % local · sur votre Mac",
-      "set.share":"Données partagées","set.share.d":"Vlocal est gratuit et open source. Pour savoir qui l'utilise et le temps qu'il fait gagner, l'app peut envoyer une fois par jour : votre prénom et nom, la version, le nombre de dictées, le nombre de mots et le temps gagné estimé. Jamais de texte, jamais d'audio.",
+      "set.share":"Données partagées","set.share.d":"Vlocal est gratuit et open source. Pour savoir qui l'utilise, le temps qu'il fait gagner et sur quel matériel il tourne mal, l'app peut envoyer une fois par jour : votre prénom, votre nom, votre e-mail si vous en donnez un, les versions, le modèle de votre Mac, la langue, le raccourci et le moteur utilisés, puis par jour vos compteurs d'usage et le nombre d'incidents techniques. Jamais de texte, jamais d'audio, jamais le détail d'un incident.",
       "set.share.on":"Partager mon usage","set.share.on.d":"Désactivable à tout moment. Sans effet sur le fonctionnement de l'app.",
       "set.share.first":"Prénom","set.share.lastname":"Nom","set.share.last":"Dernier envoi : {0}",
-      "onb.2.lead":"Vlocal est <b>gratuit et open source</b>. Pour savoir qui l'utilise et le temps qu'il fait gagner, l'app envoie une fois par jour votre prénom et nom, le nombre de dictées, de mots et le temps gagné. <b>Jamais de texte, jamais d'audio.</b>",
+      "onb.2.lead":"Vlocal est <b>gratuit et open source</b>. Pour savoir qui l'utilise et l'aider quand il tourne mal, l'app envoie une fois par jour votre prénom, votre nom, vos compteurs d'usage et des caractéristiques techniques de votre Mac. <b>Jamais de texte, jamais d'audio.</b> Le détail est dans les Réglages, et vous pouvez refuser.",
       "onb.2.first":"Prénom","onb.2.last":"Nom","onb.2.continue":"Continuer","onb.2.skip":"Continuer sans partager",
       "js.identity.missing":"Indiquez votre prénom et votre nom, ou continuez sans partager.",
       "onb.2.email":"Adresse e-mail","set.share.email":"Adresse e-mail",
@@ -1273,7 +1301,11 @@
       "onb.1.start":"Get started","onb.1.thanks":"Thank you for trusting the <b>Vlocal</b> team.",
       "onb.3.lead":"Vlocal needs these to <b>write for you</b> and <b>hear you</b>. Everything is processed locally.",
       "onb.3.acc":"Accessibility","onb.3.acc.d":"To insert dictated text right at your cursor.",
-      "onb.restart":"Restart Vlocal","onb.3.acc.restart":"Enable <b>Vlocal</b> in the list. If it isn't there, click <b>+</b> and add it. Then click <b>Restart Vlocal</b> (macOS requires it for cursor insertion).",
+      "onb.restart":"Restart Vlocal",
+      "onb.3.acc.restart.h":"Vlocal needs to restart",
+      "onb.3.acc.restart.s1":"In the window that just opened, <b>tick Vlocal</b>. If it isn't listed, click <b>+</b> and add it.",
+      "onb.3.acc.restart.s2":"Come back to this window.",
+      "onb.3.acc.restart.s3":"Click <b>Restart Vlocal</b>: macOS only applies this permission when the app starts. You will come back here, to this same step.",
       "onb.openset":"Open Settings","onb.allowed":"Allowed",
       "onb.3.mic":"Microphone","onb.3.mic.d":"To capture your voice. Never sent online.","onb.3.continue":"Continue",
       "onb.4.lead":"You're all set. Here's how to dictate, in any app:",
@@ -1403,10 +1435,10 @@
       "js.unit.mb":" MB",
       "set.obs":"Obsidian connection","set.obs.d":"Save your dictations, meetings and reminders to an Obsidian vault, locally. Nothing leaves your Mac.","set.obs.create":"Create the \"Vlocal, my voice\" vault","set.obs.create.d":"The \"Vlocal, my voice\" vault keeps everything you say in Vlocal: dictations by day, meetings by speaker, reminders. A CLAUDE.md file at its root explains the structure to an assistant working on your files.","toast.obs-created":"\"Vlocal, my voice\" vault created in Documents and connected.","set.obs.on":"Enable Obsidian capture","set.obs.on.d":"Each dictation is filed in the right place in your vault.","set.obs.connect":"Detect my vault","set.obs.pick":"Choose manually","status.obs.on":"Vault connected · {0}","status.obs.off":"No vault connected.","toast.obs-connected":"Obsidian vault connected.","toast.obs-fail":"Connection failed. Try again.",
       "side.free":"Free and open source","side.local":"100% local · on your Mac",
-      "set.share":"Shared data","set.share.d":"Vlocal is free and open source. To know who uses it and how much time it saves, the app can send once a day: your first and last name, the version, the number of dictations, the number of words and the estimated time saved. Never any text, never any audio.",
+      "set.share":"Shared data","set.share.d":"Vlocal is free and open source. To know who uses it, how much time it saves and where it runs badly, the app can send once a day: your first and last name, your email if you give one, the versions, your Mac model, the language, the shortcut and the engine in use, then your daily usage counters and a count of technical incidents. Never any text, never any audio, never the detail of an incident.",
       "set.share.on":"Share my usage","set.share.on.d":"Can be turned off at any time. Has no effect on how the app works.",
       "set.share.first":"First name","set.share.lastname":"Last name","set.share.last":"Last sent: {0}",
-      "onb.2.lead":"Vlocal is <b>free and open source</b>. To know who uses it and how much time it saves, the app sends once a day your first and last name, the number of dictations, words and time saved. <b>Never any text, never any audio.</b>",
+      "onb.2.lead":"Vlocal is <b>free and open source</b>. To know who uses it and to help when it runs badly, the app sends once a day your first and last name, your usage counters and technical characteristics of your Mac. <b>Never any text, never any audio.</b> The detail is in Settings, and you can decline.",
       "onb.2.first":"First name","onb.2.last":"Last name","onb.2.continue":"Continue","onb.2.skip":"Continue without sharing",
       "js.identity.missing":"Enter your first and last name, or continue without sharing.",
       "onb.2.email":"Email address","set.share.email":"Email address",
@@ -2748,13 +2780,25 @@
       var num = it.querySelector('.num');
       if(num) num.innerHTML = i<n ? ONB_DONE : String(i+1);
     });
-    if(n===2){ startPermPolling(); }
+    if(n===2){
+      startPermPolling();
+      // Mémorisé pour revenir ici après le redémarrage exigé par macOS.
+      call('save_settings', [{onb_step: 2}], null);
+    }
     else { stopPermPolling(); }
   }
-  function startOnboarding(){
+  // v1.3.0 — Le redémarrage demandé par macOS ne doit pas renvoyer l'utilisateur
+  // à la case départ : on note l'étape atteinte et on y revient. `resume` vaut
+  // 2 quand l'app a été relancée depuis l'étape Autorisations.
+  function startOnboarding(resume){
     onb.classList.add('show');
     revealBoot();
-    onbGo(0);
+    var back = Number(resume) === 2;
+    onbGo(back ? 2 : 0);
+    // Retour après le redémarrage : si l'Accessibilité manque encore (case non
+    // cochée), la marche à suivre reste affichée plutôt que de laisser un
+    // « Continuer » grisé sans explication.
+    if(back) showAccRestart(true);
   }
   document.getElementById('onb-go1').addEventListener('click', function(){ onbGo(1); });
 
@@ -2796,19 +2840,23 @@
   function validEmail(v){ return /^[^@\s]{1,64}@[^@\s.]+(\.[^@\s.]+)+$/.test((v||'').trim()) && v.trim().length <= 200; }
 
   // étape autorisations
+  // macOS NE rend PAS l'autorisation d'Accessibilité à un process déjà lancé :
+  // cocher la case ne change rien tant que Vlocal n'a pas redémarré. Cette
+  // marche était invisible. Elle est désormais annoncée (encadré numéroté) dès
+  // que l'utilisateur part la cocher, et retirée dès que l'autorisation arrive.
+  var accRestartArmed = false;
+  function showAccRestart(on){
+    accRestartArmed = accRestartArmed || !!on;
+    var box = document.getElementById('onb-acc-hint');
+    if(box) box.style.display = (accRestartArmed && !accOkNow) ? '' : 'none';
+  }
   document.getElementById('onb-acc-btn').addEventListener('click', async function(){
     await call('open_perm_settings', ['accessibility'], null);
     showToast(t('toast.open-sys-settings'), 'info');
-    // macOS NE met PAS à jour l'autorisation dans un process déjà lancé -> on
-    // révèle le bouton « Redémarrer Vlocal » (1 clic, le client n'a pas à
-    // connaître Cmd+Q). Après le redémarrage, l'insertion marche.
-    var rb = document.getElementById('onb-acc-restart');
-    var rh = document.getElementById('onb-acc-hint');
-    if(rb) rb.style.display = '';
-    if(rh) rh.style.display = '';
+    showAccRestart(true);
   });
   (function(){
-    ['onb-acc-restart','set-acc-restart'].forEach(function(id){
+    ['onb-acc-restart2','set-acc-restart'].forEach(function(id){
       var rb = document.getElementById(id);
       if(rb) rb.addEventListener('click', function(){
         rb.disabled = true; rb.textContent = '…';
@@ -2841,6 +2889,7 @@
   document.getElementById('onb-next').addEventListener('click', function(){ onbGo(3); });
 
   var accGranted = false;
+  var accOkNow = false;
   function startPermPolling(){
     stopPermPolling();
     pollPermsOnce();
@@ -2857,12 +2906,14 @@
     if(permAcc) permAcc.classList.toggle('done', accOk);
     if(permMic) permMic.classList.toggle('done', micOk);
     if(accOk && !accGranted){ accGranted = true; await call('arm_hotkey', [], null); }
+    accOkNow = accOk;
+    showAccRestart(false);   // masque l'encadré dès que l'autorisation est là
     document.getElementById('onb-next').disabled = !(accOk && micOk);
   }
 
   document.getElementById('onb-finish').addEventListener('click', async function(){
     stopPermPolling();
-    await call('save_settings', [{onboarded:true}], null);
+    await call('save_settings', [{onboarded:true, onb_step:0}], null);
     onb.classList.remove('show');
     await initMain();
   });
@@ -2953,7 +3004,7 @@
       // v1.1.0 — installation existante : le choix de partage n'a jamais été posé
       if(st.telemetry_enabled === null || st.telemetry_enabled === undefined){ startIdentityPrompt(); }
     }else{
-      startOnboarding();
+      startOnboarding(st.onb_step);
     }
   }
 

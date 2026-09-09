@@ -160,7 +160,7 @@ _window_visible = True   # suivi de visibilité (fenêtre naît affichée)
 WIN_W = 1180            # v3.1 — dashboard plein écran (était 380, carte flottante)
 WIN_H = 780             # v3.1 — (était 720)
 PANEL_W = 840            # (hérité ; set_meeting_panel neutralisé en v3.1)
-APP_VERSION = "1.2.0"   # 9 septembre 2026. Synchrone avec le fichier VERSION (build) ;
+APP_VERSION = "1.3.0"   # 9 septembre 2026. Synchrone avec le fichier VERSION (build) ;
                         # affiché dans l'onglet « Mises à jour ». Historique : CHANGELOG.md.
 # Libellé humain du raccourci global actif (posé par start_global_hotkey,
 # consommé par le message de permission _check_hotkey_perm).
@@ -1565,7 +1565,7 @@ class DictationController:
         # télémétrie déclarée (telemetry.py), qui est prévenue sans bloquer.
         try:
             if _store is not None and raw:
-                _store.record_usage(_store.word_count(raw))
+                _store.record_usage(_store.word_count(raw), _rec_dur)
                 # v1.2.0 — horodatage de la DERNIÈRE dictée : c'est lui qui est
                 # partagé (si l'utilisateur l'accepte), pas l'heure d'envoi ;
                 # la console peut donc dire « utilisé il y a 12 minutes » juste.
@@ -1990,6 +1990,35 @@ def _post_process_by_mode(raw: str, mode: str):
             obsidian.capture(raw, _s.get("obsidian_vault"), time.time())
     except Exception as e:
         print(f"[dictée] capture Obsidian ignorée ({e}).")
+
+
+def _machine_profile() -> dict:
+    """v1.3.0 — Profil TECHNIQUE de l'installation, sans rien de personnel :
+    modèle de Mac, langue de l'interface, raccourci choisi, moteur réellement
+    utilisé. C'est ce qui rend les chiffres interprétables (« les lenteurs
+    viennent des machines en repli processeur », « personne n'utilise Fn »)
+    et c'est ce qu'il faut pour aider quelqu'un qui écrit au support."""
+    prof = {"mac_model": "", "ui_lang": _UI_LANG, "hotkey": "", "engine": ""}
+    try:
+        import subprocess as _sp
+        out = _sp.run(["/usr/sbin/sysctl", "-n", "machdep.cpu.brand_string", "hw.model"],
+                      capture_output=True, text=True, timeout=3).stdout.split("\n")
+        chip = (out[0] if out else "").strip()
+        model = (out[1] if len(out) > 1 else "").strip()
+        # La puce d'abord : c'est elle qui explique la vitesse. « Apple M5 (Mac17,2) ».
+        prof["mac_model"] = (f"{chip} ({model})" if chip and model else chip or model)[:64]
+    except Exception:
+        pass
+    try:
+        prof["hotkey"] = str(_load_settings().get("hotkey") or "")[:24]
+    except Exception:
+        pass
+    try:
+        import mlx_engine as _mx
+        prof["engine"] = "mlx" if _mx.available() else "cpu"
+    except Exception:
+        prof["engine"] = "cpu"
+    return prof
 
 
 def _obsidian_meeting_sync(meeting_id):
@@ -5876,7 +5905,8 @@ def main():
         import platform as _plat
         _telemetry = telemetry.Telemetry(_load_settings, _save_settings,
                                          lambda: _store, APP_VERSION,
-                                         _plat.mac_ver()[0] or "")
+                                         _plat.mac_ver()[0] or "",
+                                         get_profile=_machine_profile)
         _telemetry.start()
     except Exception as e:
         print(f"[telemetry] non démarrée : {e}")

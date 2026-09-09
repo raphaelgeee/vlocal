@@ -59,10 +59,15 @@ data), the app sends once a day:
 | first name, last name, as typed | know who uses Vlocal |
 | email address, if you give one | reach you; optional, validated, never used for anything else |
 | Vlocal version, macOS version | support |
+| Mac model (for example "Apple M2 Pro"), interface language, chosen shortcut, engine in use (GPU or CPU) | know which hardware Vlocal actually runs on, and why it is slow for some people |
 | timestamp of your last dictation | know whether an installation is still in use |
-| per day: dictations, words, estimated time saved, meetings and meeting words | measure real use |
+| per day: dictations, words, speech duration, estimated time saved, meetings and meeting words | measure real use |
+| per day, the number of technical incidents per code (`mic_device_fail`, `gpu_fallback_cpu`...) | see that an installation is struggling, and offer help |
 
-Nothing else. The exact payload is built in [telemetry.py](telemetry.py)
+Nothing else. Incidents travel as **counters**: the stable code and the count,
+never the event context (which may contain a device name). The Mac model is a
+commercial model name, not a serial number.
+The exact payload is built in [telemetry.py](telemetry.py)
 (`build_rows`) and covered by [tests/test_telemetry.py](tests/test_telemetry.py),
 which fails if any other field is added. The estimated time saved uses the same
 formula as the dashboard: words at 40 words per minute typed versus 150 spoken.

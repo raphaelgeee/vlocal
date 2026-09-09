@@ -61,10 +61,15 @@ Données partagées), l'app envoie une fois par jour :
 | prénom et nom, tels que saisis | savoir qui utilise Vlocal |
 | adresse e-mail, si vous en donnez une | vous joindre ; facultative, validée, jamais utilisée pour autre chose |
 | version de Vlocal et de macOS | support |
+| modèle de Mac (par exemple « Apple M2 Pro »), langue de l'interface, raccourci choisi, moteur utilisé (carte graphique ou processeur) | savoir sur quel matériel Vlocal tourne vraiment, et pourquoi il est lent chez certains |
 | horodatage de votre dernière dictée | savoir si une installation sert encore |
-| par jour : dictées, mots, temps gagné estimé, réunions et mots de réunion | mesurer l'usage réel |
+| par jour : dictées, mots, durée de parole, temps gagné estimé, réunions et mots de réunion | mesurer l'usage réel |
+| par jour, le nombre d'incidents techniques par code (`mic_device_fail`, `gpu_fallback_cpu`...) | voir qu'une installation va mal, et proposer de l'aide |
 
-Rien d'autre. Le contenu exact de l'envoi est construit dans
+Rien d'autre. Les incidents voyagent en **compteurs** : le code stable et le
+nombre, jamais le contexte de l'événement (qui peut contenir un nom de
+périphérique). Le modèle de Mac est un modèle commercial, pas un numéro de
+série. Le contenu exact de l'envoi est construit dans
 [telemetry.py](telemetry.py) (`build_rows`) et verrouillé par
 [tests/test_telemetry.py](tests/test_telemetry.py), qui échoue si un champ est
 ajouté. Le temps gagné suit la formule du tableau de bord : mots à 40 mots par

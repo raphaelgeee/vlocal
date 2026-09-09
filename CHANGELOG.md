@@ -3,6 +3,26 @@
 Dates are publication dates on the update channel. Earlier internal versions
 (3.x, June 2026) are not listed.
 
+## 1.3.0, 9 September 2026
+
+- **The restart macOS requires is now announced.** Accessibility is never
+  granted to a process that is already running: ticking the box changed nothing
+  until Vlocal restarted, and the onboarding said so in one grey line. It is now
+  a numbered box, the restart is the highlighted action, and the app comes back
+  to that exact step instead of starting the setup over.
+- **Usage is measured precisely enough to be read.** Speech duration per day, the
+  Mac model, the interface language, the chosen shortcut and the engine actually
+  in use (GPU or CPU) are added to the declared telemetry, along with a daily
+  count of technical incidents per code, counters only and never the detail of
+  an incident. Everything is listed in both READMEs, on the privacy page, and
+  locked by tests/test_telemetry.py.
+- **A day of use is no longer lost.** The app used to send the last three days;
+  a Mac left off for a week lost the days in between. It now sends the last
+  thirty, which the server accepts and applies idempotently.
+- Admin console rebuilt: interactive charts, every figure carries its own
+  definition and period, one detailed record per person, hardware breakdown,
+  retention and incidents.
+
 ## 1.2.0, 9 September 2026
 
 - **Dashboard numbers are now exact.** They were recomputed from the history

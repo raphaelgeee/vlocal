@@ -20,7 +20,7 @@ from pathlib import Path
 
 APP_DIR = Path(os.path.expanduser("~/Library/Application Support/Vlocal"))
 DB_PATH = APP_DIR / "vlocal.db"
-SCHEMA_VERSION = 9  # v1.2.0 : compteurs d'usage complets (réunions) + reprise de l'historique
+SCHEMA_VERSION = 10  # v1.3.0 : durée d'audio dictée dans les compteurs
 
 # Temps gagné par mot dicté, en secondes : frappe à 40 mots/min contre voix à
 # 150 mots/min, soit 1,5 s - 0,4 s. Même formule que le tableau de bord (accueil).
@@ -206,6 +206,20 @@ class Store:
                         self._conn.execute(_sql)
                     except Exception:
                         pass          # colonne déjà présente
+            if v < 10:
+                # v1.3.0 — durée de parole réellement dictée : le nombre de mots
+                # dit ce qui a été produit, la durée dit le temps passé à parler.
+                # Les deux ensemble donnent un débit (mots par minute) qui rend
+                # les chiffres du tableau de bord interprétables.
+                try:
+                    self._conn.execute("ALTER TABLE usage_days ADD COLUMN "
+                                       "audio_seconds REAL NOT NULL DEFAULT 0")
+                except Exception:
+                    pass
+            if v < 10:
+                # La reprise vient APRÈS toutes les colonnes (elle les écrit
+                # toutes). Idempotente : elle ne touche que les jours antérieurs
+                # au premier jour déjà compté.
                 self._backfill_usage_locked()
             self._conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
 
@@ -349,7 +363,7 @@ class Store:
             def _add(day, key, value):
                 if first and day >= first:
                     return                      # déjà compté en direct
-                agg.setdefault(day, {"dictations": 0, "words": 0,
+                agg.setdefault(day, {"dictations": 0, "words": 0, "audio_seconds": 0.0,
                                      "meetings": 0, "meeting_words": 0,
                                      "meeting_seconds": 0.0})[key] += value
             for content, created in self._conn.execute(
@@ -357,6 +371,7 @@ class Store:
                 day = time.strftime("%Y-%m-%d", time.localtime(created or 0))
                 _add(day, "dictations", 1)
                 _add(day, "words", len((content or "").split()))
+                _add(day, "audio_seconds", 0.0)   # durée inconnue avant la v1.3.0
             for txt, brut, created, dur in self._conn.execute(
                     "SELECT transcription_structuree, transcription_brute, "
                     "created_at, duree_audio_s FROM meetings"):
@@ -367,16 +382,18 @@ class Store:
             for day, v in agg.items():
                 self._conn.execute(
                     "INSERT INTO usage_days(day,dictations,words,seconds_saved,"
-                    "meetings,meeting_words,meeting_seconds) VALUES(?,?,?,?,?,?,?) "
+                    "audio_seconds,meetings,meeting_words,meeting_seconds) "
+                    "VALUES(?,?,?,?,?,?,?,?) "
                     "ON CONFLICT(day) DO UPDATE SET "
                     "dictations=dictations+excluded.dictations, "
                     "words=words+excluded.words, "
                     "seconds_saved=seconds_saved+excluded.seconds_saved, "
+                    "audio_seconds=audio_seconds+excluded.audio_seconds, "
                     "meetings=meetings+excluded.meetings, "
                     "meeting_words=meeting_words+excluded.meeting_words, "
                     "meeting_seconds=meeting_seconds+excluded.meeting_seconds",
                     (day, v["dictations"], v["words"],
-                     v["words"] * SECONDS_SAVED_PER_WORD,
+                     v["words"] * SECONDS_SAVED_PER_WORD, v["audio_seconds"],
                      v["meetings"], v["meeting_words"], v["meeting_seconds"]))
             if agg:
                 print(f"[usage] historique repris : {len(agg)} jour(s).")
@@ -404,8 +421,8 @@ class Store:
         month = time.strftime("%Y-%m-01")
         since_day = time.strftime("%Y-%m-%d",
                                   time.localtime(time.time() - days_back * 86400))
-        cols = ("dictations", "words", "seconds_saved", "meetings",
-                "meeting_words", "meeting_seconds")
+        cols = ("dictations", "words", "seconds_saved", "audio_seconds",
+                "meetings", "meeting_words", "meeting_seconds")
         sel = ", ".join(f"COALESCE(SUM({c}),0)" for c in cols)
         with self._lock:
             first = (self._conn.execute("SELECT MIN(day) FROM usage_days").fetchone() or [None])[0]
@@ -413,8 +430,8 @@ class Store:
             mon = self._conn.execute(f"SELECT {sel} FROM usage_days WHERE day>=?",
                                      (month,)).fetchone()
             series = [dict(r) for r in self._conn.execute(
-                "SELECT day,dictations,words,seconds_saved,meetings,meeting_words "
-                "FROM usage_days WHERE day>=? ORDER BY day", (since_day,))]
+                "SELECT day,dictations,words,seconds_saved,audio_seconds,meetings,"
+                "meeting_words FROM usage_days WHERE day>=? ORDER BY day", (since_day,))]
         def pack(r):
             d = {c: (float(v) if "seconds" in c else int(v)) for c, v in zip(cols, r)}
             d["total_words"] = d["words"] + d["meeting_words"]
@@ -422,19 +439,20 @@ class Store:
         return {"since_day": first, "total": pack(tot), "month": pack(mon),
                 "series": series}
 
-    def record_usage(self, words: int, day: str = None) -> None:
-        """Ajoute une dictée de `words` mots au compteur du jour (YYYY-MM-DD,
-        heure locale). Idempotence non requise : un appel = une dictée."""
+    def record_usage(self, words: int, audio_s: float = 0.0, day: str = None) -> None:
+        """Ajoute une dictée de `words` mots (et `audio_s` secondes de parole) au
+        compteur du jour (YYYY-MM-DD, heure locale). Un appel = une dictée."""
         words = max(0, int(words or 0))
         day = day or time.strftime("%Y-%m-%d")
         with self._lock:
             self._conn.execute(
-                "INSERT INTO usage_days(day,dictations,words,seconds_saved) "
-                "VALUES(?,1,?,?) "
+                "INSERT INTO usage_days(day,dictations,words,seconds_saved,audio_seconds) "
+                "VALUES(?,1,?,?,?) "
                 "ON CONFLICT(day) DO UPDATE SET "
                 "dictations=dictations+1, words=words+excluded.words, "
-                "seconds_saved=seconds_saved+excluded.seconds_saved",
-                (day, words, words * SECONDS_SAVED_PER_WORD),
+                "seconds_saved=seconds_saved+excluded.seconds_saved, "
+                "audio_seconds=audio_seconds+excluded.audio_seconds",
+                (day, words, words * SECONDS_SAVED_PER_WORD, max(0.0, float(audio_s or 0))),
             )
 
     def usage_days(self, since_day: str):
@@ -444,8 +462,8 @@ class Store:
             return [
                 dict(r)
                 for r in self._conn.execute(
-                    "SELECT day,dictations,words,seconds_saved,meetings,meeting_words "
-                    "FROM usage_days WHERE day>=? ORDER BY day",
+                    "SELECT day,dictations,words,seconds_saved,audio_seconds,"
+                    "meetings,meeting_words FROM usage_days WHERE day>=? ORDER BY day",
                     (since_day,),
                 )
             ]

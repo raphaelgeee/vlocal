@@ -50,3 +50,7 @@ supabase/.temp/
 tests/rd/
 .claude/
 .metadata_never_index
+
+# Secrets : le jeton d'administration vit sur le Bureau, jamais dans le dépôt.
+VLOCAL_ADMIN_JETON.txt
+*JETON*.txt
