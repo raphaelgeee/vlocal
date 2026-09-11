@@ -150,7 +150,10 @@ def parent():
         json.dump({"onboarded": True, "onb_step": 0, "telemetry_enabled": False,
                    "hotkey": "ctrl_cmd", "install_id": "00000000-0000-4000-8000-00000000c1c1"}, f)
     sortie = os.path.join(home, "cycle.json")
-    env = dict(os.environ, HOME=home)
+    # Couche HOME du verrou seulement : ce banc tourne VOLONTAIREMENT à côté de
+    # l'instance de l'utilisateur, en HOME isolé. Sans cela, la couche par
+    # utilisateur le prendrait pour une seconde instance et l'arrêterait.
+    env = dict(os.environ, HOME=home, VLOCAL_INSTANCE_SCOPE="home")
     try:
         proc = subprocess.run([sys.executable, os.path.abspath(__file__), "--enfant", sortie],
                               cwd=RACINE, env=env, timeout=DELAI_DEMARRAGE_S + DELAI_QUITTER_S + 30,

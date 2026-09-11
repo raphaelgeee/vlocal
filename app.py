@@ -5770,20 +5770,15 @@ _instance_lock = None   # garde le verrou d'instance unique en vie
 
 
 def _acquire_single_instance():
-    """Empêche DEUX instances de Vlocal de tourner (= RAM doublée, ce qui tue une
-    machine 8 Go). Verrou de fichier exclusif non bloquant. Renvoie le handle (à
-    garder ouvert) ou None si une autre instance le détient déjà. No-op silencieux
-    si indisponible (ex. Windows sans fcntl)."""
-    try:
-        import fcntl
-        os.makedirs(_APP_SUPPORT, exist_ok=True)
-        lockf = open(os.path.join(_APP_SUPPORT, "vlocal.lock"), "w")
-        fcntl.flock(lockf.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        return lockf
-    except OSError:
-        return None          # déjà verrouillé -> autre instance active
-    except Exception:
-        return True          # mécanisme indispo -> on ne bloque pas le démarrage
+    """Empêche DEUX instances de Vlocal de tourner : deux raccourcis globaux, deux
+    bulles, le même texte inséré deux fois, et la RAM doublée. Renvoie les handles
+    à garder vivants, ou None si une autre instance tourne déjà.
+    v1.3.3 — deux couches (dossier de support ET dossier privé de l'utilisateur,
+    indépendant de $HOME), et seul EWOULDBLOCK vaut « déjà lancé » : un HOME sur
+    un partage réseau sans flock ne peut plus empêcher Vlocal de s'ouvrir.
+    Détail et raisons dans instance_lock.py."""
+    import instance_lock
+    return instance_lock.acquire(_APP_SUPPORT)
 
 
 def main():

@@ -363,6 +363,8 @@ def create():
 
     def _mk():
         global _overlay
+        if _overlay is not None:      # deux create() rapprochés = UN seul panneau
+            return
         try:
             _overlay = _Overlay()
             print("[overlay] panneau de dictée prêt (NSPanel non-activant).")
