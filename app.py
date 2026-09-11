@@ -165,12 +165,13 @@ _window_visible = True   # suivi de visibilité (fenêtre naît affichée)
 WIN_W = 1180            # v3.1 — dashboard plein écran (était 380, carte flottante)
 WIN_H = 780             # v3.1 — (était 720)
 PANEL_W = 840            # (hérité ; set_meeting_panel neutralisé en v3.1)
-APP_VERSION = "1.3.3"   # 11 septembre 2026. Synchrone avec le fichier VERSION (build) ;
+APP_VERSION = "1.3.4"   # 11 septembre 2026. Synchrone avec le fichier VERSION (build) ;
                         # affiché dans l'onglet « Mises à jour ». Historique : CHANGELOG.md.
 # Libellé humain du raccourci global actif (posé par start_global_hotkey,
 # consommé par le message de permission _check_hotkey_perm).
 _hotkey_label = "Ctrl + Espace"
 _hotkey_state = None       # v1.3.3 — état du raccourci global (hotkey_mac.start), pour le réarmer à chaud
+_update_latest = None      # v1.3.4 — version plus récente connue (menu V « Mise à jour disponible »)
 
 
 def _ui(code: str):
@@ -1928,9 +1929,11 @@ def _menubar_labels():
     """v3.3 — libellés i18n du menu NSStatusItem (suivent la langue UI backend)."""
     if _UI_LANG == "en":
         return {"dictate": "Dictate", "open": "Open Vlocal", "reminders": "Recent reminders",
-                "none": "  (none)", "settings": "Settings...", "quit": "Quit Vlocal"}
+                "none": "  (none)", "settings": "Settings...", "quit": "Quit Vlocal",
+                "update": "Update {0} available..."}
     return {"dictate": "Dicter", "open": "Ouvrir Vlocal", "reminders": "Rappels récents",
-            "none": "  (aucune)", "settings": "Réglages...", "quit": "Quitter Vlocal"}
+            "none": "  (aucune)", "settings": "Réglages...", "quit": "Quitter Vlocal",
+            "update": "Mise à jour {0} disponible..."}
 
 
 def _refresh_menubar():
@@ -1939,7 +1942,7 @@ def _refresh_menubar():
         return
     try:
         _tasks = _store.list_tasks(only_open=True, limit=5) if _store else []
-        _menubar.refresh(tasks=_tasks, labels=_menubar_labels())
+        _menubar.refresh(tasks=_tasks, labels=_menubar_labels(), update_version=_update_latest)
     except Exception:
         pass
 
@@ -4502,6 +4505,12 @@ class Api:
         if any(k in (patch or {}) for k in ("hotkey", "hotkey_mode")):
             threading.Thread(target=_rearm_global_hotkey, name="hotkey-rearm",
                              daemon=True).start()
+        # v1.3.4 — Apparence : la bulle de dictée suit le tableau de bord.
+        if "theme" in (patch or {}):
+            try:
+                overlay.set_theme(new.get("theme", "dark"))
+            except Exception as _th_err:
+                print(f"[overlay] thème non appliqué : {_th_err}")
         # v1.1.0 — partage activé depuis les Réglages : premier envoi tout de suite.
         if (patch or {}).get("telemetry_enabled") is True and _telemetry is not None:
             threading.Thread(target=_telemetry.sync_now, name="telemetry-now",
@@ -5144,9 +5153,6 @@ def start_global_hotkey():
     if hotkey_name == "none":
         _hotkey_label = ""   # raccourci désactivé -> pas de libellé (toast/UI)
         print("[hotkey] désactivé via VLOCAL_HOTKEY=none — utilise le bouton Dicter.")
-        # Pas de raccourci : pastille masquée + hint adapté côté UI.
-        _ui("if(typeof setHotkeyLabel==='function')setHotkeyLabel(%s,%s)"
-            % (json.dumps(""), json.dumps("Clique Dicter pour dicter")))
         return None
 
     # Configs : nom -> (modificateurs requis, vk de la touche déclencheur,
@@ -5182,13 +5188,10 @@ def start_global_hotkey():
                 "right_cmd": hotkey_mac.RIGHT_CMD_KEYCODE,
                 "right_opt": hotkey_mac.RIGHT_OPT_KEYCODE}.get(hotkey_name)
     _hotkey_label = hotkey_label
-    # Pousse le libellé RÉEL du raccourci à l'UI (la pastille « ⌃ ⌘ » statique
-    # du markup n'est qu'un défaut d'affichage). Best-effort, garde typeof.
-    _ui("if(typeof setHotkeyLabel==='function')setHotkeyLabel(%s,%s)"
-        % (json.dumps(hotkey_badge),
-           json.dumps("Maintiens %s (%s) ou clique Dicter"
-                      % (hotkey_badge, hotkey_label))))
-    # Même libellé dans le pied de l'overlay (« Relâchez … pour terminer »),
+    # v1.3.4 — l'ancien appel setHotkeyLabel() visait une fonction que le tableau
+    # de bord n'a plus (il lit le raccourci dans les réglages) : supprimé, comme
+    # setEngineReady() ; tests/test_ui_bridge.py garde désormais ce pont.
+    # Libellé du raccourci dans le pied de l'overlay (« Relâchez … pour terminer »),
     # faux en dur pour 5 raccourcis sur 6 avant v20.
     try:
         overlay.set_hotkey_label(hotkey_label)
@@ -5760,7 +5763,6 @@ def _load_engine_async():
     whisper_dir, cpu_threads = _engine_load_params
     print(f"[whisper] chargement en arrière-plan "
           f"({os.path.basename(whisper_dir)}, int8, cpu_threads={cpu_threads})…")
-    _ui("if(typeof setEngineReady==='function') setEngineReady(false);")
     try:
         engine = VlocalEngine(model_dir=whisper_dir, cpu_threads=cpu_threads)
     except Exception as e:
@@ -5794,7 +5796,6 @@ def _load_engine_async():
                          name="micworker-prewarm", daemon=True).start()
     except Exception:
         pass
-    _ui("if(typeof setEngineReady==='function') setEngineReady(true);")
     _start_idle_unloader()   # libère Whisper de la RAM après inactivité prolongée
     # v2 — Préchargement de small EN FOND si la dictée l'utilisera (modes
     # « auto » et « rapide »), pour que la PREMIÈRE dictée soit déjà rapide
@@ -6297,6 +6298,7 @@ def main():
         # main thread, gardé caché jusqu'à la 1re dictée au raccourci.
         try:
             overlay.create()
+            overlay.set_theme(_load_settings().get("theme", "dark"))   # v1.3.4 — Apparence
         except Exception as e:
             print(f"[overlay] indisponible ({e}) — dictée sans overlay.")
 
@@ -6604,11 +6606,16 @@ def main():
                     _on_open()
                     _ui("if(typeof activateView==='function')activateView('reglages')")
 
+                def _open_update():
+                    _on_open()
+                    _ui("if(typeof activateView==='function')activateView('maj')")
+
                 _menubar = _mb.MenuBar({
                     "dictate": _on_dictate_toggle,
                     "open": _on_open,
                     "settings": _open_settings,
                     "quit": _on_quit,
+                    "update": _open_update,
                     "toggle_task": _on_toggle_task,
                 }, labels=_menubar_labels())
                 _refresh_menubar()                       # peuple « Rappels récents »
@@ -6703,6 +6710,26 @@ def main():
 
         # Premier render des listes (après que la fenêtre soit prête).
         threading.Timer(0.5, _refresh_lists_ui).start()
+
+        # v1.3.4 — Veille de mise à jour : au démarrage puis toutes les six heures,
+        # un simple GET (aucune donnée personnelle). Quand une version plus récente
+        # existe, le menu V gagne une entrée « Mise à jour disponible » en tête.
+        # La fenêtre, elle, pose sa propre pastille (checkUpdateBadge).
+        def _update_watch():
+            global _update_latest
+            import time as _t
+            _t.sleep(30.0)
+            while True:
+                try:
+                    info = _api_instance.check_updates() if _api_instance is not None else None
+                    latest = (info or {}).get("latest") if (info or {}).get("update") else None
+                    if latest != _update_latest:
+                        _update_latest = latest
+                        _refresh_menubar()
+                except Exception as _uw_err:
+                    print(f"[update]  veille KO (ignorée) : {_uw_err}")
+                _t.sleep(6 * 3600)
+        threading.Thread(target=_update_watch, name="update-watch", daemon=True).start()
 
     webview.start(_after_start)
     # Sortie par fin de boucle Cocoa (fermeture sans passer par « Quitter ») :

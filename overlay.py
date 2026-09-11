@@ -370,6 +370,11 @@ def create():
             print("[overlay] panneau de dictée prêt (NSPanel non-activant).")
         except Exception as e:
             print(f"[overlay] création KO : {e}")
+            return
+        # v1.3.4 — état posé avant la création (thème, libellé) : rejoué ici, la
+        # page le recevra dès son chargement (file d'attente de _Overlay.js).
+        if _theme:
+            _js("ovTheme('light')" if _theme == "light" else "ovTheme('dark')")
     _on_main(_mk)
 
 
@@ -403,6 +408,17 @@ def set_hotkey_label(label):
     if _hotkey_label:
         import json as _json
         _js("ovHotkey(%s)" % _json.dumps(_hotkey_label))
+
+
+_theme = None  # v1.3.4 — thème courant (dark/light), rejoué si l'overlay n'existe pas encore
+
+
+def set_theme(theme):
+    """v1.3.4 — thème de la pilule (dark/light), poussé par app.py au démarrage
+    et à chaque changement du réglage « Apparence »."""
+    global _theme
+    _theme = "light" if theme == "light" else "dark"
+    _js("ovTheme('light')" if _theme == "light" else "ovTheme('dark')")
 
 
 def set_lang(lang):

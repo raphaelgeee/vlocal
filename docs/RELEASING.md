@@ -69,5 +69,39 @@ Check: `curl -s https://<project>.supabase.co/functions/v1/get-latest-version
 
 ## 7. Tell users
 
+Two channels, and the app does the first one by itself.
+
+**In the app.** Once `app_versions` carries the new version, every running Vlocal
+notices within six hours (or at its next launch): a dot on the Updates entry of
+the sidebar, a banner at the top of the window, and an "Update x.y.z available"
+entry at the top of the menu bar menu. Nothing to do here, but check it once:
+open the Updates tab of an older build, it must show the new version.
+
+**By email.** One email per version, rendered from a short spec, sent by the
+maintainer from their own mailbox after reading it.
+
+1. Write `mail/<version>.json` (copy the previous one). Fields: subject, preview
+   text, the three headline lines, the version, the uppercase subtitle, one
+   paragraph, three cards (title and text), the download link and the hero
+   image URL (`https://www.vlocal.org/mail/pastille-enregistrement@2x.png` or
+   `pastille-resultat@2x.png`). Plain words: which bugs are fixed, which
+   features are new, in the user's language. No em-dashes.
+2. Render and list the recipients:
+
+   ```bash
+   ./venv/bin/python tools/release_mail.py mail/<version>.json --destinataires
+   ```
+
+   The HTML lands in `dist/mail-<version>.html`. Open it in a browser and read
+   it once as a user would. Images are hosted on vlocal.org (`/mail/*.png`),
+   never embedded: Gmail clips messages above 102 KB.
+3. Recipients come from the admin console (installations that left an email)
+   plus the former paying users kept in `_private/` (never committed). Addresses
+   at `miria.ai` are excluded by the tool. Remove anyone who asked not to be
+   written to.
+4. Send from the maintainer's mailbox, recipients in Bcc, the rendered HTML as
+   the body, subject as in the spec. Send once. Group versions when several ship
+   the same week: one email, the newest version in the title.
+
 Never email users without the maintainer's explicit approval of the exact text
-and recipient list.
+and recipient list. Nothing in this repository sends email.

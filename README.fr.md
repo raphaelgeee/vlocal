@@ -31,7 +31,10 @@ English: [README.md](README.md).
   ou Vlocal crée le coffre « Vlocal, ma voix » où dictées, réunions (par locuteur)
   et rappels sont conservés en Markdown, avec un CLAUDE.md qui décrit la
   structure à un assistant qui travaille sur vos fichiers.
-- Interface en français et en anglais.
+- Interface en français et en anglais, sombre ou claire (Réglages, Apparence).
+- **Mises à jour** signées et notarisées, installées depuis l'onglet Mises à jour.
+  Quand une version sort, Vlocal le dit : une pastille dans la barre latérale, une
+  bannière, et une entrée en tête du menu de la barre des menus.
 
 ## Prérequis
 

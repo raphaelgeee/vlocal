@@ -20,30 +20,71 @@
 }
 
 </style>
+<script>/* v1.3.4 — thème mémorisé, posé avant le premier rendu ; le backend fait foi ensuite. */
+try{if(localStorage.getItem('vlocal_theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}</script>
 <style>
+  /* v1.3.4 — MODE CLAIR. Une seule feuille, deux palettes : toute couleur
+     « blanc translucide » passe par le canal d'encre --ink (rgba(var(--ink),a)),
+     de sorte que la géométrie, les opacités et la hiérarchie restent
+     rigoureusement identiques d'un thème à l'autre ; seule l'encre change.
+     --paper est la couleur « du fond » quand on écrit sur une surface d'encre
+     (texte du bouton principal, curseur du commutateur). */
   :root{
+    --ink:255,255,255;
+    --ink-2:#eceef5;
+    --paper:#0a0b10;
+    --bg:#08080a;
+    --win-a:rgba(16,16,19,.95);
+    --win-b:rgba(10,10,12,.975);
+    --side-bg:rgba(0,0,0,.14);
+    --bad:#ff8d8d;
+    --bad-rgb:255,120,120;
+    --bad-soft:#ffd9d9;
+    --chev:url("data:image/svg+xml,%3Csvg width='10' height='6' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23ffffff70' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+    --hist-reunion:#a8aeb9;--hist-rappel:#8f95a1;--hist-dictee:#c6cad2;
+    color-scheme:dark;
     --eo:cubic-bezier(.16,1,.3,1);
     --ease:cubic-bezier(.22,.61,.36,1);
     --spring:cubic-bezier(.34,1.4,.64,1);
-    --txt:rgba(255,255,255,.97);
-    --txt2:rgba(255,255,255,.66);
-    --dim:rgba(255,255,255,.45);
-    --faint:rgba(255,255,255,.30);
-    --line:rgba(255,255,255,.10);
-    --line2:rgba(255,255,255,.055);
-    --glass:rgba(255,255,255,.05);
-    --glass-h:rgba(255,255,255,.09);
+    --txt:rgba(var(--ink),.97);
+    --txt2:rgba(var(--ink),.66);
+    --dim:rgba(var(--ink),.45);
+    --faint:rgba(var(--ink),.30);
+    --line:rgba(var(--ink),.10);
+    --line2:rgba(var(--ink),.055);
+    --glass:rgba(var(--ink),.05);
+    --glass-h:rgba(var(--ink),.09);
     --radius:20px;
     --radius-lg:28px;
     --ok:#7ee6a0;
     --accent:174,184,255;
+  }
+  html[data-theme="light"]{
+    --ink:20,22,30;
+    --ink-2:#1c1e28;
+    --paper:#ffffff;
+    --bg:#e9ebf0;
+    --win-a:rgba(250,250,252,.96);
+    --win-b:rgba(243,244,247,.985);
+    --side-bg:rgba(20,22,30,.035);
+    --bad:#c5313a;
+    --bad-rgb:197,49,58;
+    --bad-soft:#7a1a20;
+    --chev:url("data:image/svg+xml,%3Csvg width='10' height='6' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%2314161e99' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+    --hist-reunion:#5b6170;--hist-rappel:#6e7482;--hist-dictee:#3f4451;
+    --ok:#1f9a55;
+    color-scheme:light;
+    /* Contraste : la hiérarchie secondaire est un peu plus dense sur fond clair. */
+    --txt2:rgba(var(--ink),.70);
+    --dim:rgba(var(--ink),.55);
+    --faint:rgba(var(--ink),.38);
   }
   *{box-sizing:border-box;margin:0;padding:0}
   html,body{height:100%}
   body{
     font-family:'Geist',-apple-system,'SF Pro Display',system-ui,sans-serif;
     color:var(--txt);
-    background:#08080a;
+    background:var(--bg);
     display:flex;align-items:center;justify-content:center;
     padding:0;overflow:hidden;   /* v3.2.2 — le dashboard remplit la fenêtre (plus de bande sombre) */
     -webkit-font-smoothing:antialiased;letter-spacing:-.01em;
@@ -53,8 +94,8 @@
      clair quasi imperceptible en haut, rien d'autre. Statique (sobriété). */
   body::before{content:'';position:fixed;inset:0;z-index:0;pointer-events:none;
     background:
-      radial-gradient(95% 55% at 50% -18%, rgba(255,255,255,.028), transparent 62%),
-      radial-gradient(80% 45% at 50% 120%, rgba(255,255,255,.012), transparent 60%);}
+      radial-gradient(95% 55% at 50% -18%, rgba(var(--ink),.028), transparent 62%),
+      radial-gradient(80% 45% at 50% 120%, rgba(var(--ink),.012), transparent 60%);}
   @keyframes aurora{
     0%{transform:translate3d(0,0,0) scale(1)}
     50%{transform:translate3d(2.5%,-2%,0) scale(1.07)}
@@ -64,21 +105,21 @@
   .win{
     position:fixed;inset:0;
     border-radius:0;display:flex;overflow:hidden;isolation:isolate;z-index:1;   /* v3.2.2 — plein cadre ; les coins arrondis viennent de la fenêtre macOS */
-    background:linear-gradient(160deg, rgba(16,16,19,.95), rgba(10,10,12,.975));   /* v3.2.8 — fond near-black UNIFORME (cohérent avec la sidebar, fini le gris dépareillé) */
+    background:linear-gradient(160deg, var(--win-a), var(--win-b));   /* v3.2.8 — fond near-black UNIFORME (cohérent avec la sidebar, fini le gris dépareillé) */
     backdrop-filter:blur(48px) saturate(190%);
     -webkit-backdrop-filter:blur(48px) saturate(190%);
-    box-shadow:0 64px 150px -42px rgba(0,0,0,.88), 0 2px 0 rgba(255,255,255,.07) inset, 0 0 0 .5px rgba(255,255,255,.07);
+    box-shadow:0 64px 150px -42px rgba(0,0,0,.88), 0 2px 0 rgba(var(--ink),.07) inset, 0 0 0 .5px rgba(var(--ink),.07);
   }
   /* aurore INTERNE subtile : vie du verre même en plein écran (bureau masqué) */
   /* v3.2.5 — lueur interne MONOCHROME très subtile (plus d'aurore colorée), statique. */
   .win::after{content:'';position:absolute;inset:0;z-index:0;pointer-events:none;opacity:.3;
-    background:radial-gradient(62% 48% at 84% -12%, rgba(255,255,255,.022), transparent 60%);}
+    background:radial-gradient(62% 48% at 84% -12%, rgba(var(--ink),.022), transparent 60%);}
   @keyframes auroraIn{0%{transform:translate3d(0,0,0) scale(1)}100%{transform:translate3d(-2%,-2%,0) scale(1.08)}}
   /* bord verre : specular hairline lumineux haut-gauche, ombre bas-droite */
   /* v3.2.9 — bord ADOUCI : l'ancien specular blanc à 62% en haut-gauche créait une
      "coupure" lumineuse disgracieuse en haut. Désormais un simple hairline très discret. */
   .win::before{content:'';position:absolute;inset:0;border-radius:0;padding:1px;pointer-events:none;z-index:50;
-    background:linear-gradient(140deg,rgba(255,255,255,.12),rgba(255,255,255,.03) 26%,transparent 50%,transparent 74%,rgba(255,255,255,.06));
+    background:linear-gradient(140deg,rgba(var(--ink),.12),rgba(var(--ink),.03) 26%,transparent 50%,transparent 74%,rgba(var(--ink),.06));
     -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
     -webkit-mask-composite:xor;mask-composite:exclude}
 
@@ -86,8 +127,8 @@
   .side{
     position:relative;z-index:2;flex:0 0 240px;display:flex;flex-direction:column;
     padding:0 14px 16px;
-    background:rgba(0,0,0,.14);   /* v3.2.8 — sidebar à peine plus profonde que le contenu : DA uniforme */
-    border-right:1px solid rgba(255,255,255,.05);
+    background:var(--side-bg);   /* v3.2.8 — sidebar à peine plus profonde que le contenu : DA uniforme */
+    border-right:1px solid rgba(var(--ink),.05);
     box-shadow:1px 0 0 rgba(0,0,0,.3);
   }
   .traffic{display:flex;gap:8px;align-items:center;height:52px;padding-left:6px;-webkit-app-region:drag}
@@ -95,12 +136,12 @@
   .tl.r{background:#ff5f57}.tl.y{background:#febc2e}.tl.g{background:#28c840}
   .brand{display:flex;align-items:center;gap:10px;padding:2px 8px 16px}
   .brand .glyph{width:26px;height:26px;border-radius:8px;display:grid;place-items:center;
-    background:linear-gradient(160deg,rgba(255,255,255,.16),rgba(255,255,255,.04));
-    border:1px solid rgba(255,255,255,.12);box-shadow:inset 0 1px 0 rgba(255,255,255,.18)}
-  .brand .glyph i.mark{width:15px;height:15px;background:#fff;
+    background:linear-gradient(160deg,rgba(var(--ink),.16),rgba(var(--ink),.04));
+    border:1px solid rgba(var(--ink),.12);box-shadow:inset 0 1px 0 rgba(var(--ink),.18)}
+  .brand .glyph i.mark{width:15px;height:15px;background:rgb(var(--ink));
     -webkit-mask:url(assets/vocal-glyph-v.svg) center/contain no-repeat;
     mask:url(assets/vocal-glyph-v.svg) center/contain no-repeat}
-  .brand .wordmark-img{height:14px;width:72px;background:#fff;
+  .brand .wordmark-img{height:14px;width:72px;background:rgb(var(--ink));
     -webkit-mask:url(assets/vocal-logo.svg) left center/contain no-repeat;
     mask:url(assets/vocal-logo.svg) left center/contain no-repeat}
   .nav{display:flex;flex-direction:column;gap:3px}
@@ -112,12 +153,12 @@
   .nav-item svg{width:17px;height:17px;opacity:.9;flex:none}
   /* v3.2.5 — badge « Bêta » sobre (Réunions) */
   .nav-item .beta{margin-left:auto;font-size:8.5px;font-weight:600;letter-spacing:.6px;text-transform:uppercase;
-    color:var(--txt2);background:rgba(255,255,255,.06);border:1px solid var(--line2);border-radius:5px;padding:1.5px 5px}
-  .nav-item:hover{background:rgba(255,255,255,.04);color:var(--txt)}
+    color:var(--txt2);background:rgba(var(--ink),.06);border:1px solid var(--line2);border-radius:5px;padding:1.5px 5px}
+  .nav-item:hover{background:rgba(var(--ink),.04);color:var(--txt)}
   /* v1.0.7 — sélecteur actif : contour iridescent SOBRE (mêmes couleurs que
      l'extension via --irid), au lieu du remplissage blanc. DA cohérente avec Dicter. */
-  .nav-item.active{background:rgba(255,255,255,.045);color:#fff;border-color:transparent;
-    position:relative;box-shadow:inset 0 1px 0 rgba(255,255,255,.06)}
+  .nav-item.active{background:rgba(var(--ink),.045);color:rgb(var(--ink));border-color:transparent;
+    position:relative;box-shadow:inset 0 1px 0 rgba(var(--ink),.06)}
   .nav-item.active::before{content:'';position:absolute;inset:0;border-radius:inherit;
     padding:1px;pointer-events:none;opacity:.42;
     background:conic-gradient(from 130deg at 50% 50%,#6f9bff,#9d7bff,#c77bff,#6fe0ff,#6f9bff);
@@ -126,8 +167,8 @@
   .nav-item.hidden{display:none}
   .side-foot{margin-top:auto;display:flex;flex-direction:column;gap:10px}
   .lic{display:flex;align-items:center;gap:10px;padding:11px 12px;border-radius:13px;
-    background:rgba(255,255,255,.035);border:1px solid var(--line)}
-  .lic .dot{width:7px;height:7px;border-radius:50%;background:rgba(255,255,255,.62);box-shadow:0 0 0 3px rgba(255,255,255,.10);flex:none}
+    background:rgba(var(--ink),.035);border:1px solid var(--line)}
+  .lic .dot{width:7px;height:7px;border-radius:50%;background:rgba(var(--ink),.62);box-shadow:0 0 0 3px rgba(var(--ink),.10);flex:none}
   .lic .t{font-size:12px;font-weight:500;color:var(--txt)}
   .lic .s{font-size:10.5px;color:var(--dim);margin-top:1px}
 
@@ -135,20 +176,20 @@
   .main{position:relative;z-index:1;flex:1;min-width:0;display:flex;flex-direction:column;overflow:hidden}
   .top{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;
     padding:98px 34px 18px;-webkit-app-region:drag}   /* v3.2.8 — centre « Bonjour » aligné pile sur « Accueil » (1er onglet) */
-  .top .h{font-size:31px;font-weight:680;letter-spacing:-.9px;color:#fff;line-height:1.04}
+  .top .h{font-size:31px;font-weight:680;letter-spacing:-.9px;color:rgb(var(--ink));line-height:1.04}
   .top .sub{font-size:14px;color:var(--dim);margin-top:6px;font-weight:400}
   .top-actions{display:flex;gap:9px;align-items:center;-webkit-app-region:no-drag}
   .pill{display:flex;align-items:center;gap:7px;height:36px;padding:0 14px;border-radius:11px;
     font-size:12.5px;font-weight:500;letter-spacing:.2px;cursor:pointer;border:1px solid var(--line);
-    background:rgba(255,255,255,.04);color:var(--txt);transition:.18s var(--ease)}
+    background:rgba(var(--ink),.04);color:var(--txt);transition:.18s var(--ease)}
   .pill svg{width:15px;height:15px}
-  .pill:hover{background:rgba(255,255,255,.09);border-color:rgba(255,255,255,.16)}
-  .pill.primary{background:linear-gradient(180deg,#fff,#eceef5);color:#0a0b10;border-color:transparent;
-    box-shadow:0 1px 0 rgba(255,255,255,.8) inset, 0 10px 26px -12px rgba(0,0,0,.6), 0 2px 8px rgba(0,0,0,.35)}
-  .pill.primary:hover{transform:translateY(-1.5px);box-shadow:0 1px 0 rgba(255,255,255,.9) inset, 0 16px 36px -12px rgba(0,0,0,.65), 0 3px 10px rgba(0,0,0,.4)}
-  .pill.primary:disabled{opacity:.45;cursor:default;box-shadow:none;transform:none;background:rgba(255,255,255,.5)}
+  .pill:hover{background:rgba(var(--ink),.09);border-color:rgba(var(--ink),.16)}
+  .pill.primary{background:linear-gradient(180deg,rgb(var(--ink)),var(--ink-2));color:var(--paper);border-color:transparent;
+    box-shadow:0 1px 0 rgba(var(--ink),.8) inset, 0 10px 26px -12px rgba(0,0,0,.6), 0 2px 8px rgba(0,0,0,.35)}
+  .pill.primary:hover{transform:translateY(-1.5px);box-shadow:0 1px 0 rgba(var(--ink),.9) inset, 0 16px 36px -12px rgba(0,0,0,.65), 0 3px 10px rgba(0,0,0,.4)}
+  .pill.primary:disabled{opacity:.45;cursor:default;box-shadow:none;transform:none;background:rgba(var(--ink),.5)}
   .pill.ghost-chip{height:32px;font-size:11.5px;color:var(--txt2)}
-  .pill.rec-live{background:rgba(255,90,90,.16);border-color:rgba(255,120,120,.4);color:#ffd9d9}
+  .pill.rec-live{background:rgba(255,90,90,.16);border-color:rgba(var(--bad-rgb),.4);color:var(--bad-soft)}
   .pill.rec-live .rec-pulse{width:9px;height:9px;border-radius:50%;background:#ff5a5a;animation:pulse 1.1s var(--ease) infinite}
   @keyframes pulse{0%,100%{opacity:.5;transform:scale(.8)}50%{opacity:1;transform:scale(1)}}
 
@@ -165,12 +206,12 @@
 
   /* cartes verre */
   .card{position:relative;border-radius:var(--radius);
-    background:linear-gradient(168deg, rgba(255,255,255,.078), rgba(255,255,255,.022) 58%, rgba(255,255,255,.032));
-    border:1px solid rgba(255,255,255,.09);
-    box-shadow:inset 0 1px 0 rgba(255,255,255,.11), 0 26px 54px -32px rgba(0,0,0,.9);
+    background:linear-gradient(168deg, rgba(var(--ink),.078), rgba(var(--ink),.022) 58%, rgba(var(--ink),.032));
+    border:1px solid rgba(var(--ink),.09);
+    box-shadow:inset 0 1px 0 rgba(var(--ink),.11), 0 26px 54px -32px rgba(0,0,0,.9);
     transition:transform .5s var(--eo), box-shadow .5s var(--eo), border-color .3s}
   .card::before{content:'';position:absolute;inset:0;border-radius:var(--radius);pointer-events:none;
-    background:radial-gradient(130% 72% at 12% -12%, rgba(255,255,255,.13), transparent 52%)}
+    background:radial-gradient(130% 72% at 12% -12%, rgba(var(--ink),.13), transparent 52%)}
 
   /* ===== Stats ===== */
   .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:11px;margin-bottom:14px}
@@ -179,7 +220,7 @@
   .stat{transition:transform .5s var(--eo), box-shadow .5s var(--eo)}
   .stat:hover{transform:translateY(-3px)}
   .stat .v{font-size:33px;font-weight:640;letter-spacing:-1.4px;margin-top:10px;
-    font-variant-numeric:tabular-nums;color:#fff;line-height:1;display:flex;align-items:baseline;gap:8px;
+    font-variant-numeric:tabular-nums;color:rgb(var(--ink));line-height:1;display:flex;align-items:baseline;gap:8px;
     text-shadow:0 1px 20px rgba(0,0,0,.5)}   /* v3.2.5 — glow neutre (plus de halo périwinkle) */
   .stat .v small{font-size:14px;font-weight:450;color:var(--dim);letter-spacing:0}
   .stat .d{font-size:11.5px;color:var(--txt2);margin-top:10px;display:flex;align-items:center;gap:5px}
@@ -188,15 +229,15 @@
   /* ===== Activity heatmap ===== */
   .blk{padding:22px 24px;margin-bottom:14px}
   .blk-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}
-  .blk-title{font-size:14.5px;font-weight:600;color:#fff;letter-spacing:-.1px}
+  .blk-title{font-size:14.5px;font-weight:600;color:rgb(var(--ink));letter-spacing:-.1px}
   .blk-meta{font-size:11.5px;color:var(--dim)}
   .heat{display:flex;gap:4px;overflow:hidden;justify-content:flex-end}
   .heat-col{display:flex;flex-direction:column;gap:4px;flex:0 0 auto}
-  .heat i{width:13px;height:13px;border-radius:4px;background:rgba(255,255,255,.05)}
-  .heat i.l1{background:rgba(255,255,255,.16)}
-  .heat i.l2{background:rgba(255,255,255,.30)}
-  .heat i.l3{background:rgba(255,255,255,.52)}
-  .heat i.l4{background:rgba(255,255,255,.82)}
+  .heat i{width:13px;height:13px;border-radius:4px;background:rgba(var(--ink),.05)}
+  .heat i.l1{background:rgba(var(--ink),.16)}
+  .heat i.l2{background:rgba(var(--ink),.30)}
+  .heat i.l3{background:rgba(var(--ink),.52)}
+  .heat i.l4{background:rgba(var(--ink),.82)}
   .heat-legend{display:flex;align-items:center;gap:6px;justify-content:flex-end;margin-top:14px;font-size:10.5px;color:var(--faint)}
   .heat-legend i{width:11px;height:11px;border-radius:3px}
 
@@ -206,26 +247,26 @@
     transition:background .15s var(--ease);cursor:pointer}
   .rec-copy{flex:none;font-size:10.5px;font-weight:500;letter-spacing:.3px;color:var(--faint);opacity:0;transition:opacity .15s}
   .rec-row:hover .rec-copy{opacity:1}
-  .rec-row:hover{background:rgba(255,255,255,.04)}
+  .rec-row:hover{background:rgba(var(--ink),.04)}
   .rec-time{flex:0 0 64px;font-size:11.5px;color:var(--faint);font-variant-numeric:tabular-nums}
   .rec-chip{flex:0 0 auto;font-size:10px;letter-spacing:.4px;text-transform:uppercase;font-weight:600;
     padding:3px 8px;border-radius:6px;border:1px solid var(--line)}
-  .rec-chip.dictee{color:#c6cad2;border-color:rgba(255,255,255,.16)}
-  .rec-chip.reunion{color:#a8aeb9;border-color:rgba(255,255,255,.16)}
-  .rec-chip.rappel{color:#8f95a1;border-color:rgba(255,255,255,.16)}
+  .rec-chip.dictee{color:#c6cad2;border-color:rgba(var(--ink),.16)}
+  .rec-chip.reunion{color:#a8aeb9;border-color:rgba(var(--ink),.16)}
+  .rec-chip.rappel{color:#8f95a1;border-color:rgba(var(--ink),.16)}
   .rec-txt{flex:1;min-width:0;font-size:13.5px;color:var(--txt);font-weight:400;
     overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .rec-sep{height:1px;background:var(--line2);margin:0 16px}
 
   /* ===== Réunions ===== */
   .hero-rec{padding:30px;display:flex;align-items:center;justify-content:space-between;gap:24px;margin-bottom:16px;
-    background:linear-gradient(135deg,rgba(255,255,255,.07),rgba(255,255,255,.02))}
-  .hero-rec .ht{font-size:18px;font-weight:600;color:#fff;letter-spacing:-.2px}
+    background:linear-gradient(135deg,rgba(var(--ink),.07),rgba(var(--ink),.02))}
+  .hero-rec .ht{font-size:18px;font-weight:600;color:rgb(var(--ink));letter-spacing:-.2px}
   .hero-rec .hs{font-size:13px;color:var(--txt2);margin-top:6px;max-width:360px;line-height:1.5}
   .rec-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}
   .mtg{padding:18px 20px;cursor:pointer;transition:transform .18s var(--eo),border-color .18s}
-  .mtg:hover{transform:translateY(-2px);border-color:rgba(255,255,255,.16)}
-  .mtg .mt{font-size:14.5px;font-weight:550;color:#fff;margin-bottom:9px}
+  .mtg:hover{transform:translateY(-2px);border-color:rgba(var(--ink),.16)}
+  .mtg .mt{font-size:14.5px;font-weight:550;color:rgb(var(--ink));margin-bottom:9px}
   .mtg .mm{display:flex;gap:14px;font-size:11.5px;color:var(--dim);flex-wrap:wrap}
   .mtg .mm span{display:flex;align-items:center;gap:5px}
   .mtg .preview{font-size:12.5px;color:var(--txt2);line-height:1.5;margin-top:11px;
@@ -240,7 +281,7 @@
   /* détail réunion */
   .mtg-detail{padding:24px 26px;margin-bottom:14px}
   .mtg-detail-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:18px}
-  .mtg-detail-head .dt{font-size:18px;font-weight:600;color:#fff}
+  .mtg-detail-head .dt{font-size:18px;font-weight:600;color:rgb(var(--ink))}
   .mtg-detail-head .dm{font-size:12px;color:var(--dim);margin-top:5px}
   .blocks{display:flex;flex-direction:column;gap:14px}
   .block{display:flex;gap:12px}
@@ -251,25 +292,25 @@
   .mtg-plain{font-size:13px;color:var(--txt);line-height:1.7;white-space:pre-wrap}
   .mtg-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
   .block .b-name{cursor:pointer}
-  .b-name-edit{width:80px;font:inherit;font-size:10.5px;text-align:center;background:rgba(255,255,255,.06);border:1px solid var(--line);border-radius:6px;color:var(--txt);padding:3px 5px;outline:none}
+  .b-name-edit{width:80px;font:inherit;font-size:10.5px;text-align:center;background:rgba(var(--ink),.06);border:1px solid var(--line);border-radius:6px;color:var(--txt);padding:3px 5px;outline:none}
   .b-name-edit:focus{border-color:rgba(140,160,255,.55)}
   /* ===== Rappels ===== */
   .rap-help{display:flex;gap:16px;align-items:flex-start;padding:20px 22px;margin-bottom:14px}
-  .rap-help-icon{flex:0 0 auto;width:40px;height:40px;border-radius:11px;display:grid;place-items:center;background:rgba(255,255,255,.06);border:1px solid var(--line);color:var(--txt2)}
+  .rap-help-icon{flex:0 0 auto;width:40px;height:40px;border-radius:11px;display:grid;place-items:center;background:rgba(var(--ink),.06);border:1px solid var(--line);color:var(--txt2)}
   .rap-help-icon svg{width:21px;height:21px}
-  .rap-help-t{font-size:14.5px;font-weight:600;color:#fff;margin-bottom:5px}
+  .rap-help-t{font-size:14.5px;font-weight:600;color:rgb(var(--ink));margin-bottom:5px}
   .rap-help-b{font-size:12.5px;color:var(--txt2);line-height:1.6;max-width:64ch}
   .rap-ex{display:flex;flex-wrap:wrap;gap:7px;margin-top:11px}
-  .rap-chip{font-size:11.5px;color:var(--txt2);background:rgba(255,255,255,.05);border:1px solid var(--line2);border-radius:8px;padding:5px 10px;font-style:italic}
+  .rap-chip{font-size:11.5px;color:var(--txt2);background:rgba(var(--ink),.05);border:1px solid var(--line2);border-radius:8px;padding:5px 10px;font-style:italic}
   .rap-note{font-size:11.5px;color:var(--dim);line-height:1.55;margin-top:9px;padding-left:15px;position:relative}
   .rap-note::before{content:'';position:absolute;left:2px;top:7px;width:4px;height:4px;border-radius:50%;background:var(--faint)}
   .rap-list{padding:8px 10px}
   .rap-cap{font-size:11px;letter-spacing:.9px;text-transform:uppercase;color:var(--dim);font-weight:500;padding:12px 12px 7px}
   .rap-row{display:flex;align-items:center;gap:12px;padding:11px 12px;border-radius:12px;transition:background .15s}
-  .rap-row:hover{background:rgba(255,255,255,.04)}
+  .rap-row:hover{background:rgba(var(--ink),.04)}
   .rap-check{flex:0 0 auto;width:24px;height:24px;border-radius:50%;border:1.6px solid var(--line);background:transparent;color:transparent;display:grid;place-items:center;cursor:pointer;transition:.15s}
   .rap-check svg{width:13px;height:13px}
-  .rap-check:hover{border-color:rgba(255,255,255,.32)}
+  .rap-check:hover{border-color:rgba(var(--ink),.32)}
   .rap-row.done .rap-check{background:#7ee6a0;border-color:#7ee6a0;color:#0a0b10}
   .rap-main{flex:1;min-width:0}
   .rap-title{font-size:13.5px;color:var(--txt);line-height:1.4}
@@ -278,15 +319,15 @@
   .rap-late{font-size:10px;font-weight:600;color:#ffb27a;background:rgba(255,150,90,.12);border-radius:5px;padding:1px 6px;letter-spacing:.2px}
   .rap-del{flex:0 0 auto;width:26px;height:26px;border-radius:7px;border:none;background:transparent;color:var(--faint);cursor:pointer;font-size:13px;transition:.15s;opacity:.4}
   .rap-row:hover .rap-del{opacity:1}
-  .rap-del:hover{background:rgba(255,120,120,.14);color:#ff8d8d}
+  .rap-del:hover{background:rgba(var(--bad-rgb),.14);color:var(--bad)}
   /* encart diagnostic notifications de rappels */
   .rap-notif{display:flex;align-items:center;gap:14px;padding:15px 20px;margin-bottom:14px}
   .rap-notif-dot{flex:0 0 auto;width:9px;height:9px;border-radius:50%;background:var(--faint);transition:background .2s}
   .rap-notif.ok .rap-notif-dot{background:#7ee6a0}
   .rap-notif.warn .rap-notif-dot{background:#ffb27a}
-  .rap-notif.bad .rap-notif-dot{background:#ff8d8d}
+  .rap-notif.bad .rap-notif-dot{background:var(--bad)}
   .rap-notif-tx{flex:1;min-width:0}
-  .rap-notif-t{font-size:13.5px;font-weight:600;color:#fff;margin-bottom:3px}
+  .rap-notif-t{font-size:13.5px;font-weight:600;color:rgb(var(--ink));margin-bottom:3px}
   .rap-notif-s{font-size:12px;color:var(--txt2);line-height:1.5}
   .rap-notif-acts{flex:0 0 auto;display:flex;gap:8px}
 
@@ -297,7 +338,7 @@
   .hist-row{display:flex;gap:13px;align-items:flex-start;padding:12px 16px;border-radius:12px;transition:background .15s;cursor:pointer;position:relative}
   .hist-copy{position:absolute;top:12px;right:14px;font-size:10px;font-weight:500;letter-spacing:.3px;color:var(--faint);opacity:0;transition:opacity .15s}
   .hist-row:hover .hist-copy{opacity:1}
-  .hist-row:hover{background:rgba(255,255,255,.04)}
+  .hist-row:hover{background:rgba(var(--ink),.04)}
   .hist-dot{flex:0 0 7px;width:7px;height:7px;border-radius:50%;margin-top:6px;background:var(--c,#c6cad2)}
   .hist-main{flex:1;min-width:0}
   .hist-top{display:flex;justify-content:space-between;gap:10px;align-items:baseline}
@@ -314,20 +355,20 @@
   .sec .sh{font-size:12.5px;color:var(--txt2);line-height:1.5;margin-bottom:14px;font-weight:400}
   .grow{display:flex;flex-direction:column;gap:7px;margin-bottom:12px}
   .grow-row{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:9px;
-    background:rgba(255,255,255,.03);border:1px solid var(--line2);font-size:12.5px}
+    background:rgba(var(--ink),.03);border:1px solid var(--line2);font-size:12.5px}
   .grow-row .f{color:var(--txt2);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .grow-row .a{color:var(--faint)}.grow-row .t{color:#fff;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .grow-row .a{color:var(--faint)}.grow-row .t{color:rgb(var(--ink));flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .grow-row .del{flex:none;width:22px;height:22px;border:none;background:transparent;color:var(--faint);border-radius:6px;cursor:pointer;font-size:12px;transition:.15s}
-  .grow-row .del:hover{background:rgba(255,255,255,.08);color:var(--txt)}
+  .grow-row .del:hover{background:rgba(var(--ink),.08);color:var(--txt)}
   .field{display:flex;gap:8px;flex-wrap:wrap}   /* v3.2.8 — glossaire : les champs s'enroulent au lieu d'être coupés */
   .field .inp{flex:1 1 130px;min-width:130px}
-  .inp{flex:1;height:38px;border-radius:10px;border:1px solid var(--line);background:rgba(255,255,255,.03);
+  .inp{flex:1;height:38px;border-radius:10px;border:1px solid var(--line);background:rgba(var(--ink),.03);
     color:var(--txt);font-family:inherit;font-size:12.5px;padding:0 12px;outline:none;transition:.18s}
-  .inp:focus{border-color:rgba(255,255,255,.24);background:rgba(255,255,255,.06)}
-  .inp::placeholder{color:rgba(255,255,255,.26)}
+  .inp:focus{border-color:rgba(var(--ink),.24);background:rgba(var(--ink),.06)}
+  .inp::placeholder{color:rgba(var(--ink),.26)}
   .btn{height:38px;padding:0 16px;border-radius:10px;border:1px solid var(--line);
-    background:rgba(255,255,255,.07);color:var(--txt);font-family:inherit;font-size:12.5px;font-weight:500;cursor:pointer;transition:.18s}
-  .btn:hover{background:rgba(255,255,255,.13)}
+    background:rgba(var(--ink),.07);color:var(--txt);font-family:inherit;font-size:12.5px;font-weight:500;cursor:pointer;transition:.18s}
+  .btn:hover{background:rgba(var(--ink),.13)}
   /* v1.0.25 — jauge de progression INTÉGRÉE au bouton (ré-identification).
      En position absolue À L'INTÉRIEUR du bouton : la mise en page ne bouge pas
      d'un pixel, rien ne se décale. Dégradé bleu-violet de la famille iridescente
@@ -352,15 +393,15 @@
   .set-row .si{flex:1}
   .set-row .sl{font-size:13px;color:var(--txt);font-weight:450}
   .set-row .sd{font-size:11.5px;color:var(--dim);margin-top:3px;line-height:1.45}
-  .tog{flex:none;width:40px;height:24px;border-radius:13px;background:rgba(255,255,255,.10);
+  .tog{flex:none;width:40px;height:24px;border-radius:13px;background:rgba(var(--ink),.10);
     border:1px solid var(--line);position:relative;cursor:pointer;transition:.2s var(--eo);margin-top:2px}
   .tog::after{content:'';position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;
     background:#fff;transition:.2s var(--eo);box-shadow:0 1px 3px rgba(0,0,0,.4)}
-  .tog.on{background:rgba(255,255,255,.85)}
-  .tog.on::after{left:18px;background:#0a0b10}
-  .sel{height:38px;border-radius:10px;border:1px solid var(--line);background:rgba(255,255,255,.03);
+  .tog.on{background:rgba(var(--ink),.85)}
+  .tog.on::after{left:18px;background:var(--paper)}
+  .sel{height:38px;border-radius:10px;border:1px solid var(--line);background:rgba(var(--ink),.03);
     color:var(--txt);font-size:12.5px;padding:0 32px 0 12px;outline:none;cursor:pointer;-webkit-appearance:none;appearance:none;
-    background-image:url("data:image/svg+xml,%3Csvg width='10' height='6' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23ffffff70' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+    background-image:var(--chev);
     background-repeat:no-repeat;background-position:right 11px center;max-width:100%;
     text-overflow:ellipsis;white-space:nowrap;overflow:hidden}
 
@@ -368,41 +409,41 @@
 
   /* notification globale (mise à jour / message diffusé depuis l'admin) */
   .notice{display:flex;align-items:center;gap:12px;margin:0 34px 2px;padding:11px 16px;border-radius:13px;
-    background:rgba(255,255,255,.05);border:1px solid var(--line);-webkit-app-region:no-drag}
-  .notice-dot{flex:none;width:7px;height:7px;border-radius:50%;background:rgba(255,255,255,.85);box-shadow:0 0 0 3px rgba(255,255,255,.10)}
+    background:rgba(var(--ink),.05);border:1px solid var(--line);-webkit-app-region:no-drag}
+  .notice-dot{flex:none;width:7px;height:7px;border-radius:50%;background:rgba(var(--ink),.85);box-shadow:0 0 0 3px rgba(var(--ink),.10)}
   .notice-tx{flex:1;font-size:12.5px;color:var(--txt2)}
-  .notice-tx strong{color:#fff;font-weight:550}
-  .notice-act{height:30px;padding:0 13px;border-radius:9px;border:1px solid var(--line);background:rgba(255,255,255,.07);
+  .notice-tx strong{color:rgb(var(--ink));font-weight:550}
+  .notice-act{height:30px;padding:0 13px;border-radius:9px;border:1px solid var(--line);background:rgba(var(--ink),.07);
     color:var(--txt);font-family:inherit;font-size:12px;font-weight:500;cursor:pointer;transition:.16s var(--ease)}
-  .notice-act:hover{background:rgba(255,255,255,.13)}
+  .notice-act:hover{background:rgba(var(--ink),.13)}
   .notice-x{flex:none;width:26px;height:26px;border:none;background:transparent;color:var(--faint);
     border-radius:7px;cursor:pointer;font-size:12px;transition:.16s var(--ease)}
-  .notice-x:hover{background:rgba(255,255,255,.08);color:var(--txt)}
+  .notice-x:hover{background:rgba(var(--ink),.08);color:var(--txt)}
 
   /* ===== Mise à jour ===== */
   .upd-head{display:flex;align-items:center;justify-content:space-between;padding:20px 24px;margin-bottom:14px}
   .upd-app{display:flex;align-items:center;gap:15px}
   .upd-glyph{width:46px;height:46px;border-radius:13px;display:grid;place-items:center;
-    background:linear-gradient(160deg,rgba(255,255,255,.14),rgba(255,255,255,.03));
-    border:1px solid rgba(255,255,255,.12);box-shadow:inset 0 1px 0 rgba(255,255,255,.18)}
-  .upd-glyph .mark{width:23px;height:23px;background:#fff;
+    background:linear-gradient(160deg,rgba(var(--ink),.14),rgba(var(--ink),.03));
+    border:1px solid rgba(var(--ink),.12);box-shadow:inset 0 1px 0 rgba(var(--ink),.18)}
+  .upd-glyph .mark{width:23px;height:23px;background:rgb(var(--ink));
     -webkit-mask:url(assets/vocal-glyph-v.svg) center/contain no-repeat;mask:url(assets/vocal-glyph-v.svg) center/contain no-repeat}
-  .upd-name{font-size:16px;font-weight:600;color:#fff;display:flex;align-items:center;gap:9px}
+  .upd-name{font-size:16px;font-weight:600;color:rgb(var(--ink));display:flex;align-items:center;gap:9px}
   .upd-name .ver{font-size:11px;font-weight:600;letter-spacing:.4px;color:var(--txt2);
     border:1px solid var(--line);border-radius:6px;padding:2px 7px}
   .upd-sub{font-size:12px;color:var(--dim);margin-top:5px}
   .msg{display:flex;gap:14px;padding:18px 22px;margin-bottom:14px;align-items:flex-start}
   .msg-ic{flex:none;width:34px;height:34px;border-radius:10px;display:grid;place-items:center;
-    background:rgba(255,255,255,.05);border:1px solid var(--line);color:var(--txt2)}
+    background:rgba(var(--ink),.05);border:1px solid var(--line);color:var(--txt2)}
   .msg-ic svg{width:16px;height:16px}
-  .msg-t{font-size:13px;font-weight:600;color:#fff;margin-bottom:5px}
+  .msg-t{font-size:13px;font-weight:600;color:rgb(var(--ink));margin-bottom:5px}
   .msg-x{font-size:13px;color:var(--txt2);line-height:1.55}
   .msg-d{font-size:11px;color:var(--faint);margin-top:9px}
   .chg{padding:6px 8px 12px}
   .chg-item{padding:15px 16px;border-bottom:1px solid var(--line2)}
   .chg-item:last-child{border-bottom:0}
   .chg-top{display:flex;align-items:center;gap:10px;margin-bottom:12px}
-  .chg-v{font-size:14px;font-weight:600;color:#fff;font-variant-numeric:tabular-nums}
+  .chg-v{font-size:14px;font-weight:600;color:rgb(var(--ink));font-variant-numeric:tabular-nums}
   .chg-tag{font-size:9.5px;letter-spacing:.5px;text-transform:uppercase;font-weight:600;padding:2px 7px;border-radius:5px;
     color:var(--txt2);border:1px solid var(--line)}
   .chg-date{margin-left:auto;font-size:11px;color:var(--faint)}
@@ -411,8 +452,8 @@
   .chg-list .t{flex:none;width:62px;font-size:9.5px;letter-spacing:.4px;text-transform:uppercase;font-weight:600;color:var(--dim)}
 
   /* progression d'import (barre) */
-  .imp-bar{height:6px;border-radius:4px;background:rgba(255,255,255,.08);overflow:hidden;margin-top:12px;display:none}
-  .imp-bar i{display:block;height:100%;width:0%;background:rgba(255,255,255,.7);border-radius:4px;transition:width .25s var(--ease)}
+  .imp-bar{height:6px;border-radius:4px;background:rgba(var(--ink),.08);overflow:hidden;margin-top:12px;display:none}
+  .imp-bar i{display:block;height:100%;width:0%;background:rgba(var(--ink),.7);border-radius:4px;transition:width .25s var(--ease)}
 
   /* ===== Toast in-app ===== */
   .toasts{position:fixed;bottom:30px;left:50%;transform:translateX(-50%);display:flex;flex-direction:column;gap:9px;z-index:9000;pointer-events:none}
@@ -420,7 +461,7 @@
     color:var(--txt);background:rgba(20,22,30,.92);border:1px solid var(--line);
     backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
     box-shadow:0 18px 44px -16px rgba(0,0,0,.7);animation:toastIn .3s var(--eo);max-width:440px}
-  .toast .tdot{flex:none;width:7px;height:7px;border-radius:50%;background:rgba(255,255,255,.6)}
+  .toast .tdot{flex:none;width:7px;height:7px;border-radius:50%;background:rgba(var(--ink),.6)}
   .toast.success .tdot{background:var(--ok)}
   .toast.error .tdot{background:#ff7a7a}
   @keyframes toastIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
@@ -434,8 +475,8 @@
   .boot-veil.gone{opacity:0;pointer-events:none}
   body:not(.vl-boot) .boot-veil{display:none}
   .boot-orb{width:54px;height:54px;border-radius:16px;display:grid;place-items:center;
-    background:linear-gradient(160deg,rgba(255,255,255,.13),rgba(255,255,255,.03));border:1px solid var(--line);box-shadow:inset 0 1px 0 rgba(255,255,255,.16)}
-  .boot-orb .mark{width:26px;height:26px;background:#fff;-webkit-mask:url(assets/vocal-glyph-v.svg) center/contain no-repeat;mask:url(assets/vocal-glyph-v.svg) center/contain no-repeat;animation:bootPulse 1.4s var(--ease) infinite}
+    background:linear-gradient(160deg,rgba(var(--ink),.13),rgba(var(--ink),.03));border:1px solid var(--line);box-shadow:inset 0 1px 0 rgba(var(--ink),.16)}
+  .boot-orb .mark{width:26px;height:26px;background:rgb(var(--ink));-webkit-mask:url(assets/vocal-glyph-v.svg) center/contain no-repeat;mask:url(assets/vocal-glyph-v.svg) center/contain no-repeat;animation:bootPulse 1.4s var(--ease) infinite}
   @keyframes bootPulse{0%,100%{opacity:.5}50%{opacity:1}}
 
   /* ===== Préparation : téléchargement modèles (app thin, 1er lancement) ===== */
@@ -444,13 +485,13 @@
   .model-dl.show{display:flex}
   .md-card{width:420px;max-width:84vw;padding:32px 30px 26px;border-radius:20px;text-align:center;
     background:linear-gradient(160deg,rgba(28,29,38,.96),rgba(14,14,19,.975));border:1px solid var(--line);
-    box-shadow:inset 0 1px 0 rgba(255,255,255,.10),0 30px 70px -24px rgba(0,0,0,.8)}
+    box-shadow:inset 0 1px 0 rgba(var(--ink),.10),0 30px 70px -24px rgba(0,0,0,.8)}
   .md-orb{width:50px;height:50px;border-radius:15px;margin:0 auto 16px;display:grid;place-items:center;
-    background:linear-gradient(160deg,rgba(255,255,255,.13),rgba(255,255,255,.03));border:1px solid var(--line)}
-  .md-orb .mark{width:24px;height:24px;background:#fff;-webkit-mask:url(assets/vocal-glyph-v.svg) center/contain no-repeat;mask:url(assets/vocal-glyph-v.svg) center/contain no-repeat}
+    background:linear-gradient(160deg,rgba(var(--ink),.13),rgba(var(--ink),.03));border:1px solid var(--line)}
+  .md-orb .mark{width:24px;height:24px;background:rgb(var(--ink));-webkit-mask:url(assets/vocal-glyph-v.svg) center/contain no-repeat;mask:url(assets/vocal-glyph-v.svg) center/contain no-repeat}
   .md-title{font-size:17px;font-weight:600;color:var(--txt);margin-bottom:7px}
   .md-sub{font-size:13px;line-height:1.55;color:var(--dim);margin-bottom:20px}
-  .md-bar{height:7px;border-radius:5px;background:rgba(255,255,255,.08);overflow:hidden}
+  .md-bar{height:7px;border-radius:5px;background:rgba(var(--ink),.08);overflow:hidden}
   .md-bar i{display:block;height:100%;width:0%;border-radius:5px;background:var(--irid);transition:width .3s var(--eo)}
   .md-pct{margin-top:9px;font-size:12px;color:var(--txt2);font-variant-numeric:tabular-nums}
   #md-retry{margin:14px auto 0}
@@ -477,8 +518,8 @@
   .onb .nav-item{cursor:default}
   .onb .nav-item .num{flex:none;width:20px;height:20px;border-radius:50%;border:1.5px solid var(--line);display:grid;place-items:center;font-size:11px;font-weight:600;color:var(--dim)}
   .onb .nav-item .num svg{width:12px;height:12px}
-  .onb .nav-item.cur{background:linear-gradient(180deg,rgba(255,255,255,.11),rgba(255,255,255,.055));color:#fff;border-color:rgba(255,255,255,.10);box-shadow:inset 0 1px 0 rgba(255,255,255,.14),0 6px 16px -10px rgba(0,0,0,.6)}
-  .onb .nav-item.cur .num{border-color:#fff;color:#fff}
+  .onb .nav-item.cur{background:linear-gradient(180deg,rgba(var(--ink),.11),rgba(var(--ink),.055));color:rgb(var(--ink));border-color:rgba(var(--ink),.10);box-shadow:inset 0 1px 0 rgba(var(--ink),.14),0 6px 16px -10px rgba(0,0,0,.6)}
+  .onb .nav-item.cur .num{border-color:rgb(var(--ink));color:rgb(var(--ink))}
   .onb .nav-item.done .num{border-color:var(--ok);color:var(--ok);background:rgba(124,206,150,.12)}
   /* v3.2.7 — onboarding CENTRÉ verticalement : « Bienvenue » descend (aligné avec
      les pastilles), présentation équilibrée (fini le top-heavy). */
@@ -502,13 +543,13 @@
   .onb .form .inp{width:100%;height:46px;border-radius:11px;font-size:14px;padding:0 15px;flex:none}
   .onb .form .inp.key{font-family:'SF Mono',ui-monospace,monospace;font-weight:500;letter-spacing:.1em;text-transform:uppercase}
   .perm{display:flex;align-items:center;gap:14px;padding:16px 18px;margin-bottom:11px;max-width:480px}
-  .perm-tx{flex:1;min-width:0}.perm-tx .n{font-size:13.5px;font-weight:550;color:#fff}.perm-tx .d{font-size:11.5px;color:var(--dim);margin-top:3px;line-height:1.45}
+  .perm-tx{flex:1;min-width:0}.perm-tx .n{font-size:13.5px;font-weight:550;color:rgb(var(--ink))}.perm-tx .d{font-size:11.5px;color:var(--dim);margin-top:3px;line-height:1.45}
   .pstate{display:none;align-items:center;gap:6px;font-size:12.5px;font-weight:550;color:var(--ok)}.pstate svg{width:15px;height:15px}
   .perm.done{border-color:rgba(124,206,150,.26);background:rgba(124,206,150,.07)}
   .perm.done .btn{display:none}.perm.done .pstate{display:inline-flex}
   .micro{font-size:12px;color:var(--dim);margin-top:16px}.micro a{color:var(--txt2);text-decoration:underline;text-underline-offset:2px;cursor:pointer}
-  .err-line{font-size:12.5px;color:#ff8d8d;min-height:16px;margin-top:2px}
-  .kbd{display:inline-flex;align-items:center;gap:5px;font-size:13px;font-weight:550;color:#fff;background:rgba(255,255,255,.08);border:1px solid var(--line);border-radius:9px;padding:5px 10px;margin:0 2px}
+  .err-line{font-size:12.5px;color:var(--bad);min-height:16px;margin-top:2px}
+  .kbd{display:inline-flex;align-items:center;gap:5px;font-size:13px;font-weight:550;color:rgb(var(--ink));background:rgba(var(--ink),.08);border:1px solid var(--line);border-radius:9px;padding:5px 10px;margin:0 2px}
 
   /* ===== Responsive : la fenêtre est redimensionnable ===== */
   .stat .v{white-space:nowrap}
@@ -536,6 +577,9 @@
      Rien d'excessif : juste le rappel premium demandé. */
   :root{ --irid:linear-gradient(180deg,#5b8cff,#9d7bff 28%,#ff77c2 55%,#ffb06b 78%,#5be3c0); }
   .nav-item{position:relative}
+  /* v1.3.4 — pastille « mise à jour disponible » : sans elle, personne n'ouvre l'onglet. */
+  .nav-item.has-upd::after{content:"";position:absolute;right:12px;top:50%;margin-top:-4px;width:8px;height:8px;border-radius:50%;
+    background:var(--ok);box-shadow:0 0 0 3px rgba(126,230,160,.18)}
   /* v1.0.7 — ancien « petit détail » (barre iridescente gauche 2,5px) retiré :
      remplacé par le contour iridescent complet défini plus haut (.nav-item.active::before). */
   .inp:focus,.inp:focus-visible,textarea:focus,textarea:focus-visible,select:focus,
@@ -569,11 +613,28 @@
   /* Réunions — sélecteur de locuteurs (Auto / 2 / 3 / 4 / Autre+saisie) */
   .spk-row{display:flex;align-items:center;gap:10px;margin-top:16px;flex-wrap:wrap}
   .spk-label{font-size:12.5px;color:var(--txt2);min-width:64px}
-  .spk-seg{display:inline-flex;gap:2px;background:rgba(255,255,255,.05);border:1px solid var(--line2);border-radius:10px;padding:3px}
+  .spk-seg{display:inline-flex;gap:2px;background:rgba(var(--ink),.05);border:1px solid var(--line2);border-radius:10px;padding:3px}
   .spk-opt{padding:5px 12px;border-radius:7px;font-size:12.5px;color:var(--txt2);cursor:pointer;transition:background .14s,color .14s}
   .spk-opt:hover{color:var(--txt)}
-  .spk-opt.active{background:rgba(255,255,255,.10);color:#fff;box-shadow:inset 0 1px 0 rgba(255,255,255,.12)}
+  .spk-opt.active{background:rgba(var(--ink),.10);color:rgb(var(--ink));box-shadow:inset 0 1px 0 rgba(var(--ink),.12)}
   .spk-other{display:none;width:64px;height:34px;text-align:center;padding:0 8px}
+
+  /* v1.3.4 — mode clair : ombres et voiles adoucis, tout le reste suit les jetons. */
+  html[data-theme="light"] .win{box-shadow:0 64px 150px -42px rgba(20,22,30,.22), 0 2px 0 rgba(255,255,255,.9) inset, 0 0 0 .5px rgba(20,22,30,.08)}
+  html[data-theme="light"] .side{box-shadow:1px 0 0 rgba(20,22,30,.06)}
+  html[data-theme="light"] .pill.primary:hover{box-shadow:0 1px 0 rgba(255,255,255,.12) inset, 0 16px 36px -12px rgba(20,22,30,.35), 0 3px 10px rgba(20,22,30,.18)}
+  html[data-theme="light"] .tog::after{box-shadow:0 1px 3px rgba(20,22,30,.28)}
+  html[data-theme="light"] .tog.on::after{box-shadow:0 1px 3px rgba(20,22,30,.18)}
+  html[data-theme="light"] .card{box-shadow:inset 0 1px 0 rgba(255,255,255,.85), 0 26px 54px -32px rgba(20,22,30,.22)}
+  html[data-theme="light"] .stat .v{text-shadow:none}
+  html[data-theme="light"] .toast{box-shadow:0 18px 44px -16px rgba(20,22,30,.25)}
+  html[data-theme="light"] .md-card{box-shadow:inset 0 1px 0 rgba(255,255,255,.85),0 30px 70px -24px rgba(20,22,30,.28)}
+  html[data-theme="light"] .brand .glyph{box-shadow:inset 0 1px 0 rgba(255,255,255,.6)}
+  /* Réglages > Apparence : commutateur segmenté sombre / clair (mêmes styles que le sélecteur de locuteurs). */
+  .theme-seg{margin-top:8px;display:inline-flex}
+  .theme-opt{display:inline-flex;align-items:center;gap:7px;height:30px;border:0;background:transparent;font-family:inherit;font-weight:450}
+  .theme-opt svg{flex:none}
+  html[data-theme="light"] .onb .nav-item.cur{box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 6px 16px -10px rgba(20,22,30,.25)}
 </style>
 </head>
 <body class="vl-boot">
@@ -800,6 +861,14 @@
             </select>
           </div>
           <div class="card sec">
+            <div class="st" data-i18n="set.theme">Apparence</div>
+            <div class="sh" data-i18n="set.theme.d">Sombre par défaut. Le tableau de bord et la bulle de dictée changent ensemble.</div>
+            <div class="spk-seg theme-seg" id="set-theme" role="radiogroup" aria-label="Apparence">
+              <button type="button" class="spk-opt theme-opt" data-theme-opt="dark" role="radio" aria-checked="true"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg><span data-i18n="set.theme.dark">Sombre</span></button>
+              <button type="button" class="spk-opt theme-opt" data-theme-opt="light" role="radio" aria-checked="false"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg><span data-i18n="set.theme.light">Clair</span></button>
+            </div>
+          </div>
+          <div class="card sec">
             <div class="st" data-i18n="set.dictee">Dictée</div>
             <div class="set-row"><div class="si"><div class="sl" data-i18n="set.cursor">Écrire au curseur</div><div class="sd" data-i18n="set.cursor.d">Le texte s'insère là où est votre curseur, dans n'importe quelle app.</div></div><div class="tog" data-setting="insert_at_cursor"></div></div>
             <div class="set-row"><div class="si"><div class="sl" data-i18n="set.fixins">L'écriture au curseur ne marche pas&nbsp;?</div><div class="sd" data-i18n="set.fixins.d">Après avoir autorisé l'Accessibilité dans les Réglages macOS, redémarrez Vlocal (macOS l'exige pour activer l'écriture).</div><div class="sd" id="set-fixins-step2" style="display:none;margin-top:7px;color:var(--txt2)" data-i18n-html="set.fixins.step2">Dans la fenêtre Réglages qui vient de s'ouvrir, <b>cochez Vlocal</b> dans la liste Accessibilité. S'il n'y apparaît pas, cliquez le <b>+</b> et ajoutez Vlocal (on vient de le révéler dans le Finder), puis cochez-le. Cliquez ensuite le bouton vert.</div></div><div style="flex:0 0 auto;display:flex;flex-direction:column;gap:8px;align-items:stretch"><button class="btn" id="set-acc-restart" data-i18n="onb.restart">Redémarrer Vlocal</button><button class="btn" id="set-acc-repair" data-i18n="set.fixins.repair">Réparer l'insertion</button><button class="btn primary" id="set-acc-repair-done" style="display:none" data-i18n="set.fixins.done">✓ C'est coché, terminer</button></div></div>
@@ -838,7 +907,7 @@
             <div class="st" data-i18n="set.data">Données &amp; stockage</div>
             <div class="sh" data-i18n="set.data.d">Tout reste sur votre Mac. Les réunions (avec audio) pèsent le plus.</div>
             <div style="font-size:12.5px;color:var(--txt2)" id="storage-label">·</div>
-            <div style="height:6px;border-radius:4px;background:rgba(255,255,255,.08);margin:9px 0;overflow:hidden"><i id="storage-bar" style="display:block;height:100%;width:0%;background:rgba(255,255,255,.6);border-radius:4px"></i></div>
+            <div style="height:6px;border-radius:4px;background:rgba(var(--ink),.08);margin:9px 0;overflow:hidden"><i id="storage-bar" style="display:block;height:100%;width:0%;background:rgba(255,255,255,.6);border-radius:4px"></i></div>
             <div class="field" style="margin-top:6px"><button class="btn" data-clear="dictees" data-i18n="hist.clear.dictees">Effacer les dictées</button><button class="btn" data-clear="tout" data-i18n="hist.clear.tout">Tout effacer</button><button class="btn" id="btn-reset-stats" data-i18n="set.reset">Réinitialiser les statistiques</button></div>
             <div class="sd" style="margin-top:8px" data-i18n="set.reset.d">« Réinitialiser » remet les compteurs du tableau de bord à zéro sans supprimer vos transcriptions.</div>
           </div>
@@ -848,7 +917,7 @@
             <div class="set-row"><div class="si"><div class="sl" data-i18n="set.share.on">Partager mon usage</div><div class="sd" data-i18n="set.share.on.d">Désactivable à tout moment. Sans effet sur le fonctionnement de l'app.</div></div><div class="tog" data-setting="telemetry_enabled"></div></div>
             <div class="field" style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap"><input class="inp" id="share-first" style="flex:1;min-width:140px" placeholder="Prénom" data-i18n-ph="set.share.first" autocomplete="given-name"/><input class="inp" id="share-last" style="flex:1;min-width:140px" placeholder="Nom" data-i18n-ph="set.share.lastname" autocomplete="family-name"/></div>
             <div class="field" style="margin-top:8px"><input class="inp" id="share-email" style="width:100%" type="email" placeholder="Adresse e-mail" data-i18n-ph="set.share.email" autocomplete="email"/></div>
-            <div class="sd" id="share-email-err" style="margin-top:6px;color:#ff8d8d"></div>
+            <div class="sd" id="share-email-err" style="margin-top:6px;color:var(--bad)"></div>
             <div class="sd" id="share-last-sync" style="margin-top:8px"></div>
           </div>
           <div class="card sec">
@@ -971,9 +1040,9 @@
             <span class="kbd" style="font-size:15.5px;padding:9px 14px">⌘ Cmd</span>
           </div>
           <div class="vlist">
-            <div class="vrow"><span class="num" style="border-color:#fff;color:#fff">1</span><span data-i18n="onb.4.s1">Maintenez le raccourci</span></div>
-            <div class="vrow"><span class="num" style="border-color:#fff;color:#fff">2</span><span data-i18n="onb.4.s2">Parlez naturellement</span></div>
-            <div class="vrow"><span class="num" style="border-color:#fff;color:#fff">3</span><span data-i18n="onb.4.s3">Relâchez&nbsp;: le texte s'écrit tout seul, là où est votre curseur</span></div>
+            <div class="vrow"><span class="num" style="border-color:rgb(var(--ink));color:rgb(var(--ink))">1</span><span data-i18n="onb.4.s1">Maintenez le raccourci</span></div>
+            <div class="vrow"><span class="num" style="border-color:rgb(var(--ink));color:rgb(var(--ink))">2</span><span data-i18n="onb.4.s2">Parlez naturellement</span></div>
+            <div class="vrow"><span class="num" style="border-color:rgb(var(--ink));color:rgb(var(--ink))">3</span><span data-i18n="onb.4.s3">Relâchez&nbsp;: le texte s'écrit tout seul, là où est votre curseur</span></div>
           </div>
           <div class="micro" style="margin-bottom:18px" data-i18n="onb.4.try">Essayez tout de suite&nbsp;: ouvrez une note, maintenez le raccourci et dites une phrase.</div>
           <button class="pill primary" id="onb-finish" data-i18n="onb.4.finish">Ouvrir Vlocal<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
@@ -1035,6 +1104,7 @@
       "set.reset":"Réinitialiser les statistiques",
       "set.reset.d":"« Réinitialiser » remet les compteurs du tableau de bord à zéro sans supprimer vos transcriptions.",
       "set.lang":"Langue","set.lang.d":"Langue de l'interface Vlocal.",
+      "set.theme":"Apparence","set.theme.d":"Sombre par défaut. Le tableau de bord et la bulle de dictée changent ensemble.","set.theme.dark":"Sombre","set.theme.light":"Clair",
       "maj.check":"Vérifier les mises à jour","maj.msg":"Message de l'équipe Vlocal",
       "maj.news":"Nouveautés","maj.notes.empty":"Lancez une vérification pour afficher les notes de version.",
       "md.title":"Préparation de Vlocal","md.sub":"Téléchargement du moteur de transcription (~2,8 Go), une seule fois, en Wi-Fi de préférence. Tout reste local ensuite.","md.fail":"Téléchargement interrompu. Vérifiez votre connexion.","md.retry":"Réessayer","md.help":"Besoin d'aide ? support@vlocal.org",
@@ -1267,6 +1337,7 @@
       "set.reset":"Reset statistics",
       "set.reset.d":"\"Reset\" sets the dashboard counters back to zero without deleting your transcriptions.",
       "set.lang":"Language","set.lang.d":"Vlocal interface language.",
+      "set.theme":"Appearance","set.theme.d":"Dark by default. The dashboard and the dictation pill switch together.","set.theme.dark":"Dark","set.theme.light":"Light",
       "maj.check":"Check for updates","maj.msg":"Message from the Vlocal team",
       "maj.news":"What's new","maj.notes.empty":"Run a check to see the release notes.",
       "md.title":"Setting up Vlocal","md.sub":"Downloading the transcription engine (~2.8 GB), one time only, Wi-Fi recommended. Everything stays local afterward.","md.fail":"Download interrupted. Check your connection.","md.retry":"Try again","md.help":"Need help? support@vlocal.org",
@@ -1504,6 +1575,10 @@
     try{ var act=document.querySelector('.nav-item.active[data-view]'); if(act) activateView(act.dataset.view); }catch(e){}
   }
   window.t = t; window.setLang = setLang; window.applyI18n = applyI18n;
+  // v1.3.4 — Le script est une fonction fermée : ce que Python appelle via _ui()
+  // doit être posé sur window, sinon l'appel est ignoré en silence (c'était le cas
+  // de activateView, setHotkeyLabel, setEngineReady et setModelProgress).
+  window.activateView = activateView;
   window.getLang = function(){ return LANG; };
 
   /* ============================================================
@@ -1985,7 +2060,7 @@
 
     var del = document.getElementById('mtg-del');
     if(del) del.addEventListener('click', async function(){
-      if(del.dataset.armed!=='1'){ del.dataset.armed='1'; del.textContent=t('btn.confirm-delete'); del.style.color='#ff8d8d'; del.style.borderColor='rgba(255,120,120,.4)';
+      if(del.dataset.armed!=='1'){ del.dataset.armed='1'; del.textContent=t('btn.confirm-delete'); del.style.color='var(--bad)'; del.style.borderColor='rgba(var(--bad-rgb),.4)';
         setTimeout(function(){ if(del){ del.dataset.armed=''; del.textContent=t('btn.delete'); del.style.color=''; del.style.borderColor=''; } }, 3500); return; }
       var ok = await call('delete_meeting', [mid], false);
       host.innerHTML = '';
@@ -2168,7 +2243,7 @@
       var d = toDate(it.ts);
       var lab = d ? dayLabel(d) : t('label.no-date');
       if(lab !== lastDay){ html += '<div class="hist-day">'+esc(lab)+'</div>'; lastDay = lab; }
-      var col = it.type==='reunion'?'#a8aeb9':it.type==='rappel'?'#8f95a1':'#c6cad2';
+      var col = it.type==='reunion'?'var(--hist-reunion)':it.type==='rappel'?'var(--hist-rappel)':'var(--hist-dictee)';
       var time = d ? fmtClock(d) : '';
       var prev = it.apercu || it.titre || '';
       html += '<div class="hist-row" style="--c:'+col+'"><span class="hist-copy">'+t('js.copy')+'</span><div class="hist-dot"></div><div class="hist-main">'
@@ -2311,7 +2386,7 @@
     if(!rs) return;
     rs.addEventListener('click', async function(){
       if(!hasApi()){ showToast(t('toast.preview-unavailable'), 'info'); return; }
-      if(rs.dataset.armed!=='1'){ rs.dataset.armed='1'; rs.textContent=t('btn.confirm-reset'); rs.style.color='#ff8d8d';
+      if(rs.dataset.armed!=='1'){ rs.dataset.armed='1'; rs.textContent=t('btn.confirm-reset'); rs.style.color='var(--bad)';
         setTimeout(function(){ if(rs){ rs.dataset.armed=''; rs.textContent=t('set.reset'); rs.style.color=''; } }, 3500); return; }
       rs.dataset.armed=''; rs.textContent=t('set.reset'); rs.style.color='';
       await call('save_settings', [{stats_since: Date.now()}], false);
@@ -2401,8 +2476,28 @@
     sel.innerHTML = opts.map(function(h){ var lab = hasKey('label.hotkey.'+h.v) ? t('label.hotkey.'+h.v) : String(h.v); return '<option value="'+esc(h.v)+'"'+(h.v===current?' selected':'')+'>'+esc(lab)+'</option>'; }).join('');
   }
 
+  // v1.3.4 — Apparence. Appliquée tout de suite, mémorisée en localStorage pour
+  // le prochain démarrage (posée avant le premier rendu, voir <head>), enregistrée
+  // par le backend qui la répercute sur la bulle de dictée.
+  function applyTheme(th){
+    th = (th==='light') ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', th);
+    try{ localStorage.setItem('vlocal_theme', th); }catch(e){}
+    document.querySelectorAll('[data-theme-opt]').forEach(function(b){
+      var on = b.getAttribute('data-theme-opt')===th;
+      b.classList.toggle('active', on); b.setAttribute('aria-checked', on?'true':'false');
+    });
+  }
+  document.querySelectorAll('[data-theme-opt]').forEach(function(b){
+    b.addEventListener('click', async function(){
+      var th = b.getAttribute('data-theme-opt');
+      applyTheme(th);
+      await call('save_settings', [{theme: th}], null);
+    });
+  });
   async function loadReglages(){
     var s = await call('load_settings', [], {}) || {};
+    applyTheme(s.theme || document.documentElement.getAttribute('data-theme') || 'dark');
     // toggles
     document.querySelectorAll('.tog[data-setting]').forEach(function(tog){
       var key = tog.getAttribute('data-setting');
@@ -2613,6 +2708,25 @@
   /* ============================================================
      MISE À JOUR
      ============================================================ */
+  // v1.3.4 — La mise à jour se signale d'elle-même : pastille sur l'entrée du
+  // menu et bannière en haut, dès le démarrage puis toutes les six heures. Avant,
+  // seule la visite de l'onglet la révélait, et personne n'y allait.
+  var _updBadgeLatest = null;
+  async function checkUpdateBadge(){
+    var info = await call('check_updates', [], null);
+    var nav = document.querySelector('.nav-item[data-view="maj"]');
+    if(!info || !info.update || !info.latest){
+      if(nav && info && !info.offline) nav.classList.remove('has-upd');
+      return;
+    }
+    if(nav) nav.classList.add('has-upd');
+    if(_updBadgeLatest !== info.latest){
+      _updBadgeLatest = info.latest;
+      var nt = document.getElementById('notice-tx');
+      if(nt){ nt.innerHTML = t('status.upd.notice', esc(info.latest)); }
+      if(noticeEl) noticeEl.style.display = 'flex';
+    }
+  }
   async function loadMaj(){
     // ne PAS re-render pendant un téléchargement/installation (effacerait la
     // barre de progression alors que le backend continue).
@@ -2655,7 +2769,7 @@
           + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 11l5 5 5-5"/><path d="M5 21h14"/></svg>'
           + t('upd.install-now')+'</button>'
           + '<div id="upd-prog" style="display:none;margin-top:12px;max-width:420px">'
-          +   '<div style="height:8px;border-radius:6px;background:rgba(255,255,255,.08);overflow:hidden">'
+          +   '<div style="height:8px;border-radius:6px;background:rgba(var(--ink),.08);overflow:hidden">'
           +     '<div id="upd-bar" style="height:100%;width:0%;border-radius:6px;background:linear-gradient(90deg,#7c5cff,#b07cff);transition:width .25s ease"></div>'
           +   '</div>'
           +   '<div id="upd-prog-tx" class="msg-x" style="margin-top:9px"></div>'
@@ -2964,6 +3078,9 @@
     applyReunionFlag(reunionOn !== false);
     // charge l'accueil
     activateView('home');
+    call('load_settings', [], null).then(function(st){ if(st && st.theme) applyTheme(st.theme); }).catch(function(){});
+    setTimeout(function(){ checkUpdateBadge().catch(function(){}); }, 6000);
+    setInterval(function(){ checkUpdateBadge().catch(function(){}); }, 6 * 3600 * 1000);
     // active le bouton Dicter quand le moteur est prêt
     pollEngine();
   }

@@ -3,6 +3,22 @@
 Dates are publication dates on the update channel. Earlier internal versions
 (3.x, June 2026) are not listed.
 
+## 1.3.4, 11 September 2026
+
+- **Updates announce themselves.** When a newer version is published, a dot
+  appears on the Updates entry of the sidebar, a banner shows at the top of the
+  window, and the menu bar icon gains an "Update x.y.z available" entry at the
+  top of its menu, which opens the Updates tab. Vlocal checks once at launch,
+  then every six hours, with a simple GET that carries no personal data. Before,
+  only a visit to the Updates tab revealed a new version, and nobody went there.
+- **Light mode.** Settings, Appearance: a moon and a sun. The dashboard and the
+  dictation pill switch together. Layout, spacing and typography do not change,
+  only the palette does, checked for contrast. Dark stays the default.
+- Release emails: a template and `tools/release_mail.py` render the
+  announcement of each version from a short JSON spec. Sending stays a manual
+  step, after the maintainer approves the text and the recipients
+  (docs/RELEASING.md, step 7).
+
 ## 1.3.3, 11 September 2026
 
 - **Hands-free dictation by double tap.** Asked by a user who knew it from

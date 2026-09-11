@@ -113,6 +113,21 @@ body[data-state="result"] .icon{display:grid}
   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .cfoot{display:flex;align-items:center;gap:7px;margin-top:13px;font-size:11.5px;color:rgba(255,255,255,.42)}
 .cfoot:empty{display:none}
+
+/* v1.3.4 — MODE CLAIR (poussé par overlay.py via ovTheme). Verre clair, encre
+   sombre, halo iridescent inchangé. Rien ne bouge : mêmes dimensions, mêmes états. */
+html[data-theme="light"]{--glass:linear-gradient(160deg,rgba(252,252,254,.97),rgba(241,242,246,.985))}
+html[data-theme="light"] .point{background:linear-gradient(135deg,rgba(251,251,253,.98),rgba(240,241,245,.985));box-shadow:inset 0 1px 0 rgba(255,255,255,.9)}
+html[data-theme="light"] .surface{box-shadow:inset 0 1px 0 rgba(255,255,255,.92),0 22px 46px -16px rgba(20,22,30,.30),0 0 0 .5px rgba(20,22,30,.10)}
+html[data-theme="light"] .badge{background:rgba(20,22,30,.05);border-color:rgba(20,22,30,.16);box-shadow:inset 0 1px 0 rgba(255,255,255,.85)}
+html[data-theme="light"] .gl{color:#15171f}
+html[data-theme="light"] .wb{background:#15171f}
+html[data-theme="light"] .worklabel{color:rgba(20,22,30,.74)}
+html[data-theme="light"] .timer{color:rgba(20,22,30,.62)}
+html[data-theme="light"] .lockhint{color:rgba(20,22,30,.58)}
+html[data-theme="light"] .icon{background:rgba(20,22,30,.08);color:#15171f}
+html[data-theme="light"] .ctext{color:rgba(20,22,30,.95)}
+html[data-theme="light"] .cfoot{color:rgba(20,22,30,.55)}
 </style>
 </head>
 <body data-state="idle">
@@ -173,6 +188,8 @@ body[data-state="result"] .icon{display:grid}
   var OVLANG='fr';
   function tt(k,a){ var m=OV[OVLANG]||OV.fr; var s=m[k]; if(s===undefined)s=OV.fr[k]; if(s===undefined)return k; if(a!==undefined)s=String(s).split('{0}').join(a); return s; }
   window.ovLang=function(l){ if(l==='fr'||l==='en') OVLANG=l; };
+  // v1.3.4 — thème (dark/light), poussé par overlay.py via ovTheme().
+  window.ovTheme=function(th){ document.documentElement.setAttribute('data-theme', th==='light'?'light':'dark'); };
 
   // ---- waveform : VU-mètre VIVANT — chaque barre suit le niveau de la voix (--lvl),
   //      forme de lentille, vie proportionnelle au volume (calme en silence, animé quand on parle) ----

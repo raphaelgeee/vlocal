@@ -94,6 +94,9 @@ class _Delegate(NSObject):
     def actSettings_(self, sender):
         self._cb.get("settings", lambda: None)()
 
+    def actUpdate_(self, sender):
+        self._cb.get("update", lambda: None)()
+
     def actQuit_(self, sender):
         self._cb.get("quit", lambda: None)()
 
@@ -146,7 +149,7 @@ class MenuBar:
             return None
 
     # ------------------------------------------------------------------ #
-    def refresh(self, tasks=None, labels=None):
+    def refresh(self, tasks=None, labels=None, update_version=None):
         """Reconstruit le menu (5 derniers rappels non faits).
 
         Appelable depuis N'IMPORTE QUEL thread : AppKit n'est pas thread-safe,
@@ -163,6 +166,12 @@ class MenuBar:
             try:
                 menu = NSMenu.alloc().init()
 
+                if update_version:
+                    it = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                        self._labels.get("update", "Mise à jour {0} disponible").replace("{0}", str(update_version)), "actUpdate:", "")
+                    it.setTarget_(self._delegate)
+                    menu.addItem_(it)
+                    menu.addItem_(NSMenuItem.separatorItem())
                 for title, sel in [
                     (self._labels.get("dictate", "Dicter"), "actDictate:"),
                     (self._labels.get("open", "Ouvrir Vlocal"), "actOpen:"),

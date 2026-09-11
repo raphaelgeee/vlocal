@@ -30,7 +30,10 @@ Français : [README.fr.md](README.fr.md).
   creates a "Vlocal, ma voix" vault where dictations, meetings (by speaker) and
   reminders are kept as Markdown, with a CLAUDE.md describing the layout for an
   assistant working on your files.
-- Interface in French and English.
+- Interface in French and English, dark or light (Settings, Appearance).
+- **Updates** are signed, notarized and installed from the Updates tab. When a
+  new version is out, Vlocal says so: a dot in the sidebar, a banner, and an
+  entry at the top of the menu bar menu.
 
 ## Requirements
 
