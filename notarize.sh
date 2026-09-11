@@ -32,6 +32,18 @@ ENT="entitlements.plist"
 #   xcrun notarytool store-credentials vlocal-notary --apple-id … --team-id … --password …
 # Plus besoin d'APPLE_ID/APP_PW dans l'environnement. Surchargeable via NOTARY_PROFILE.
 NOTARY_PROFILE="${NOTARY_PROFILE:-vlocal-notary}"
+# v1.3.4 — Repli SANS trousseau. Le profil keychain a disparu deux fois le même
+# jour (11/09/2026) et « store-credentials » validait la clé sans qu'elle soit
+# relisible ensuite. Avec NOTARY_KEY (fichier .p8 App Store Connect),
+# NOTARY_KEY_ID et NOTARY_ISSUER, notarytool lit la clé directement.
+if [ -n "${NOTARY_KEY:-}" ]; then
+  : "${NOTARY_KEY_ID:?Exporte NOTARY_KEY_ID avec NOTARY_KEY}"
+  : "${NOTARY_ISSUER:?Exporte NOTARY_ISSUER avec NOTARY_KEY}"
+  NOTARY_AUTH=(--key "$NOTARY_KEY" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER")
+  echo "▸ notarytool : clé API App Store Connect ($NOTARY_KEY_ID), sans trousseau"
+else
+  NOTARY_AUTH=(--keychain-profile "$NOTARY_PROFILE")
+fi
 
 [ -d "$APP" ] || { echo "❌ $APP introuvable — lance d'abord le build."; exit 1; }
 [ -f "$ENT" ] || { echo "❌ $ENT introuvable."; exit 1; }
@@ -128,7 +140,7 @@ _make_dmg() {
 _submit() {  # $1 = fichier à soumettre (DMG)
   local i
   for i in 1 2 3 4 5 6 7 8 9 10; do
-    if xcrun notarytool submit "$1" --keychain-profile "$NOTARY_PROFILE" --wait; then
+    if xcrun notarytool submit "$1" "${NOTARY_AUTH[@]}" --wait; then
       return 0
     fi
     echo "    ↻ soumission Apple #$i échouée (réseau/upload) — retry dans 45s…" >&2

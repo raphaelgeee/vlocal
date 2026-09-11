@@ -30,6 +30,12 @@ export DEV_ID="Developer ID Application: <name> (<team id>)"
 NOTARY_PROFILE=<keychain profile> bash notarize.sh
 ```
 
+If the keychain profile is missing ("No Keychain password item found for
+profile"), do not debug the keychain: pass the App Store Connect API key
+directly, `NOTARY_KEY=<path to AuthKey_XXXX.p8> NOTARY_KEY_ID=<key id>
+NOTARY_ISSUER=<issuer uuid> bash notarize.sh`. The profile vanished twice on
+the same day once; the key file mode has no such dependency.
+
 `notarize.sh` signs a clean copy outside iCloud (Finder metadata breaks
 `codesign --strict`), submits the DMG from `/tmp` (iCloud upload saturates the
 link otherwise), staples the ticket and copies the final DMG back to `dist/`.
