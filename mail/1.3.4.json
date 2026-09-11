@@ -5,8 +5,9 @@
   "apercu": "Double appui mains libres, mode clair, et deux bugs de lancement corrigés.",
   "titre_1": "Nouvelle version.",
   "titre_2": "Vlocal 1.3.4 est là.",
-  "titre_3": "Deux appuis, <i style=\"color:rgba(255,255,255,.88)\">mains libres.</i>",
+  "titre_3": "Deux appuis, <i style=\"color:#e3e4e8\">mains libres.</i>",
   "surtitre": "Double appui · mode clair · septembre 2026",
+  "pastille": "Micro ouvert · un appui pour terminer",
   "paragraphe": "Deux appuis brefs sur votre raccourci gardent le micro ouvert, un appui termine. Un mode clair arrive dans les Réglages. Et deux défauts qui gênaient le lancement depuis la 1.2.0 sont corrigés. Toujours 100 % local : rien ne quitte votre Mac.",
   "carte_1_titre": "Dictée mains libres",
   "carte_1_texte": "Dans Réglages, choisissez « Maintenir, ou appuyer deux fois ». Ça marche avec n'importe quel raccourci : Ctrl + Cmd, Fn, Cmd droite, Option droite.",
@@ -14,6 +15,5 @@
   "carte_2_texte": "Depuis la 1.2.0, une erreur au démarrage empêchait le raccourci de s'activer et bloquait la fermeture de l'app. C'est corrigé, et un changement de raccourci prend effet tout de suite.",
   "carte_3_titre": "Mode clair, et des mises à jour qui se signalent",
   "carte_3_texte": "Réglages, Apparence : soleil ou lune, le tableau de bord et la bulle changent ensemble. Et quand une version sort, une pastille vous le dit dans l'app et dans le menu V.",
-  "lien_telechargement": "https://www.vlocal.org/telecharger",
-  "image_hero": "https://www.vlocal.org/mail/pastille-enregistrement@2x.png"
+  "lien_telechargement": "https://www.vlocal.org/telecharger"
 }

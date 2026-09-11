@@ -6,27 +6,30 @@
 <meta name="color-scheme" content="dark">
 <meta name="supported-color-schemes" content="dark">
 <title>{{objet}}</title>
-<!-- Objet : {{objet}} -->
-<!-- Aperçu (préchargement) : {{apercu}} -->
+<!-- Gabarit « nouvelle version ». Contraintes du canal d'envoi (connecteur Gmail) :
+     il supprime les <img> et la propriété raccourcie background. On n'utilise donc
+     que bgcolor + background-color, des bordures et du texte ; aucune image.
+     Couleurs en hexadécimal opaque : lisible aussi en mode sombre des messageries. -->
 </head>
-<body style="margin:0;background:#08090d;font-family:Geist,-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased">
-<div style="display:none;max-height:0;overflow:hidden;font-size:1px;line-height:1px;color:#08090d">{{apercu}}</div><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600&display=swap">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#08090d"><tr><td align="center" style="padding:44px 16px 40px">
-<table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%">
-<tr><td align="center" style="padding:0 0 26px"><img src="https://www.vlocal.org/mail/wordmark@2x.png" width="99" height="20" alt="Vlocal" style="display:block;width:99px;height:20px"></td></tr>
-<tr><td align="center"><span style="display:inline-block;font-size:12px;color:rgba(255,255,255,.62);letter-spacing:.04em;padding:6px 12px;border:1px solid rgba(255,255,255,.1);border-radius:100px">Nouvelle version disponible</span></td></tr>
-<tr><td align="center" style="padding:14px 0 0"><div style="width:42px;height:2px;border-radius:2px;background:linear-gradient(90deg,#6f9bff,#c77bff,#ff8ad0,#6fe0ff);margin:0 auto"></div></td></tr>
-<tr><td align="center" style="padding:24px 10px 0;font-size:40px;line-height:1.0;letter-spacing:-.035em;color:#fff;font-weight:600">{{titre_1}}<br><span style="font-weight:300;color:#cfd2da">{{titre_2}}</span><br><span style="font-weight:300;color:rgba(255,255,255,.56)">{{titre_3}}</span></td></tr>
-<tr><td align="center" style="padding:34px 0 0;font-family:Menlo,ui-monospace,monospace;font-size:96px;line-height:1;letter-spacing:-.06em;color:#fff;font-weight:500">{{version_courte}}</td></tr>
-<tr><td align="center" style="padding:6px 0 0;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:rgba(255,255,255,.45)">{{surtitre}}</td></tr>
-<tr><td align="center" style="padding:6px 0 0"><img src="{{image_hero}}" width="560" height="220" alt="" style="display:block;width:100%;max-width:560px;height:auto"></td></tr>
-<tr><td align="center" style="padding:0 30px;font-size:15px;line-height:1.6;color:rgba(255,255,255,.62);font-weight:300">{{paragraphe}}</td></tr>
-<tr><td style="padding:30px 0 0"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:rgba(255,255,255,.025);border:1px solid rgba(255,255,255,.08);border-radius:22px">
-<tr><td style="padding:20px 24px;border-bottom:1px solid rgba(255,255,255,.08)"><span style="font-size:15px;font-weight:500;color:#fff">{{carte_1_titre}}</span><br><span style="font-size:14px;color:rgba(255,255,255,.56);font-weight:300;line-height:1.5">{{carte_1_texte}}</span></td></tr>
-<tr><td style="padding:20px 24px;border-bottom:1px solid rgba(255,255,255,.08)"><span style="font-size:15px;font-weight:500;color:#fff">{{carte_2_titre}}</span><br><span style="font-size:14px;color:rgba(255,255,255,.56);font-weight:300;line-height:1.5">{{carte_2_texte}}</span></td></tr>
-<tr><td style="padding:20px 24px"><span style="font-size:15px;font-weight:500;color:#fff">{{carte_3_titre}}</span><br><span style="font-size:14px;color:rgba(255,255,255,.56);font-weight:300;line-height:1.5">{{carte_3_texte}}</span></td></tr>
+<body style="margin:0;background-color:#08090d" bgcolor="#08090d">
+<div style="display:none;max-height:0;overflow:hidden;font-size:1px;line-height:1px;color:#08090d">{{apercu}}</div>
+<table width="100%" cellpadding="0" cellspacing="0" bgcolor="#08090d" style="background-color:#08090d;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif"><tr><td align="center" bgcolor="#08090d" style="background-color:#08090d;padding:44px 16px 40px">
+<table width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%">
+<tr><td align="center" style="padding:0 0 26px;font-size:14px;font-weight:700;letter-spacing:.24em;color:#ffffff">VLOCAL</td></tr>
+<tr><td align="center"><span style="display:inline-block;font-size:12px;color:#a3a5ad;letter-spacing:.04em;padding:6px 12px;border:1px solid #23252d;border-radius:100px">Nouvelle version disponible</span></td></tr>
+<tr><td align="center" style="padding:14px 0 0"><table cellpadding="0" cellspacing="0"><tr><td width="42" height="2" bgcolor="#9d7bff" style="background-color:#9d7bff;border-radius:2px;font-size:1px;line-height:2px">&nbsp;</td></tr></table></td></tr>
+<tr><td align="center" style="padding:24px 10px 0;font-size:40px;line-height:1.0;letter-spacing:-.035em;color:#ffffff;font-weight:600">{{titre_1}}<br><span style="font-weight:300;color:#cfd2da">{{titre_2}}</span><br><span style="font-weight:300;color:#8f929c">{{titre_3}}</span></td></tr>
+<tr><td align="center" style="padding:34px 0 0;font-family:Menlo,ui-monospace,monospace;font-size:96px;line-height:1;letter-spacing:-.06em;color:#ffffff;font-weight:500">{{version_courte}}</td></tr>
+<tr><td align="center" style="padding:6px 0 0;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:#7a7c85">{{surtitre}}</td></tr>
+<tr><td align="center" style="padding:30px 0 0"><table cellpadding="0" cellspacing="0"><tr><td bgcolor="#14151c" style="background-color:#14151c;border:1px solid #262833;border-radius:34px;padding:14px 22px 14px 18px"><table cellpadding="0" cellspacing="0"><tr><td style="padding-right:12px"><table cellpadding="0" cellspacing="0"><tr><td width="8" height="8" bgcolor="#ffffff" style="background-color:#ffffff;border-radius:4px;font-size:1px;line-height:8px">&nbsp;</td></tr></table></td><td style="font-size:14px;color:#ffffff;white-space:nowrap">{{pastille}}</td><td style="padding-left:18px;font-family:Menlo,ui-monospace,monospace;font-size:13px;color:#95979f">0:02</td></tr></table></td></tr></table></td></tr>
+<tr><td align="center" style="padding:28px 30px 0;font-size:15px;line-height:1.6;color:#a3a5ad;font-weight:300">{{paragraphe}}</td></tr>
+<tr><td style="padding:30px 0 0"><table width="100%" cellpadding="0" cellspacing="0" bgcolor="#0e0f15" style="background-color:#0e0f15;border:1px solid #1f2129;border-radius:22px">
+<tr><td style="padding:20px 24px;border-bottom:1px solid #1f2129"><span style="font-size:15px;font-weight:500;color:#ffffff">{{carte_1_titre}}</span><br><span style="font-size:14px;color:#95979f;font-weight:300;line-height:1.5">{{carte_1_texte}}</span></td></tr>
+<tr><td style="padding:20px 24px;border-bottom:1px solid #1f2129"><span style="font-size:15px;font-weight:500;color:#ffffff">{{carte_2_titre}}</span><br><span style="font-size:14px;color:#95979f;font-weight:300;line-height:1.5">{{carte_2_texte}}</span></td></tr>
+<tr><td style="padding:20px 24px"><span style="font-size:15px;font-weight:500;color:#ffffff">{{carte_3_titre}}</span><br><span style="font-size:14px;color:#95979f;font-weight:300;line-height:1.5">{{carte_3_texte}}</span></td></tr>
 </table></td></tr>
-<tr><td align="center" style="padding:28px 0 0"><table role="presentation" cellpadding="0" cellspacing="0"><tr><td style="background:#ffffff;border-radius:100px"><a href="{{lien_telechargement}}" style="display:inline-block;padding:13px 22px;color:#0a0a0d;font-size:14px;font-weight:500;text-decoration:none">Mettre à jour</a></td><td style="padding-left:16px;font-size:14px;color:rgba(255,255,255,.62);font-weight:300">ou depuis l'onglet Mises à jour</td></tr></table></td></tr>
-<tr><td align="center" style="padding:36px 20px 0;font-size:12px;color:rgba(255,255,255,.4);line-height:1.6;font-weight:300">Mac Apple Silicon · macOS 11+ · 100 % hors-ligne<br>Vous recevez ce message parce que vous avez laissé votre adresse dans Vlocal, ou que vous l'utilisiez avant qu'il devienne gratuit. <a href="mailto:support@vlocal.org?subject=Ne%20plus%20recevoir%20les%20nouvelles%20versions" style="color:rgba(255,255,255,.62)">Ne plus recevoir</a></td></tr>
-</table></td></tr></table></body>
+<tr><td align="center" style="padding:28px 0 0"><table cellpadding="0" cellspacing="0"><tr><td bgcolor="#ffffff" style="background-color:#ffffff;border-radius:100px"><a href="{{lien_telechargement}}" style="display:inline-block;padding:13px 22px;color:#0a0a0d;font-size:14px;font-weight:500;text-decoration:none">Mettre à jour</a></td><td style="padding-left:16px;font-size:14px;color:#a3a5ad;font-weight:300">ou depuis l'onglet Mises à jour</td></tr></table></td></tr>
+<tr><td align="center" style="padding:36px 20px 0;font-size:12px;color:#6e7079;line-height:1.6;font-weight:300">Mac Apple Silicon · macOS 11+ · 100 % hors-ligne<br>Vous recevez ce message parce que vous avez laissé votre adresse dans Vlocal, ou que vous l'utilisiez avant qu'il devienne gratuit. <a href="mailto:support@vlocal.org?subject=Ne%20plus%20recevoir%20les%20nouvelles%20versions" style="color:#a3a5ad">Ne plus recevoir</a></td></tr>
+</table></td></tr></table>
+</body>
 </html>

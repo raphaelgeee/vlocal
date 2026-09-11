@@ -105,9 +105,18 @@ maintainer from their own mailbox after reading it.
    plus the former paying users kept in `_private/` (never committed). Addresses
    at `miria.ai` are excluded by the tool. Remove anyone who asked not to be
    written to.
-4. Send from the maintainer's mailbox, recipients in Bcc, the rendered HTML as
-   the body, subject as in the spec. Send once. Group versions when several ship
-   the same week: one email, the newest version in the title.
+4. Send from the maintainer's Gmail through the connector, one message per
+   recipient (no Bcc blast), `htmlBody` = the rendered HTML, `body` = a plain
+   text version of the same content, subject as in the spec. Send one copy to
+   the maintainer first and read it back before the others. Send once. Group
+   versions when several ship the same week: one email, the newest version in
+   the title.
+
+   The connector sanitizes HTML before sending: it removes every `<img>` (remote
+   or inline attachment) and the `background` shorthand, and rewrites links
+   through google.com/url. The template therefore uses no image, only
+   `bgcolor` attributes and `background-color`, borders and text. Keep it that
+   way, or the email arrives as white text on a white page.
 
 Never email users without the maintainer's explicit approval of the exact text
 and recipient list. Nothing in this repository sends email.
