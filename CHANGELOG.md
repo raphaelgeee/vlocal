@@ -3,6 +3,24 @@
 Dates are publication dates on the update channel. Earlier internal versions
 (3.x, June 2026) are not listed.
 
+## 1.3.3, 11 September 2026
+
+- **Hands-free dictation by double tap.** Asked by a user who knew it from
+  Wispr Flow. In Settings, "Trigger" offers "Hold, or double-tap to keep the
+  mic open": two quick taps lock the mic open, the next tap ends the dictation,
+  holding still works as before. The pill says the mic is open and which key
+  ends it. The tap logic sits above the key decoder, so it applies to every
+  shortcut, present and future: Ctrl + Cmd, Fn, right Cmd, right Option,
+  Ctrl + Space. A lone short tap is cancelled and shows the gesture.
+- **Changing the shortcut or the trigger in Settings now takes effect
+  immediately.** The toast said "Shortcut updated" but nothing changed until
+  the next launch. The old monitors are removed and the new ones armed on the
+  spot, verified by the lifecycle gate.
+- The single-instance lock has two layers (support folder, and the user's
+  private temp directory, independent of HOME), and only "already locked"
+  means another instance runs: a network home without flock no longer keeps
+  Vlocal from opening. See instance_lock.py.
+
 ## 1.3.2, 11 September 2026
 
 - **The global shortcut and quitting work again.** Since 1.2.0, setting up the

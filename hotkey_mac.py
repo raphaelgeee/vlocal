@@ -63,8 +63,112 @@ def decide(event_type, key_code, flags, want, chord, trigger_vk=None,
     return None
 
 
+TAP_MAX_S = 0.35       # appui plus court que ça = un « tap », pas une dictée tenue
+DOUBLE_TAP_S = 0.45    # deux taps espacés de moins que ça = double appui
+
+
+class TapMachine:
+    """v1.3.3 — Transforme les appuis et relâchements du raccourci en actions de
+    dictée. Posée AU-DESSUS de decide() : elle ne connaît ni la touche ni la
+    combinaison, donc le double appui vaut d'office pour Ctrl + Cmd, Fn, Cmd
+    droite, Option droite, Ctrl + Espace et tout raccourci à venir.
+
+    mode « hold » (défaut) : appui = begin, relâchement = end. Rien ne change.
+    mode « tap » : maintenir fonctionne toujours ; en plus, deux appuis brefs
+    rapprochés VERROUILLENT le micro ouvert (mains libres), et l'appui suivant
+    termine. Un appui bref isolé est annulé (rien à transcrire) et sert à
+    afficher le conseil « appuie deux fois ».
+
+    Actions rendues : "begin", "end", "cancel", "lock", "unlock",
+    ("wait", échéance) quand la décision dépend d'un second appui à venir.
+    Pure : aucune horloge interne, `now` est fourni par l'appelant. Testable.
+    """
+
+    def __init__(self, mode="hold", tap_max=TAP_MAX_S, double_tap=DOUBLE_TAP_S):
+        self.mode = "tap" if mode == "tap" else "hold"
+        self.tap_max = float(tap_max)
+        self.double_tap = float(double_tap)
+        self.active = False            # un begin a été émis, ni end ni cancel depuis
+        self.locked = False            # mains libres
+        self.deadline = None           # échéance d'un tap simple en attente de suite
+        self.t_press = None
+        self._swallow_release = False  # le relâchement de l'appui qui verrouille/termine ne compte pas
+
+    @property
+    def pending(self):
+        return self.deadline is not None
+
+    def press(self, now):
+        if self.mode == "hold":
+            if self.active:
+                return []
+            self.active = True
+            return ["begin"]
+        if self.locked:
+            self.locked = False
+            self.active = False
+            self._swallow_release = True
+            return ["end", "unlock"]
+        acts = self.tick(now)          # une attente expirée avant cet appui = annulée d'abord
+        if self.deadline is not None:
+            self.deadline = None
+            self.locked = True
+            self._swallow_release = True
+            return acts + ["lock"]
+        if self.active:
+            return acts
+        self.active = True
+        self.t_press = now
+        return acts + ["begin"]
+
+    def release(self, now):
+        if self._swallow_release:
+            self._swallow_release = False
+            return []
+        if not self.active or self.locked:
+            return []
+        if self.mode == "hold":
+            self.active = False
+            return ["end"]
+        held = now - (self.t_press if self.t_press is not None else now)
+        if held <= self.tap_max:
+            self.deadline = now + self.double_tap
+            return [("wait", self.deadline)]
+        self.active = False
+        return ["end"]
+
+    def tick(self, now):
+        if self.deadline is not None and now >= self.deadline and not self.locked:
+            self.deadline = None
+            self.active = False
+            return ["cancel"]
+        return []
+
+    def force_idle(self):
+        """Arrêt externe (sécurité, réconciliation) : on repart de zéro."""
+        self.active = False
+        self.locked = False
+        self.deadline = None
+        self._swallow_release = False
+
+
+def stop(st):
+    """v1.3.3 — Arrête un raccourci démarré par start() : moniteurs retirés,
+    minuteurs annulés, threads libérés. Permet de RÉARMER à chaud quand la
+    touche ou le mode change dans les Réglages. Idempotent, ne lève jamais."""
+    if not st:
+        return
+    try:
+        st["stopped"] = True
+        fn = st.get("_stop")
+        if fn is not None:
+            fn()
+    except Exception as e:
+        print(f"[hotkey] arrêt KO (ignoré) : {e}")
+
+
 def start(on_begin, on_end, mods=("ctrl", "cmd"), trigger_vk=None, max_seconds=600.0,
-          chord_vk=None):
+          chord_vk=None, mode="hold", on_cancel=None, on_lock=None):
     if not _IS_MAC:
         return None
     try:
@@ -89,8 +193,11 @@ def start(on_begin, on_end, mods=("ctrl", "cmd"), trigger_vk=None, max_seconds=6
         want |= FLAG.get(m, 0)
     chord = trigger_vk is None
     MAX = float(max_seconds)
-    st = {"active": False, "safety": None, "monitors": []}
+    st = {"active": False, "safety": None, "monitors": [], "stopped": False,
+          "mode": "tap" if mode == "tap" else "hold", "locked": False}
     _st_lock = threading.Lock()        # CONC-2 : protège st["active"] (run loop + Timer)
+    machine = TapMachine(st["mode"])
+    tap_timer = [None]                 # minuteur de l'attente d'un second appui
 
     # CONC-1 : begin/end SÉRIALISÉS via une file FIFO à UN seul consommateur.
     # Sinon begin() et end() partaient sur deux threads indépendants pouvant se
@@ -110,6 +217,8 @@ def start(on_begin, on_end, mods=("ctrl", "cmd"), trigger_vk=None, max_seconds=6
     def _pump():
         while True:
             fn, label = _q.get()
+            if fn is None:             # sentinelle posée par stop()
+                return
             with _pump_jlock:
                 _pump_job_since[0] = time.time()
             try:
@@ -124,7 +233,7 @@ def start(on_begin, on_end, mods=("ctrl", "cmd"), trigger_vk=None, max_seconds=6
     def _pump_watchdog():
         PUMP_JOB_MAX = 8.0
         replaced_for = 0.0
-        while True:
+        while not st["stopped"]:
             time.sleep(1.0)
             try:
                 with _pump_jlock:
@@ -145,36 +254,83 @@ def start(on_begin, on_end, mods=("ctrl", "cmd"), trigger_vk=None, max_seconds=6
             if not st["active"]:
                 return
             st["active"] = False
+            st["locked"] = False
+            machine.force_idle()
         print(f"[hotkey] sécurité : arrêt auto après {MAX:.0f}s (relâchement non reçu).")
         _async(on_end, "end(safety)")
 
-    def _begin():
-        with _st_lock:
-            if st["active"]:
-                return
-            st["active"] = True
+    def _arm_safety_locked():
+        try:
+            if st["safety"] is not None:
+                st["safety"].cancel()
+            st["safety"] = threading.Timer(MAX, _safety)
+            st["safety"].daemon = True
+            st["safety"].start()
+        except Exception:
+            pass
+
+    def _disarm_safety_locked():
+        try:
+            if st["safety"] is not None:
+                st["safety"].cancel()
+                st["safety"] = None
+        except Exception:
+            pass
+
+    def _cancel_tap_timer_locked():
+        t = tap_timer[0]
+        tap_timer[0] = None
+        if t is not None:
             try:
-                if st["safety"] is not None:
-                    st["safety"].cancel()
-                st["safety"] = threading.Timer(MAX, _safety)
-                st["safety"].daemon = True
-                st["safety"].start()
+                t.cancel()
             except Exception:
                 pass
-        _async(on_begin, "begin")
+
+    def _apply(actions):
+        """Exécute les actions rendues par la machine. Appelé SOUS _st_lock."""
+        for a in actions:
+            if isinstance(a, tuple) and a[0] == "wait":
+                _cancel_tap_timer_locked()
+                delay = max(0.0, a[1] - time.time())
+                t = threading.Timer(delay, _tap_deadline)
+                t.daemon = True
+                tap_timer[0] = t
+                t.start()
+            elif a == "begin":
+                st["active"] = True
+                _arm_safety_locked()
+                _async(on_begin, "begin")
+            elif a == "end":
+                st["active"] = False
+                st["locked"] = False
+                _cancel_tap_timer_locked()
+                _disarm_safety_locked()
+                _async(on_end, "end")
+            elif a == "cancel":
+                st["active"] = False
+                _cancel_tap_timer_locked()
+                _disarm_safety_locked()
+                _async(on_cancel or on_end, "cancel")
+            elif a == "lock":
+                st["locked"] = True
+                _cancel_tap_timer_locked()
+                print("[hotkey] double appui : micro maintenu ouvert (mains libres).")
+                if on_lock is not None:
+                    _async(on_lock, "lock")
+            elif a == "unlock":
+                st["locked"] = False
+
+    def _tap_deadline():
+        with _st_lock:
+            _apply(machine.tick(time.time()))
+
+    def _begin():
+        with _st_lock:
+            _apply(machine.press(time.time()))
 
     def _end():
         with _st_lock:
-            if not st["active"]:
-                return
-            st["active"] = False
-            try:
-                if st["safety"] is not None:
-                    st["safety"].cancel()
-                    st["safety"] = None
-            except Exception:
-                pass
-        _async(on_end, "end")
+            _apply(machine.release(time.time()))
 
     _TYPES = {"flags": int(AppKit.NSEventTypeFlagsChanged),
               "down": int(AppKit.NSEventTypeKeyDown),
@@ -228,7 +384,7 @@ def start(on_begin, on_end, mods=("ctrl", "cmd"), trigger_vk=None, max_seconds=6
         except Exception:
             return
         with _st_lock:
-            stuck = st["active"] and not held
+            stuck = st["active"] and not held and not machine.locked and not machine.pending
         if stuck:   # _end() pris HORS verrou (threading.Lock non réentrant)
             print("[hotkey] réconciliation : modificateurs relâchés -> arrêt dictée fantôme.")
             _end()
@@ -278,7 +434,7 @@ def start(on_begin, on_end, mods=("ctrl", "cmd"), trigger_vk=None, max_seconds=6
         except Exception:
             return
         last = trusted0
-        while True:
+        while not st["stopped"]:
             try:
                 cur = bool(AXIsProcessTrusted())
                 if cur and cur != last:
@@ -293,5 +449,27 @@ def start(on_begin, on_end, mods=("ctrl", "cmd"), trigger_vk=None, max_seconds=6
                 pass
             _t.sleep(1.0)   # v1.0.9 : 2 -> 1 s (récupération « touche perdue » plus rapide)
     threading.Thread(target=_watch_trust, daemon=True).start()
+
+    def _stop():
+        # Retire les moniteurs sur le main thread (là où ils ont été posés),
+        # coupe la dictée en cours proprement, annule les minuteurs, libère le
+        # consommateur de la file. Après ça, plus aucun événement n'arrive ici.
+        def _remove():
+            for m in st["monitors"]:
+                try:
+                    NSEvent.removeMonitor_(m)
+                except Exception:
+                    pass
+            st["monitors"] = []
+        _on_main(_remove)
+        with _st_lock:
+            if st["active"]:
+                _apply(["end"])
+            _cancel_tap_timer_locked()
+            _disarm_safety_locked()
+            machine.force_idle()
+        _q.put((None, "stop"))
+        print(f"[hotkey] raccourci arrêté (mode {st['mode']}).")
+    st["_stop"] = _stop
 
     return st

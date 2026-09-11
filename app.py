@@ -165,11 +165,12 @@ _window_visible = True   # suivi de visibilité (fenêtre naît affichée)
 WIN_W = 1180            # v3.1 — dashboard plein écran (était 380, carte flottante)
 WIN_H = 780             # v3.1 — (était 720)
 PANEL_W = 840            # (hérité ; set_meeting_panel neutralisé en v3.1)
-APP_VERSION = "1.3.2"   # 11 septembre 2026. Synchrone avec le fichier VERSION (build) ;
+APP_VERSION = "1.3.3"   # 11 septembre 2026. Synchrone avec le fichier VERSION (build) ;
                         # affiché dans l'onglet « Mises à jour ». Historique : CHANGELOG.md.
 # Libellé humain du raccourci global actif (posé par start_global_hotkey,
 # consommé par le message de permission _check_hotkey_perm).
 _hotkey_label = "Ctrl + Espace"
+_hotkey_state = None       # v1.3.3 — état du raccourci global (hotkey_mac.start), pour le réarmer à chaud
 
 
 def _ui(code: str):
@@ -4497,6 +4498,10 @@ class Api:
 
     def save_settings(self, patch):
         new = _save_settings(patch or {})
+        # v1.3.3 — touche ou mode de déclenchement modifiés : prise d'effet immédiate.
+        if any(k in (patch or {}) for k in ("hotkey", "hotkey_mode")):
+            threading.Thread(target=_rearm_global_hotkey, name="hotkey-rearm",
+                             daemon=True).start()
         # v1.1.0 — partage activé depuis les Réglages : premier envoi tout de suite.
         if (patch or {}).get("telemetry_enabled") is True and _telemetry is not None:
             threading.Thread(target=_telemetry.sync_now, name="telemetry-now",
@@ -5128,10 +5133,14 @@ def start_global_hotkey():
     Valeurs : ctrl_space (défaut) | ctrl_cmd (chord de modificateurs) |
     ctrl_alt_space | ctrl_cmd_space | cmd_shift_x | none.
     """
-    global _hotkey_label
+    global _hotkey_label, _hotkey_state
+    _settings_now = _load_settings()
     hotkey_name = (os.environ.get("VLOCAL_HOTKEY")
-                   or _load_settings().get("hotkey")
+                   or _settings_now.get("hotkey")
                    or "ctrl_cmd").lower()   # v20 — même défaut que l'UI/la table
+    # v1.3.3 — mode de déclenchement : « hold » (maintenir) ou « tap » (maintenir,
+    # ou double appui pour garder le micro ouvert). Indépendant de la touche.
+    hotkey_mode = "tap" if _settings_now.get("hotkey_mode") == "tap" else "hold"
     if hotkey_name == "none":
         _hotkey_label = ""   # raccourci désactivé -> pas de libellé (toast/UI)
         print("[hotkey] désactivé via VLOCAL_HOTKEY=none — utilise le bouton Dicter.")
@@ -5395,6 +5404,29 @@ def start_global_hotkey():
         except Exception as e:
             print(f"[hotkey] end KO (ignoré) : {e}")
 
+    # v1.3.3 — appui bref isolé en mode double appui : rien à transcrire, on
+    # annule et on montre le geste. Même mécanique que « trop court », avec le
+    # conseil qui va avec.
+    def _cancel_safe():
+        try:
+            if not _controller:
+                return
+            threading.Thread(target=_controller.cancel, name="tap-cancel",
+                             daemon=True).start()
+            _ui("dictationCancelled()")
+            overlay.too_short_tap()
+            _schedule_overlay_hide(2.6)
+        except Exception as e:
+            print(f"[hotkey] cancel KO (ignoré) : {e}")
+
+    # v1.3.3 — double appui reçu : le micro reste ouvert, la pilule le dit et
+    # dit comment terminer (avec le libellé du raccourci réel).
+    def _lock_safe():
+        try:
+            overlay.locked(hotkey_label)
+        except Exception as e:
+            print(f"[hotkey] lock KO (ignoré) : {e}")
+
     # Raccourci global via moniteurs NSEvent natifs (hotkey_mac), PLUS de
     # pynput : pynput crashait l'app (résolution TSM du caractère hors main
     # thread -> SIGTRAP). Les moniteurs ne lisent que les modificateurs /
@@ -5410,11 +5442,40 @@ def start_global_hotkey():
     # longue, tout en restant protégé contre une touche bloquée.
     t = hotkey_mac.start(_begin_safe, _end_safe,
                          mods=tuple(required), trigger_vk=trigger_vk,
-                         max_seconds=600.0, chord_vk=chord_vk)
+                         max_seconds=600.0, chord_vk=chord_vk,
+                         mode=hotkey_mode, on_cancel=_cancel_safe, on_lock=_lock_safe)
     if t is None:
         print("[hotkey] raccourci inactif — accorde l'Accessibilité à Vlocal, "
               "ou utilise le bouton Dicter.")
+    else:
+        print(f"[hotkey] mode de déclenchement : {hotkey_mode}")
+    _hotkey_state = t
     return t
+
+
+def _rearm_global_hotkey():
+    """v1.3.3 — Réarme le raccourci À CHAUD après un changement de touche ou de
+    mode dans les Réglages. Avant, le toast disait « Raccourci mis à jour » et
+    rien ne changeait avant un redémarrage. Arrêt propre de l'ancien (moniteurs
+    retirés, dictée en cours terminée), puis démarrage du nouveau."""
+    global _hotkey_state
+    old = _hotkey_state
+    _hotkey_state = None
+    try:
+        hotkey_mac.stop(old)
+    except Exception as e:
+        print(f"[hotkey] arrêt de l'ancien raccourci KO : {e}")
+    try:
+        t = start_global_hotkey()
+        print("[hotkey] réarmé à chaud" + ("" if t is not None else " (inactif)"))
+    except Exception as e:
+        import traceback as _tb
+        _tb.print_exc()
+        try:
+            if _EV:
+                _EV.log(_EV.E.HOTKEY_START_FAIL, err=type(e).__name__, rearm=True)
+        except Exception:
+            pass
 
 
 # --------------------------------------------------------------------------- #

@@ -814,6 +814,9 @@
             <div class="st" data-i18n="set.hotkey">Raccourci global</div>
             <div class="sh" data-i18n="set.hotkey.d">Combinaison push-to-talk pour la dictée, depuis n'importe où.</div>
             <select class="sel" id="set-hotkey" style="width:100%"></select><div class="sd" id="set-hotkey-note" style="margin-top:6px"></div>
+            <div class="sl" style="margin-top:14px" data-i18n="set.hotkey.mode">Déclenchement</div>
+            <select class="sel" id="set-hotkey-mode" style="width:100%;margin-top:6px"></select>
+            <div class="sd" style="margin-top:6px" data-i18n="set.hotkey.mode.d">Le double appui vaut pour n'importe quel raccourci choisi ci-dessus : deux appuis brefs gardent le micro ouvert, un appui termine. Maintenir la touche fonctionne toujours.</div>
           </div>
           <div class="card sec" id="set-reunion-card">
             <div class="st" data-i18n="set.reunion">Mode Réunion</div>
@@ -1019,7 +1022,11 @@
       "set.fixins.step2":"Dans la fenêtre Réglages qui vient de s'ouvrir, <b>cochez Vlocal</b> dans la liste Accessibilité. S'il n'y apparaît pas, cliquez le <b>+</b> et ajoutez Vlocal (on vient de le révéler dans le Finder), puis cochez-le. Cliquez ensuite le bouton vert.",
       "set.speed":"Vitesse de transcription","set.speed.d":"Intelligent : rapide si l'audio est net, fidèle au moindre doute.",
       "set.speed.auto":"Intelligent : équilibré (recommandé)","set.speed.fast":"Rapide : privilégie la vitesse","set.speed.faithful":"Fidèle : privilégie la précision",
-      "set.hotkey":"Raccourci global","set.hotkey.d":"Combinaison push-to-talk pour la dictée, depuis n'importe où.",
+      "set.hotkey":"Raccourci global","set.hotkey.d":"Combinaison push-to-talk pour la dictée, depuis n'importe où. Prend effet immédiatement.",
+      "set.hotkey.mode":"Déclenchement",
+      "set.hotkey.mode.hold":"Maintenir la touche pendant la dictée",
+      "set.hotkey.mode.tap":"Maintenir, ou appuyer deux fois pour garder le micro ouvert",
+      "set.hotkey.mode.d":"Le double appui vaut pour n'importe quel raccourci choisi ci-dessus : deux appuis brefs gardent le micro ouvert, un appui termine. Maintenir la touche fonctionne toujours.",
       "set.reunion":"Mode Réunion","set.reunion.on":"Activer le mode réunion","set.reunion.on.d":"Enregistrement et transcription des conversations.",
       "set.diar":"Identifier les locuteurs","set.diar.d":"Qui parle quand, en local (WhoTalks).",
       "set.voice":"Mémoriser les voix","set.voice.d":"Reconnaît automatiquement les personnes déjà nommées.",
@@ -1247,7 +1254,11 @@
       "set.fixins.step2":"In the Settings window that just opened, <b>tick Vlocal</b> in the Accessibility list. If it isn't there, click <b>+</b> and add Vlocal (we just revealed it in Finder), then tick it. Then click the green button.",
       "set.speed":"Transcription speed","set.speed.d":"Smart: fast when audio is clear, faithful at the slightest doubt.",
       "set.speed.auto":"Smart: balanced (recommended)","set.speed.fast":"Fast: favors speed","set.speed.faithful":"Faithful: favors accuracy",
-      "set.hotkey":"Global shortcut","set.hotkey.d":"Push-to-talk combo for dictation, from anywhere.",
+      "set.hotkey":"Global shortcut","set.hotkey.d":"Push-to-talk combo for dictation, from anywhere. Takes effect immediately.",
+      "set.hotkey.mode":"Trigger",
+      "set.hotkey.mode.hold":"Hold the key while dictating",
+      "set.hotkey.mode.tap":"Hold, or double-tap to keep the mic open",
+      "set.hotkey.mode.d":"Double-tap works with whichever shortcut you chose above: two quick taps keep the mic open, one tap ends. Holding still works.",
       "set.reunion":"Meeting mode","set.reunion.on":"Enable meeting mode","set.reunion.on.d":"Recording and transcription of conversations.",
       "set.diar":"Identify speakers","set.diar.d":"Who speaks when, on-device (WhoTalks).",
       "set.voice":"Remember voices","set.voice.d":"Automatically recognizes people you have already named.",
@@ -2402,6 +2413,14 @@
     if(speed && s.dictation_speed){ for(var i=0;i<speed.options.length;i++){ if(speed.options[i].value===s.dictation_speed){ speed.selectedIndex=i; break; } } }
     // raccourci
     fillHotkeys(s.hotkey);
+    // v1.3.3 — mode de déclenchement (maintenir / double appui mains libres)
+    var modeSel = document.getElementById('set-hotkey-mode');
+    if(modeSel){
+      var curMode = (s.hotkey_mode === 'tap') ? 'tap' : 'hold';
+      modeSel.innerHTML = ['hold','tap'].map(function(m){
+        return '<option value="'+m+'"'+(m===curMode?' selected':'')+'>'+esc(t('set.hotkey.mode.'+m))+'</option>';
+      }).join('');
+    }
     // Touche Fn : macOS lui donne une action par défaut, on le dit à l'écran.
     var hkNote = document.getElementById('set-hotkey-note');
     if(hkNote){ hkNote.textContent = (s.hotkey === 'fn') ? t('set.hotkey.fn') : ''; }
@@ -2532,6 +2551,11 @@
   if(speedSel) speedSel.addEventListener('change', async function(){
     await call('save_settings', [{dictation_speed: speedSel.value}], null);
     showToast(t('toast.speed-updated'), 'success');
+  });
+  var hotkeyModeSel = document.getElementById('set-hotkey-mode');
+  if(hotkeyModeSel) hotkeyModeSel.addEventListener('change', async function(){
+    await call('save_settings', [{hotkey_mode: hotkeyModeSel.value}], null);
+    showToast(t('toast.hotkey-updated'), 'success');
   });
   var hotkeySel = document.getElementById('set-hotkey');
   if(hotkeySel) hotkeySel.addEventListener('change', async function(){

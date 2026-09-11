@@ -11,7 +11,9 @@ ouverte sur la machine n'est jamais touchée), puis vérifie sur la vraie fenêt
   3. le délégué d'application sait rouvrir la fenêtre ;
   4. fermer la fenêtre la MASQUE (le raccourci reste vivant) ;
   5. rouvrir la ré-affiche ;
-  6. quitter termine vraiment le processus.
+  6. changer le mode de déclenchement dans les Réglages RÉARME le raccourci à
+     chaud (l'ancien est arrêté, le nouveau porte le bon mode) ;
+  7. quitter termine vraiment le processus.
 
 Pourquoi : en 1.2.0 et 1.3.0, start_global_hotkey() levait à chaque lancement
 (UnboundLocalError) et emportait tout le démarrage avec lui. L'app s'ouvrait,
@@ -125,6 +127,24 @@ def enfant(sortie):
         vivant, b = sur_main(lambda: bool(win.isVisible()))
         note("rouvrir_affiche", b.get("v") if vivant else "boucle d'événements morte")
 
+        # v1.3.3 — changer le mode dans les Réglages doit prendre effet tout de
+        # suite : ancien raccourci arrêté, nouveau démarré avec le bon mode.
+        ancien = app._hotkey_state
+        try:
+            app._api_instance.save_settings({"hotkey_mode": "tap"})
+            time.sleep(2.5)
+            nouveau = app._hotkey_state
+            note("rearme_a_chaud", {
+                "ancien_arrete": bool(ancien is not None and ancien.get("stopped")),
+                "nouveau_distinct": bool(nouveau is not None and nouveau is not ancien),
+                "mode": (nouveau or {}).get("mode"),
+                "moniteurs": len((nouveau or {}).get("monitors") or []),
+            })
+            app._api_instance.save_settings({"hotkey_mode": "hold"})
+            time.sleep(1.5)
+        except Exception as e:
+            note("rearme_a_chaud", "EXCEPTION " + repr(e))
+
         note("quitter", "demandé")
         from Foundation import NSOperationQueue
         NSOperationQueue.mainQueue().addOperationWithBlock_(lambda: nsapp.terminate_(None))
@@ -173,6 +193,9 @@ def parent():
         ("le délégué d'application sait rouvrir", d.get("delegue_sait_rouvrir") is True),
         ("fermer la fenêtre la masque", R.get("fermer_masque") is True),
         ("rouvrir la ré-affiche", R.get("rouvrir_affiche") is True),
+        ("changer le mode réarme le raccourci à chaud",
+         isinstance(R.get("rearme_a_chaud"), dict) and R["rearme_a_chaud"].get("ancien_arrete") is True
+         and R["rearme_a_chaud"].get("nouveau_distinct") is True and R["rearme_a_chaud"].get("mode") == "tap"),
         ("quitter termine le processus", code == 0 and R.get("quitter") == "demandé"),
     ]
     print("CYCLE DE VIE DE LA VRAIE APP")
@@ -180,6 +203,8 @@ def parent():
         print(f"  {'OK ' if ok else 'KO '} {libelle}")
     if R.get("raccourci", "").startswith("EXCEPTION"):
         print("  détail :", R["raccourci"])
+    if R.get("rearme_a_chaud") is not None and not controles[5][1]:
+        print("  détail réarmement :", R.get("rearme_a_chaud"))
     print(f"  code de sortie du processus : {code}")
     if not all(ok for _, ok in controles):
         print(f"  HOME isolé conservé pour examen : {home}")

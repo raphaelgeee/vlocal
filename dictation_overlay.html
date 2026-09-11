@@ -94,6 +94,13 @@ body[data-state="transcribing"] .worklabel{display:block}
 .timer{flex:0 0 auto;font:500 14px/1 var(--mono);color:rgba(255,255,255,.6);
   font-variant-numeric:tabular-nums;letter-spacing:.5px;min-width:38px;text-align:right}
 body[data-state="transcribing"] .timer{min-width:56px}
+/* v1.3.3 — mains libres : la pilule dit que le micro reste ouvert et comment terminer. */
+.lockhint{position:absolute;left:0;right:0;bottom:7px;text-align:center;font-size:10px;letter-spacing:.02em;
+  color:rgba(255,255,255,.5);display:none;pointer-events:none;white-space:nowrap}
+body[data-locked="1"][data-state="recording"] .lockhint{display:block}
+body[data-locked="1"][data-state="recording"] .wave,
+body[data-locked="1"][data-state="recording"] .timer,
+body[data-locked="1"][data-state="recording"] .badge{transform:translateY(-6px)}
 
 /* ---- CARTE (result / messages) ---- */
 .card{width:404px;border-radius:27px;padding:17px 21px 15px}
@@ -120,6 +127,7 @@ body[data-state="result"] .icon{display:grid}
         <div class="wave" id="wave"></div>
         <div class="worklabel">Transcription</div>
         <div class="timer" id="rtimer">0:00</div>
+        <div class="lockhint" id="lockhint"></div>
       </div>
     </div>
 
@@ -152,11 +160,15 @@ body[data-state="result"] .icon{display:grid}
     fr:{ work:'Transcription', wait:'Encore un instant…', inserted:'Texte inséré', copied:'Copié',
          tooshort:'C’est un peu court.', tooshort_sub:'Maintiens le raccourci un peu plus longtemps.',
          error:'Une erreur est survenue.', retry_hk:'Réessaie : maintiens {0}', retry:'Réessaie quand tu veux.',
-         mic:'Micro requis.', mic_sub:'Autorise le microphone dans Réglages.' },
+         mic:'Micro requis.', mic_sub:'Autorise le microphone dans Réglages.',
+         locked:'Micro ouvert · appuie sur {0} pour terminer', locked_nohk:'Micro ouvert · rappuie pour terminer',
+         tap_sub:'Appuie deux fois pour garder le micro ouvert.' },
     en:{ work:'Transcribing', wait:'One more moment…', inserted:'Text inserted', copied:'Copied',
          tooshort:'That was a bit short.', tooshort_sub:'Hold the shortcut a little longer.',
          error:'Something went wrong.', retry_hk:'Try again: hold {0}', retry:'Try again whenever you like.',
-         mic:'Microphone needed.', mic_sub:'Allow the microphone in Settings.' }
+         mic:'Microphone needed.', mic_sub:'Allow the microphone in Settings.',
+         locked:'Mic open · press {0} to finish', locked_nohk:'Mic open · press again to finish',
+         tap_sub:'Double-tap to keep the mic open.' }
   };
   var OVLANG='fr';
   function tt(k,a){ var m=OV[OVLANG]||OV.fr; var s=m[k]; if(s===undefined)s=OV.fr[k]; if(s===undefined)return k; if(a!==undefined)s=String(s).split('{0}').join(a); return s; }
@@ -201,6 +213,7 @@ body[data-state="result"] .icon{display:grid}
 
   // --------- API pilotée par overlay.py ---------
   window.ovRecording=function(){
+    body.removeAttribute('data-locked');
     setState('recording'); setLvl(.25);
     var s=0; rtimer.textContent='0:00';
     _iv=setInterval(function(){ s++; rtimer.textContent=fmtMMSS(s); },1000);
@@ -226,6 +239,19 @@ body[data-state="result"] .icon{display:grid}
     ctext.textContent = tt('tooshort');
     cfoot.textContent = tt('tooshort_sub');
   };
+  // v1.3.3 — appui bref isolé en mode double appui : on montre le geste.
+  window.ovTooShortTap=function(){
+    body.removeAttribute('data-locked');
+    setState('tooshort'); setLvl(.12);
+    ctext.textContent = tt('tooshort');
+    cfoot.textContent = tt('tap_sub');
+  };
+  // v1.3.3 — double appui reçu : le micro reste ouvert.
+  window.ovLocked=function(label){
+    var lh=document.getElementById('lockhint');
+    if(lh) lh.textContent = label ? tt('locked', label) : tt('locked_nohk');
+    body.setAttribute('data-locked','1');
+  };
   window.ovError=function(msg){
     setState('error'); setLvl(.12);
     ctext.textContent = msg || tt('error');
@@ -245,7 +271,7 @@ body[data-state="result"] .icon{display:grid}
   window.ovTail=function(show){ point.style.display = show ? 'block' : 'none'; };
   window.ovAnchor=function(px){ var v=parseFloat(px); if(!isNaN(v)){ point.style.left=v+'px'; point.style.marginLeft='-7px'; } };
   window.ovFadeOut=function(){ wrap.style.opacity='0'; wrap.style.transform='translateY(-6px) scale(.985)'; };
-  window.ovReset=function(){ _clear(); wrap.style.opacity=''; wrap.style.transform=''; setState('idle'); setLvl(.15); };
+  window.ovReset=function(){ _clear(); body.removeAttribute('data-locked'); wrap.style.opacity=''; wrap.style.transform=''; setState('idle'); setLvl(.15); };
 })();
 </script>
 </body>

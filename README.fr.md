@@ -15,7 +15,9 @@ English: [README.md](README.md).
 
 ## Ce que fait l'app
 
-- **Dictée au curseur.** Raccourci par défaut : maintenir `Ctrl + Cmd`, parler,
+- **Dictée au curseur.** Mains libres possible dans les Réglages : deux appuis brefs
+  gardent le micro ouvert, un appui termine, quel que soit le raccourci choisi.
+  Raccourci par défaut : maintenir `Ctrl + Cmd`, parler,
   relâcher. Fonctionne dans toutes les apps ; sans champ de texte actif, le texte
   est copié dans le presse-papier. Les dictées longues sont transcrites pendant
   que vous parlez : l'attente au relâchement reste d'environ une seconde.

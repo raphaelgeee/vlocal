@@ -15,6 +15,8 @@ Français : [README.fr.md](README.fr.md).
 ## What it does
 
 - **Dictation at the cursor.** Default shortcut: hold `Ctrl + Cmd`, speak, release.
+  Hands-free option in Settings: double-tap the shortcut to keep the mic open, tap
+  once to finish. Works with whichever shortcut you chose.
   Works in every app, including ones without a text field focused (the text is
   then copied to the clipboard). Long dictations are transcribed while you speak,
   so the wait at release stays around one second whatever the length.

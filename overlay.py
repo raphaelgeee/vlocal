@@ -442,6 +442,20 @@ def too_short():
     _js("ovTooShort()")
 
 
+def too_short_tap():
+    """v1.3.3 — Appui bref isolé en mode double appui : rien à transcrire, et
+    c'est l'occasion d'apprendre le geste (« appuie deux fois »)."""
+    show()
+    _js("ovTooShortTap()")
+
+
+def locked(label=None):
+    """v1.3.3 — Micro maintenu ouvert après un double appui : la pilule le dit,
+    et dit comment terminer (le raccourci réel, pas un libellé en dur)."""
+    import json as _json
+    _js("ovLocked(%s)" % _json.dumps((label or _hotkey_label or "").strip()))
+
+
 def error(msg=""):
     import json as _json
     show()
