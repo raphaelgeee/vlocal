@@ -181,6 +181,11 @@ def parent():
     if not all(ok for _, ok in controles):
         print(f"  HOME isolé conservé pour examen : {home}")
         return 1
+    # Succès : rien ne doit rester derrière un build (le lien vers les modèles
+    # est un lien symbolique, rmtree ne suit pas les liens et ne touche jamais
+    # aux vrais modèles).
+    import shutil
+    shutil.rmtree(home, ignore_errors=True)
     return 0
 
 
