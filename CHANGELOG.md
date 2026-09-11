@@ -3,6 +3,35 @@
 Dates are publication dates on the update channel. Earlier internal versions
 (3.x, June 2026) are not listed.
 
+## 1.3.2, 11 September 2026
+
+- **The global shortcut and quitting work again.** Since 1.2.0, setting up the
+  shortcut raised an error on every launch: a module was used a few lines before
+  it was imported in the same function, which Python treats as a local variable
+  that does not exist yet. That call is the first step of startup, so everything
+  after it was skipped too: the global shortcut, the menu bar icon, the freeze
+  watchdog and the application delegate. Without that delegate, closing the
+  window hid it for good, clicking Vlocal in the Dock did nothing, and Quit was
+  silently refused, leaving Force Quit as the only way out. The window and the
+  Dictate button kept working, which is why nothing flagged it. 1.1.x was not
+  affected.
+- Reopening and quitting no longer depend on startup completing: the behaviour is
+  built into the application delegate before the window exists.
+- Startup stages are isolated: a failing step no longer takes the others down,
+  and it is reported as an incident code (`hotkey_start_fail`,
+  `startup_stage_fail`), as is a finished onboarding without Accessibility
+  (`hotkey_untrusted`).
+- Restarting after granting Accessibility waits for the previous process to
+  actually exit before reopening, instead of a fixed two seconds.
+- Three new build gates: static analysis for undefined names and names used
+  before assignment, the full unit test suite, and a smoke test that launches the
+  real app, then closes, reopens and quits it. They found two older bugs of the
+  same kind: the meeting-stop message for a full disk could not be displayed
+  (fixed), and a cap on the number of speakers by speech duration, announced in
+  1.0.26, had never run (behaviour left unchanged, to be validated on real audio).
+- 1.3.1 is skipped: a build reporting that number already exists outside this
+  repository, and it must receive this update too.
+
 ## 1.3.0, 9 September 2026
 
 - **The restart macOS requires is now announced.** Accessibility is never

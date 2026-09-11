@@ -747,15 +747,14 @@ class Diarizer:
                     lab = _viterbi_assign(E, Cr, lam=DIAR_TURN_LAMBDA)
                     lab = _smooth_single_flips(list(lab))
         else:
-            # v1.0.26 — on transmet la durée de parole réelle : le nombre de
-            # locuteurs ne peut pas dépasser ce que l'audio permet d'établir.
-            _sp_s = None
-            try:
-                _T = np.asarray(T, dtype=float)
-                _sp_s = float(np.maximum(0.0, _T[:, 1] - _T[:, 0]).sum())
-            except Exception:
-                _sp_s = None
-            K, lab, sil = estimate_speakers(E, max_speakers, speech_s=_sp_s)
+            # v1.0.26 prévoyait de plafonner le nombre de voix par la durée de
+            # parole réelle. Ce plafond n'a JAMAIS tourné : `np` n'est pas importé
+            # dans cette fonction, et le NameError était avalé par un except, si
+            # bien que speech_s valait toujours None. Le réactiver changerait le
+            # compte de locuteurs ; cela se valide sur l'audio réel de référence,
+            # pas au détour d'un correctif de démarrage. Comportement conservé à
+            # l'identique, rendu explicite (trouvé par pyflakes, 11 septembre 2026).
+            K, lab, sil = estimate_speakers(E, max_speakers, speech_s=None)
             forced = False
             # v22 — ANTI « LOCUTEUR INVENTÉ » : fusionne les clusters dont les
             # centroïdes sont quasi colinéaires (même personne scindée par le

@@ -98,6 +98,11 @@ import processor
 import notifier
 import overlay
 import permissions
+# v1.3.2 — au niveau module, et nulle part ailleurs. En 1.2.0, start_global_hotkey()
+# utilisait hotkey_mac.FN_KEYCODE AVANT sa ligne `import hotkey_mac` : Python en
+# faisait une variable locale non encore définie, UnboundLocalError à chaque
+# lancement. tests/test_imports_order.py interdit désormais ce motif.
+import hotkey_mac
 import reminders
 import obsidian         # v1.0.13 — connecteur Obsidian local (capture des dictées dans un coffre, ADDITIF)
 import telemetry        # v1.1.0 — télémétrie minimale déclarée (installs, usage par jour)
@@ -160,7 +165,7 @@ _window_visible = True   # suivi de visibilité (fenêtre naît affichée)
 WIN_W = 1180            # v3.1 — dashboard plein écran (était 380, carte flottante)
 WIN_H = 780             # v3.1 — (était 720)
 PANEL_W = 840            # (hérité ; set_meeting_panel neutralisé en v3.1)
-APP_VERSION = "1.3.0"   # 9 septembre 2026. Synchrone avec le fichier VERSION (build) ;
+APP_VERSION = "1.3.2"   # 11 septembre 2026. Synchrone avec le fichier VERSION (build) ;
                         # affiché dans l'onglet « Mises à jour ». Historique : CHANGELOG.md.
 # Libellé humain du raccourci global actif (posé par start_global_hotkey,
 # consommé par le message de permission _check_hotkey_perm).
@@ -203,6 +208,93 @@ def _ui(code: str):
                          name="ui-fallback", daemon=True).start()
     except Exception:
         pass
+
+
+# --------------------------------------------------------------------------- #
+# v1.3.2 — CYCLE DE VIE : rouvrir et quitter ne dépendent plus du démarrage.
+#
+# Jusqu'en 1.3.0, le délégué d'application qui sait rouvrir la fenêtre et
+# quitter pour de vrai était posé par _after_start, tout à la fin. Si une étape
+# précédente levait, il n'était jamais posé, et celui de pywebview restait
+# actif : fermer la fenêtre la masquait pour de bon, le clic sur le Dock ne
+# faisait rien, et « Quitter » était refusé (pywebview consulte notre gestionnaire
+# de fermeture, qui répond « masquer »). Seul « Forcer à quitter » en sortait.
+#
+# On remplace donc la CLASSE de délégué que pywebview instancie lui-même, avant
+# que la fenêtre n'existe : quel que soit l'ordre de démarrage et quoi qu'il
+# arrive ensuite, le délégué actif sait rouvrir et quitter.
+_lifecycle_quit_hook = None     # nettoyage complet (_perform_quit), posé par _after_start
+_LifecycleDelegate = None       # la classe installée dans pywebview
+
+
+def _register_quit_hook(fn):
+    global _lifecycle_quit_hook
+    _lifecycle_quit_hook = fn
+
+
+def _lifecycle_quit():
+    """Quitter pour de vrai. Utilise le nettoyage complet s'il est enregistré ;
+    sinon (démarrage incomplet), marque la sortie, ferme la base et garantit la
+    mort du process en 4 s. Ne lève jamais."""
+    global _quitting
+    hook = _lifecycle_quit_hook
+    if hook is not None:
+        hook()
+        return
+    _quitting = True
+    t = threading.Timer(4.0, lambda: os._exit(0))
+    t.daemon = True
+    t.start()
+    try:
+        if _store:
+            _store.close()
+    except Exception:
+        pass
+
+
+def _lifecycle_show():
+    """Ré-affiche la fenêtre masquée et ramène Vlocal au premier plan."""
+    global _window_visible
+    try:
+        if _window is not None:
+            _window.show()
+        _window_visible = True
+    except Exception:
+        pass
+    try:
+        from AppKit import NSApplication
+        NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+    except Exception:
+        pass
+
+
+def _install_lifecycle_delegate_class():
+    """À appeler après `import webview` et AVANT create_window/start."""
+    global _LifecycleDelegate
+    if _LifecycleDelegate is not None:
+        return True
+    try:
+        import webview.platforms.cocoa as _cocoa
+
+        class VlocalLifecycleDelegate(_cocoa.BrowserView.AppDelegate):
+            def applicationShouldTerminate_(self, sender):
+                try:
+                    _lifecycle_quit()
+                except Exception:
+                    os._exit(0)
+                return 1   # NSTerminateNow
+
+            def applicationShouldHandleReopen_hasVisibleWindows_(self, sender, flag):
+                _lifecycle_show()
+                return True
+
+        _cocoa.BrowserView.AppDelegate = VlocalLifecycleDelegate
+        _LifecycleDelegate = VlocalLifecycleDelegate
+        print("[cycle]   délégué de cycle de vie installé dans pywebview (rouvrir + quitter).")
+        return True
+    except Exception as e:
+        print(f"[cycle]   délégué de cycle de vie indisponible ({e}) — repli sur _after_start.")
+        return False
 
 
 def _quit_app():
@@ -314,6 +406,9 @@ _BT = {
   "La transcription a calé, réessayez.":
     "The transcription stalled. Please try again.",
   "Vlocal démarre": "Vlocal is starting",
+  "Raccourci indisponible": "Shortcut unavailable",
+  "Utilisez le bouton Dicter. Envoyez un diagnostic depuis les Réglages : le problème nous sera signalé.":
+    "Use the Dictate button. Send a diagnostic from Settings: the problem will be reported to us.",
   "Le moteur se charge, réessayez dans un instant.": "The engine is loading, try again in a moment.",
   "Un instant": "One moment",
   "Transcription précédente en cours.": "Previous transcription in progress.",
@@ -3541,12 +3636,12 @@ class Api:
                 args=(mid, wav_path, duree),
                 daemon=True,
             ).start()
-        except Exception as _te:
+        except Exception as _err:
             # v3.2.8 — lancement du thread KO (épuisement ressources) : NE JAMAIS
             # laisser pipeline_busy coincé à True, sinon les Réunions sont bloquées
             # à vie ("réunion précédente en cours") jusqu'au redémarrage. On nettoie.
             _meeting_state["pipeline_busy"] = False
-            print(f"[reunion] lancement pipeline KO : {_te}")
+            print(f"[reunion] lancement pipeline KO : {_err}")
             if _store and mid:
                 try:
                     _store.update_meeting(mid, status="error")
@@ -4745,8 +4840,15 @@ class Api:
                 path = "/Applications/Vlocal.app"
             import subprocess
             # le shell attend que CE process meure (sleep), puis ouvre du NEUF (-n)
+            # v1.3.2 — on attend la MORT RÉELLE de ce process (20 s au plus) avant de
+            # rouvrir. Avec un « sleep 2 » fixe, une fermeture un peu lente laissait
+            # la nouvelle instance buter sur le verrou d'instance unique et
+            # s'éteindre : Vlocal disparaissait sans revenir.
+            pid = os.getpid()
             subprocess.Popen(["/bin/sh", "-c",
-                              "sleep 2; /usr/bin/open -n " + shlex.quote(path)])
+                              "i=0; while kill -0 %d 2>/dev/null && [ $i -lt 100 ]; "
+                              "do sleep 0.2; i=$((i+1)); done; /usr/bin/open %s"
+                              % (pid, shlex.quote(path))])
             # quit RÉEL sur le main thread (sinon l'ancien process survit et
             # `open -n` ouvrirait une 2e instance -> 2 icônes + insertion figée).
             _quit_app()
@@ -5296,8 +5398,7 @@ def start_global_hotkey():
     # Raccourci global via moniteurs NSEvent natifs (hotkey_mac), PLUS de
     # pynput : pynput crashait l'app (résolution TSM du caractère hors main
     # thread -> SIGTRAP). Les moniteurs ne lisent que les modificateurs /
-    # keycodes -> aucun crash.
-    import hotkey_mac
+    # keycodes -> aucun crash. (hotkey_mac est importé au niveau module, v1.3.2.)
     try:
         print(f"[hotkey] '{hotkey_name}' ({hotkey_label}) | "
               f"accessibility_ok={permissions.accessibility_ok()} "
@@ -5757,6 +5858,7 @@ def main():
         sys.exit(0)
 
     import webview
+    _install_lifecycle_delegate_class()   # v1.3.2 — avant toute fenêtre (voir plus haut)
     # v3.3 (B1) — pywebview remet la policy en « Regular » (icône Dock) à l'IMPORT
     # (classe BrowserView). On RÉ-IMPOSE Accessory (icône menu-bar V, AUCUNE icône
     # Dock) ici, puis ENCORE après l'affichage de la fenêtre (_activate_on_launch).
@@ -6109,8 +6211,31 @@ def main():
 
         # N'affirme « actif » QUE si le raccourci a réellement démarré (les cas
         # 'none' et échec d'installation logguent déjà leur propre état).
-        if start_global_hotkey() is not None:
-            print("[hotkey]  actif : maintiens ton raccourci global pour dicter.")
+        # v1.3.2 — ÉTAPE ISOLÉE. En 1.2.0/1.3.0 une exception ici sautait tout le
+        # démarrage (menu, délégué, chien de garde). Désormais : trace complète,
+        # incident compté dans la tour de contrôle, message à l'utilisateur, et
+        # le reste du démarrage continue.
+        try:
+            if start_global_hotkey() is not None:
+                print("[hotkey]  actif : maintiens ton raccourci global pour dicter.")
+        except Exception as _hk_err:
+            import traceback as _tb
+            _tb.print_exc()
+            try:
+                if _EV:
+                    _EV.log(_EV.E.HOTKEY_START_FAIL, err=type(_hk_err).__name__)
+            except Exception:
+                pass
+
+            def _prevenir_raccourci_ko():
+                try:
+                    overlay.info(_te("Raccourci indisponible"),
+                                 _te("Utilisez le bouton Dicter. Envoyez un diagnostic depuis les Réglages : "
+                                     "le problème nous sera signalé."))
+                    _schedule_overlay_hide(9.0)
+                except Exception:
+                    pass
+            threading.Timer(4.0, _prevenir_raccourci_ko).start()
 
         # v19 — Overlay de dictée flottant (NSPanel non-activant) : créé sur le
         # main thread, gardé caché jusqu'à la 1re dictée au raccourci.
@@ -6237,7 +6362,13 @@ def main():
                 # réparation du hotkey (watch AXIsProcessTrusted). On ne montre
                 # PLUS de carte overlay « va dans les Réglages » au démarrage
                 # (fini l'élément parasite qui se balade).
-                pass
+                # v1.3.2 — mais on le COMPTE : un raccourci muet hors de Vlocal doit
+                # se voir dans la tour de contrôle, pas seulement chez l'utilisateur.
+                try:
+                    if _EV and not permissions.accessibility_ok():
+                        _EV.log(_EV.E.HOTKEY_UNTRUSTED, level="warn")
+                except Exception:
+                    pass
             except Exception:
                 pass
         threading.Timer(2.5, _check_hotkey_perm).start()
@@ -6294,6 +6425,10 @@ def main():
             except Exception:
                 pass
 
+        # Le nettoyage complet est enregistré TOUT DE SUITE : le délégué de cycle de
+        # vie l'utilisera même si la suite du démarrage échoue.
+        _register_quit_hook(_perform_quit)
+
         def _on_quit():
             # Icône V -> « Quitter Vlocal » : nettoyage idempotent puis terminate_.
             _perform_quit()
@@ -6315,6 +6450,19 @@ def main():
             global _app_delegate
             if _app_delegate is not None:
                 return
+            _register_quit_hook(_perform_quit)
+            # v1.3.2 — cas nominal : le délégué de cycle de vie est déjà actif
+            # (installé dans pywebview avant la fenêtre). On ne le remplace pas.
+            try:
+                from AppKit import NSApplication as _NSA
+                _d = _NSA.sharedApplication().delegate()
+                if _LifecycleDelegate is not None and isinstance(_d, _LifecycleDelegate):
+                    _app_delegate = _d
+                    print("[quit]    Cmd+Q / Dock / menu Pomme -> vrai quit "
+                          "(délégué de cycle de vie actif dès la fenêtre).")
+                    return
+            except Exception:
+                pass
             try:
                 from AppKit import NSApplication
                 from Foundation import NSObject
@@ -6487,7 +6635,15 @@ def main():
         # v15 — Pré-construit le bundle de notification de marque "Vlocal"
         # (icône V premium) en arrière-plan : 1ʳᵉ notif instantanée + la
         # permission macOS est demandée tôt sous le nom Vlocal.
-        notifier.prebuild_async()
+        try:
+            notifier.prebuild_async()
+        except Exception as _nt_err:
+            print(f"[notify]  pré-construction KO ({_nt_err})")
+            try:
+                if _EV:
+                    _EV.log(_EV.E.STARTUP_STAGE_FAIL, stage="notifier", err=type(_nt_err).__name__)
+            except Exception:
+                pass
 
         # Premier render des listes (après que la fenêtre soit prête).
         threading.Timer(0.5, _refresh_lists_ui).start()

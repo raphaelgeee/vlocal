@@ -75,6 +75,29 @@ echo "==> 1ter  Cohérence des versions (fichier VERSION = APP_VERSION = CHANGEL
 $PY -m unittest tests.test_version_sync -q >/dev/null 2>&1 \
   || { echo "  >>> VERSION et APP_VERSION divergent (le DMG serait mal nommé), build STOPPÉ."; exit 1; }
 
+# ----------------------------------------------------------------------------
+# v1.3.2 — TROIS PORTES qui auraient arrêté la 1.2.0 et la 1.3.0. Ces deux
+# versions levaient une UnboundLocalError à CHAQUE lancement dans
+# start_global_hotkey() : plus de raccourci global, et impossible de rouvrir ou
+# de quitter Vlocal sans forcer. Le build passait, rien ne le signalait.
+# Aucune de ces portes ne charge le moteur : elles tournent toujours, y compris
+# avec VLOCAL_SKIP_GATES.
+# ----------------------------------------------------------------------------
+echo "==> 1quater  Analyse statique : noms non définis ou utilisés avant affectation"
+BAD_NAMES="$($PY -m pyflakes *.py 2>&1 | grep -E "undefined name|referenced before assignment" || true)"
+if [ -n "$BAD_NAMES" ]; then
+  echo "$BAD_NAMES"
+  echo "  >>> un nom sera introuvable à l'exécution, build STOPPÉ."; exit 1
+fi
+
+echo "==> 1quinquies  Tests unitaires (suite complète)"
+$PY -m unittest discover -s tests -p "test_*.py" -q >/tmp/vlocal_unittest.log 2>&1 \
+  || { tail -30 /tmp/vlocal_unittest.log; echo "  >>> tests unitaires KO, build STOPPÉ."; exit 1; }
+
+echo "==> 1sexies  Cycle de vie de la VRAIE app : raccourci, fermer, rouvrir, quitter"
+$PY tests/lifecycle_smoke.py \
+  || { echo "  >>> cycle de vie KO (raccourci, rouvrir ou quitter), build STOPPÉ."; exit 1; }
+
 echo "==> 2/6  Icône (V sur charbon)"
 $PY tools/make_icon.py
 

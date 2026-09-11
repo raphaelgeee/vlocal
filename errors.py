@@ -47,6 +47,13 @@ class E:
     API_GUARD = "api_guard"                # exception attrapée par @_api_safe
     ENGINE_LOAD_FAIL = "engine_load_fail"  # moteur Whisper n'a pas pu se charger (modèle corrompu / OOM)
     MAIN_FREEZE_KILL = "main_freeze_kill"  # thread principal figé > seuil -> arrêt forcé (deadman switch)
+    # v1.3.2 — Démarrage. En 1.2.0 et 1.3.0, start_global_hotkey() levait à chaque
+    # lancement et emportait tout le reste du démarrage, sans aucune trace côté
+    # administration. Ces trois codes rendent ce genre de panne visible en moins
+    # d'une minute dans la tour de contrôle.
+    HOTKEY_START_FAIL = "hotkey_start_fail"    # le raccourci global n'a pas pu démarrer
+    STARTUP_STAGE_FAIL = "startup_stage_fail"  # une étape de démarrage a levé (isolée, les autres continuent)
+    HOTKEY_UNTRUSTED = "hotkey_untrusted"      # onboarding fini mais Accessibilité non accordée : raccourci muet hors de Vlocal
 
 
 def log(code, level="error", **context):
