@@ -59,25 +59,34 @@ try{if(localStorage.getItem('vlocal_theme')==='light')document.documentElement.s
     --ok:#7ee6a0;
     --accent:174,184,255;
   }
+  /* v1.3.5 — THÈME CLAIR revu pour le confort : la première version posait du
+     texte gris sur du blanc éblouissant, sans relief. Désormais : fond gris doux
+     (#eff0f4), cartes BLANCHES posées dessus, barre latérale un ton plus sombre,
+     texte secondaire plus dense, filets visibles. Le sombre ne bouge pas. */
   html[data-theme="light"]{
     --ink:20,22,30;
     --ink-2:#1c1e28;
     --paper:#ffffff;
-    --bg:#e9ebf0;
-    --win-a:rgba(250,250,252,.96);
-    --win-b:rgba(243,244,247,.985);
-    --side-bg:rgba(20,22,30,.035);
+    --bg:#e3e5eb;
+    --win-a:rgba(240,241,245,.985);
+    --win-b:rgba(234,236,241,.99);
+    --side-bg:rgba(20,22,30,.032);
     --bad:#c5313a;
     --bad-rgb:197,49,58;
     --bad-soft:#7a1a20;
-    --chev:url("data:image/svg+xml,%3Csvg width='10' height='6' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%2314161e99' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+    --chev:url("data:image/svg+xml,%3Csvg width='10' height='6' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%2314161eb0' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
     --hist-reunion:#5b6170;--hist-rappel:#6e7482;--hist-dictee:#3f4451;
-    --ok:#1f9a55;
+    --ok:#146f3c;
+    --accent:92,104,222;
     color-scheme:light;
-    /* Contraste : la hiérarchie secondaire est un peu plus dense sur fond clair. */
-    --txt2:rgba(var(--ink),.70);
-    --dim:rgba(var(--ink),.55);
-    --faint:rgba(var(--ink),.38);
+    --txt:rgba(var(--ink),.96);
+    --txt2:rgba(var(--ink),.78);
+    --dim:rgba(var(--ink),.68);
+    --faint:rgba(var(--ink),.58);
+    --line:rgba(var(--ink),.12);
+    --line2:rgba(var(--ink),.08);
+    --glass:rgba(var(--ink),.045);
+    --glass-h:rgba(var(--ink),.08);
   }
   *{box-sizing:border-box;margin:0;padding:0}
   html,body{height:100%}
@@ -369,6 +378,9 @@ try{if(localStorage.getItem('vlocal_theme')==='light')document.documentElement.s
   .btn{height:38px;padding:0 16px;border-radius:10px;border:1px solid var(--line);
     background:rgba(var(--ink),.07);color:var(--txt);font-family:inherit;font-size:12.5px;font-weight:500;cursor:pointer;transition:.18s}
   .btn:hover{background:rgba(var(--ink),.13)}
+  .btn.primary{background:linear-gradient(180deg,rgb(var(--ink)),var(--ink-2));color:var(--paper);border-color:transparent;
+    box-shadow:0 1px 0 rgba(var(--ink),.8) inset, 0 8px 22px -12px rgba(0,0,0,.55)}
+  .btn.primary:hover{background:linear-gradient(180deg,rgb(var(--ink)),var(--ink-2));filter:brightness(1.06)}
   /* v1.0.25 — jauge de progression INTÉGRÉE au bouton (ré-identification).
      En position absolue À L'INTÉRIEUR du bouton : la mise en page ne bouge pas
      d'un pixel, rien ne se décale. Dégradé bleu-violet de la famille iridescente
@@ -391,8 +403,9 @@ try{if(localStorage.getItem('vlocal_theme')==='light')document.documentElement.s
   .set-row{display:flex;align-items:flex-start;gap:11px;padding:11px 0;border-bottom:1px solid var(--line2)}
   .set-row:last-child{border-bottom:0}
   .set-row .si{flex:1}
-  .set-row .sl{font-size:13px;color:var(--txt);font-weight:450}
-  .set-row .sd{font-size:11.5px;color:var(--dim);margin-top:3px;line-height:1.45}
+  .sl{font-size:13px;color:var(--txt);font-weight:450}
+  .sd{font-size:11.5px;color:var(--dim);line-height:1.45}
+  .set-row .sd{margin-top:3px}
   .tog{flex:none;width:40px;height:24px;border-radius:13px;background:rgba(var(--ink),.10);
     border:1px solid var(--line);position:relative;cursor:pointer;transition:.2s var(--eo);margin-top:2px}
   .tog::after{content:'';position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;
@@ -619,22 +632,97 @@ try{if(localStorage.getItem('vlocal_theme')==='light')document.documentElement.s
   .spk-opt.active{background:rgba(var(--ink),.10);color:rgb(var(--ink));box-shadow:inset 0 1px 0 rgba(var(--ink),.12)}
   .spk-other{display:none;width:64px;height:34px;text-align:center;padding:0 8px}
 
-  /* v1.3.4 — mode clair : ombres et voiles adoucis, tout le reste suit les jetons. */
-  html[data-theme="light"] .win{box-shadow:0 64px 150px -42px rgba(20,22,30,.22), 0 2px 0 rgba(255,255,255,.9) inset, 0 0 0 .5px rgba(20,22,30,.08)}
-  html[data-theme="light"] .side{box-shadow:1px 0 0 rgba(20,22,30,.06)}
-  html[data-theme="light"] .pill.primary:hover{box-shadow:0 1px 0 rgba(255,255,255,.12) inset, 0 16px 36px -12px rgba(20,22,30,.35), 0 3px 10px rgba(20,22,30,.18)}
-  html[data-theme="light"] .tog::after{box-shadow:0 1px 3px rgba(20,22,30,.28)}
-  html[data-theme="light"] .tog.on::after{box-shadow:0 1px 3px rgba(20,22,30,.18)}
-  html[data-theme="light"] .card{box-shadow:inset 0 1px 0 rgba(255,255,255,.85), 0 26px 54px -32px rgba(20,22,30,.22)}
-  html[data-theme="light"] .stat .v{text-shadow:none}
-  html[data-theme="light"] .toast{box-shadow:0 18px 44px -16px rgba(20,22,30,.25)}
-  html[data-theme="light"] .md-card{box-shadow:inset 0 1px 0 rgba(255,255,255,.85),0 30px 70px -24px rgba(20,22,30,.28)}
-  html[data-theme="light"] .brand .glyph{box-shadow:inset 0 1px 0 rgba(255,255,255,.6)}
   /* Réglages > Apparence : commutateur segmenté sombre / clair (mêmes styles que le sélecteur de locuteurs). */
   .theme-seg{margin-top:8px;display:inline-flex}
   .theme-opt{display:inline-flex;align-items:center;gap:7px;height:30px;border:0;background:transparent;font-family:inherit;font-weight:450}
   .theme-opt svg{flex:none}
-  html[data-theme="light"] .onb .nav-item.cur{box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 6px 16px -10px rgba(20,22,30,.25)}
+
+  /* ===== v1.3.5 — THÈME CLAIR : surfaces et contrôles =====================
+     Principe : fond gris doux, cartes blanches, contrôles blancs cernés d'un
+     filet net, ombres légères. Chaque règle ci-dessous ne s'applique qu'en
+     clair ; la géométrie est celle du sombre, seules les couleurs changent. */
+  html[data-theme="light"] body::before{opacity:0}
+  html[data-theme="light"] .win{box-shadow:0 0 0 .5px rgba(20,22,30,.08)}
+  html[data-theme="light"] .win::before,html[data-theme="light"] .win::after{display:none}
+  html[data-theme="light"] .side{border-right-color:rgba(20,22,30,.08);box-shadow:none}
+  html[data-theme="light"] .nav-item:hover{background:rgba(var(--ink),.05)}
+  html[data-theme="light"] .nav-item.active{background:#fff;box-shadow:0 1px 2px rgba(20,22,30,.06),0 4px 12px -6px rgba(20,22,30,.14)}
+  html[data-theme="light"] .nav-item.active::before{opacity:.6}
+  html[data-theme="light"] .nav-item.has-upd::after{box-shadow:0 0 0 3px rgba(20,111,60,.16)}
+  html[data-theme="light"] .lic{background:#fff;border-color:rgba(var(--ink),.10)}
+  html[data-theme="light"] .brand .glyph,html[data-theme="light"] .upd-glyph,
+  html[data-theme="light"] .boot-orb,html[data-theme="light"] .md-orb{background:rgba(var(--ink),.06);border-color:rgba(var(--ink),.12);box-shadow:none}
+  /* cartes : blanches, posées sur le gris, sans le reflet du verre sombre */
+  html[data-theme="light"] .card{background:#fff;border-color:rgba(var(--ink),.10);
+    box-shadow:0 1px 2px rgba(20,22,30,.04),0 12px 32px -20px rgba(20,22,30,.18)}
+  html[data-theme="light"] .card::before{display:none}
+  html[data-theme="light"] .hero-rec{background:linear-gradient(135deg,rgba(var(--ink),.04),rgba(var(--ink),0)),#fff}
+  html[data-theme="light"] .mtg:hover{border-color:rgba(var(--ink),.20)}
+  html[data-theme="light"] .mtg-add{border-color:rgba(var(--ink),.20)}
+  html[data-theme="light"] .stat .v{text-shadow:none}
+  html[data-theme="light"] .stat .d .up{color:var(--txt2)}
+  html[data-theme="light"] .rec-chip.dictee{color:var(--hist-dictee)}
+  html[data-theme="light"] .rec-chip.reunion{color:var(--hist-reunion)}
+  html[data-theme="light"] .rec-chip.rappel{color:var(--hist-rappel)}
+  html[data-theme="light"] .heat i{background:rgba(var(--ink),.07)}
+  html[data-theme="light"] .heat i.l1{background:rgba(var(--ink),.20)}
+  html[data-theme="light"] .heat i.l2{background:rgba(var(--ink),.36)}
+  html[data-theme="light"] .heat i.l3{background:rgba(var(--ink),.58)}
+  html[data-theme="light"] .heat i.l4{background:rgba(var(--ink),.86)}
+  /* contrôles : blancs, filet net, ombre d'un pixel */
+  html[data-theme="light"] .btn,html[data-theme="light"] .pill,html[data-theme="light"] .notice-act,html[data-theme="light"] .kbd{
+    background:#fff;border-color:rgba(var(--ink),.16);box-shadow:0 1px 2px rgba(20,22,30,.05)}
+  html[data-theme="light"] .btn:hover,html[data-theme="light"] .pill:hover,html[data-theme="light"] .notice-act:hover{
+    background:#f3f4f8;border-color:rgba(var(--ink),.24)}
+  html[data-theme="light"] .btn.primary,html[data-theme="light"] .pill.primary{
+    background:linear-gradient(180deg,rgb(var(--ink)),var(--ink-2));color:var(--paper);border-color:transparent;
+    box-shadow:0 1px 0 rgba(255,255,255,.12) inset,0 8px 22px -12px rgba(20,22,30,.45)}
+  html[data-theme="light"] .btn.primary:hover,html[data-theme="light"] .pill.primary:hover{
+    background:linear-gradient(180deg,rgb(var(--ink)),var(--ink-2));border-color:transparent;
+    box-shadow:0 1px 0 rgba(255,255,255,.12) inset,0 14px 30px -12px rgba(20,22,30,.5),0 3px 10px rgba(20,22,30,.16)}
+  html[data-theme="light"] .pill.primary:disabled{background:rgba(var(--ink),.35);color:#fff}
+  html[data-theme="light"] .pill.rec-live{background:rgba(197,49,58,.10);border-color:rgba(var(--bad-rgb),.45)}
+  html[data-theme="light"] .inp,html[data-theme="light"] .sel,html[data-theme="light"] .b-name-edit{background:#fff;border-color:rgba(var(--ink),.16)}
+  html[data-theme="light"] .inp:focus{background:#fff;border-color:rgba(var(--ink),.38)}
+  html[data-theme="light"] .inp::placeholder{color:rgba(var(--ink),.42)}
+  html[data-theme="light"] .tog{background:rgba(var(--ink),.22);border-color:rgba(var(--ink),.06)}
+  html[data-theme="light"] .tog::after{box-shadow:0 1px 3px rgba(20,22,30,.32)}
+  html[data-theme="light"] .tog.on{background:rgba(var(--ink),.88)}
+  html[data-theme="light"] .tog.on::after{box-shadow:0 1px 3px rgba(20,22,30,.22)}
+  html[data-theme="light"] .spk-seg{background:rgba(var(--ink),.07);border-color:transparent}
+  html[data-theme="light"] .spk-opt.active{background:#fff;box-shadow:0 1px 3px rgba(20,22,30,.16),0 0 0 .5px rgba(20,22,30,.06)}
+  html[data-theme="light"] .grow-row,html[data-theme="light"] .rap-chip{background:rgba(var(--ink),.035)}
+  html[data-theme="light"] .grow-row .del:hover{background:rgba(var(--ink),.10)}
+  html[data-theme="light"] .imp-bar,html[data-theme="light"] .md-bar{background:rgba(var(--ink),.10)}
+  html[data-theme="light"] .notice{background:#fff;border-color:rgba(var(--ink),.12);box-shadow:0 1px 2px rgba(20,22,30,.04)}
+  /* états colorés : encres foncées sur teintes claires, jamais du pastel sur blanc */
+  html[data-theme="light"] .rap-check{border-color:rgba(var(--ink),.26)}
+  html[data-theme="light"] .rap-late{color:#9a4a00;background:rgba(255,150,90,.20)}
+  html[data-theme="light"] .rap-row.done .rap-check{background:var(--ok);border-color:var(--ok);color:#fff}
+  html[data-theme="light"] .rap-notif.ok .rap-notif-dot{background:var(--ok)}
+  html[data-theme="light"] .rap-notif.warn .rap-notif-dot{background:#d97a1a}
+  html[data-theme="light"] .vrow .ck{background:rgba(20,111,60,.10);border-color:rgba(20,111,60,.30)}
+  html[data-theme="light"] .perm.done{border-color:rgba(20,111,60,.30);background:rgba(20,111,60,.06)}
+  html[data-theme="light"] .onb .nav-item.done .num{background:rgba(20,111,60,.10)}
+  html[data-theme="light"] .rst{border-color:rgba(200,140,0,.38);background:rgba(255,196,80,.14)}
+  html[data-theme="light"] .rst .rst-h{color:#8a5400}
+  html[data-theme="light"] .rst .rst-act .btn{border-color:rgba(200,140,0,.5);color:#6e4200;background:rgba(255,196,80,.22)}
+  html[data-theme="light"] .rst .rst-act .btn:hover{background:rgba(255,196,80,.32)}
+  /* toasts, voile de préparation, onboarding : clairs eux aussi */
+  html[data-theme="light"] .toast{background:rgba(255,255,255,.97);border-color:rgba(var(--ink),.14);
+    box-shadow:0 18px 44px -16px rgba(20,22,30,.30),0 1px 2px rgba(20,22,30,.06)}
+  html[data-theme="light"] .toast .tdot{background:rgba(var(--ink),.55)}
+  html[data-theme="light"] .toast.error .tdot{background:var(--bad)}
+  html[data-theme="light"] .model-dl{background:rgba(232,234,240,.92)}
+  html[data-theme="light"] .md-card{background:#fff;border-color:rgba(var(--ink),.10);box-shadow:0 30px 70px -24px rgba(20,22,30,.30)}
+  html[data-theme="light"] .onb .nav-item.cur{background:#fff;border-color:rgba(var(--ink),.08);
+    box-shadow:0 1px 2px rgba(20,22,30,.06),0 4px 12px -6px rgba(20,22,30,.14)}
+  /* anneaux de focus et de survol : le périwinkle clair ne se voit pas sur blanc */
+  html[data-theme="light"] .inp:focus,html[data-theme="light"] .inp:focus-visible,html[data-theme="light"] textarea:focus,
+  html[data-theme="light"] select:focus,html[data-theme="light"] .btn:focus-visible,html[data-theme="light"] .pill:focus-visible,
+  html[data-theme="light"] .nav-item:focus-visible,html[data-theme="light"] .rec-row:focus-visible,html[data-theme="light"] .hist-row:focus-visible{
+    box-shadow:0 0 0 1px rgba(92,104,222,.55),0 0 0 4px rgba(92,104,222,.14)}
+  html[data-theme="light"] .rec-row:hover,html[data-theme="light"] .hist-row:hover{box-shadow:inset 0 0 0 1px rgba(92,104,222,.22)}
 </style>
 </head>
 <body class="vl-boot">

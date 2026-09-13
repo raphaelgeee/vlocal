@@ -3,8 +3,21 @@
 Dates are publication dates on the update channel. Earlier internal versions
 (3.x, June 2026) are not listed.
 
-## Unreleased
+## 1.3.5, 13 September 2026
 
+- **Light mode, second pass.** The first light theme put grey text on a
+  glaring white ground, with no relief. Now: a soft grey ground, white cards,
+  a sidebar one tone darker, white controls with a crisp border, denser
+  secondary text, visible hairlines. Toasts, the preparation screen and the
+  onboarding follow. Measured on every view with realistic data: no text below
+  4.2:1, body text at 5.9:1 or better. Dark mode does not change.
+- **Primary buttons.** A button marked primary in the settings had no style of
+  its own and looked secondary (Create the vault, Send to support, It is
+  checked). It has the same ink fill as the other primary actions, in both
+  themes.
+- **Settings.** Labels and notes placed outside a settings row (Trigger, the
+  notes under buttons, the last send) were rendered at the browser default
+  size. They use the same style as the rest.
 - **Hands-free pill: the logo and the timer stay centered.** With the mic kept
   open by a double tap, the hint ("Mic open, Ctrl + Cmd to finish") now sits
   under the waveform, in the middle column. Before, everything moved up six
