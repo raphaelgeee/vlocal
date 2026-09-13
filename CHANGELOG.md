@@ -3,6 +3,14 @@
 Dates are publication dates on the update channel. Earlier internal versions
 (3.x, June 2026) are not listed.
 
+## Unreleased
+
+- **Hands-free pill: the logo and the timer stay centered.** With the mic kept
+  open by a double tap, the hint ("Mic open, Ctrl + Cmd to finish") now sits
+  under the waveform, in the middle column. Before, everything moved up six
+  pixels to make room for a hint running under the logo, and the pill looked
+  off-centre. The hint is shorter so it fits under the wave with any shortcut.
+
 ## 1.3.4, 11 September 2026
 
 - **Updates announce themselves.** When a newer version is published, a dot

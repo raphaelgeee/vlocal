@@ -83,7 +83,8 @@ body[data-state="info"] #stage-card{display:block}
   background:rgba(255,255,255,.055);border:.5px solid rgba(255,255,255,.2);
   box-shadow:inset 0 1px 0 rgba(255,255,255,.12)}
 .gl{display:block;color:#f2f3f5}
-.wave{flex:1;display:flex;align-items:center;justify-content:space-between;height:32px}
+.mid{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center}
+.wave{display:flex;align-items:center;justify-content:space-between;height:32px}
 .wb{width:3px;border-radius:2px;background:#fff}
 @keyframes wv{0%,100%{transform:scaleY(.26)}50%{transform:scaleY(1)}}
 .worklabel{position:absolute;left:0;right:0;text-align:center;font-size:14.5px;color:rgba(255,255,255,.72);
@@ -94,13 +95,13 @@ body[data-state="transcribing"] .worklabel{display:block}
 .timer{flex:0 0 auto;font:500 14px/1 var(--mono);color:rgba(255,255,255,.6);
   font-variant-numeric:tabular-nums;letter-spacing:.5px;min-width:38px;text-align:right}
 body[data-state="transcribing"] .timer{min-width:56px}
-/* v1.3.3 — mains libres : la pilule dit que le micro reste ouvert et comment terminer. */
-.lockhint{position:absolute;left:0;right:0;bottom:7px;text-align:center;font-size:10px;letter-spacing:.02em;
-  color:rgba(255,255,255,.5);display:none;pointer-events:none;white-space:nowrap}
+/* v1.3.3 — mains libres : la pilule dit que le micro reste ouvert et comment terminer.
+   v1.3.5 — la consigne vit SOUS l'onde, dans la colonne du milieu : logo et chrono
+   restent exactement au centre de la pilule (avant, tout montait de 6 px et la
+   consigne courait sous le logo). Onde + consigne forment un groupe centré. */
+.lockhint{display:none;margin-top:3px;text-align:center;font-size:10px;line-height:12px;letter-spacing:.02em;
+  color:rgba(255,255,255,.5);pointer-events:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 body[data-locked="1"][data-state="recording"] .lockhint{display:block}
-body[data-locked="1"][data-state="recording"] .wave,
-body[data-locked="1"][data-state="recording"] .timer,
-body[data-locked="1"][data-state="recording"] .badge{transform:translateY(-6px)}
 
 /* ---- CARTE (result / messages) ---- */
 .card{width:404px;border-radius:27px;padding:17px 21px 15px}
@@ -139,10 +140,9 @@ html[data-theme="light"] .cfoot{color:rgba(20,22,30,.55)}
       <div class="glow gA"></div><div class="glow gB"></div>
       <div class="surface pill">
         <div class="badge"><svg class="gl" width="23" height="23" viewBox="0 0 2000 2000" aria-hidden="true"><g transform="translate(0,2000) scale(1,-1)" fill="currentColor"><path d="M89 2000 c0 -1 -3 -1 -5 -1 -40 -6 -76 -41 -83 -82 0 -3 0 -417 0 -919 l0 -913 2 -9 c5 -19 12 -32 27 -46 13 -14 26 -22 46 -27 7 -2 8 -2 96 -3 l88 0 837 837 c461 460 839 839 842 842 9 11 17 31 19 47 1 9 0 24 -2 33 -2 13 -10 29 -17 39 -5 6 -128 129 -135 135 -26 21 -65 27 -97 15 -7 -3 -19 -9 -24 -13 -1 -1 -285 -285 -631 -631 l-629 -628 0 614 c0 338 0 617 -1 620 -2 22 -12 44 -29 61 -12 12 -27 21 -45 26 l-9 2 -125 1 c-69 0 -125 0 -125 0z"/><path d="M802 219 l-218 -219 666 0 666 1 9 2 c38 11 66 41 74 80 1 11 1 261 -1 272 -5 31 -25 58 -54 73 -5 2 -15 6 -18 7 -2 0 -5 1 -8 1 -4 1 -108 1 -451 1 l-446 1 -219 -219z"/></g></svg></div>
-        <div class="wave" id="wave"></div>
+        <div class="mid"><div class="wave" id="wave"></div><div class="lockhint" id="lockhint"></div></div>
         <div class="worklabel">Transcription</div>
         <div class="timer" id="rtimer">0:00</div>
-        <div class="lockhint" id="lockhint"></div>
       </div>
     </div>
 
@@ -176,13 +176,13 @@ html[data-theme="light"] .cfoot{color:rgba(20,22,30,.55)}
          tooshort:'C’est un peu court.', tooshort_sub:'Maintiens le raccourci un peu plus longtemps.',
          error:'Une erreur est survenue.', retry_hk:'Réessaie : maintiens {0}', retry:'Réessaie quand tu veux.',
          mic:'Micro requis.', mic_sub:'Autorise le microphone dans Réglages.',
-         locked:'Micro ouvert · appuie sur {0} pour terminer', locked_nohk:'Micro ouvert · rappuie pour terminer',
+         locked:'Micro ouvert · {0} pour terminer', locked_nohk:'Micro ouvert · rappuie pour terminer',
          tap_sub:'Appuie deux fois pour garder le micro ouvert.' },
     en:{ work:'Transcribing', wait:'One more moment…', inserted:'Text inserted', copied:'Copied',
          tooshort:'That was a bit short.', tooshort_sub:'Hold the shortcut a little longer.',
          error:'Something went wrong.', retry_hk:'Try again: hold {0}', retry:'Try again whenever you like.',
          mic:'Microphone needed.', mic_sub:'Allow the microphone in Settings.',
-         locked:'Mic open · press {0} to finish', locked_nohk:'Mic open · press again to finish',
+         locked:'Mic open · {0} to finish', locked_nohk:'Mic open · press again to finish',
          tap_sub:'Double-tap to keep the mic open.' }
   };
   var OVLANG='fr';
