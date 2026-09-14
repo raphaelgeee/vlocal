@@ -6057,10 +6057,12 @@ def main():
     # v1.1.0 — identifiant d'installation (UUID aléatoire, jamais dérivé de la
     # machine) + planificateur de télémétrie. Rien ne part tant que l'utilisateur
     # n'a pas fait son choix (telemetry_enabled is True), cf. telemetry.py.
+    # v1.3.6 — une copie de l'identifiant vit dans les préférences macOS : un
+    # dossier de l'app vidé, ou une réinstallation, ne crée plus une deuxième
+    # « installation » de la même personne dans la console.
     global _telemetry
     try:
-        if not _load_settings().get("install_id"):
-            _save_settings({"install_id": telemetry.new_install_id()})
+        telemetry.ensure_install_id(_load_settings, _save_settings)
         import platform as _plat
         _telemetry = telemetry.Telemetry(_load_settings, _save_settings,
                                          lambda: _store, APP_VERSION,

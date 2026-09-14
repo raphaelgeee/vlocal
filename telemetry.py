@@ -66,6 +66,72 @@ def new_install_id() -> str:
     return str(uuid.uuid4())
 
 
+class MacPrefs:
+    """Copie de secours de l'identifiant dans les préférences macOS
+    (~/Library/Preferences/com.vlocal.identity.plist), hors du dossier de l'app.
+    Tout échec (pas de Foundation, préférences en lecture seule) est absorbé :
+    l'identifiant vit d'abord dans settings.json."""
+
+    SUITE = "com.vlocal.identity"
+
+    def __init__(self, suite=SUITE):
+        self._d = None
+        # Les bancs d'essai (HOME isolé, VLOCAL_INSTANCE_SCOPE=home) ne touchent pas
+        # aux préférences de la vraie session : CFPreferences ignore $HOME.
+        if not suite or os.environ.get("VLOCAL_INSTANCE_SCOPE") == "home":
+            return
+        try:
+            from Foundation import NSUserDefaults
+            self._d = NSUserDefaults.alloc().initWithSuiteName_(suite)
+        except Exception:
+            self._d = None
+
+    def get(self, key):
+        try:
+            v = self._d.stringForKey_(key) if self._d is not None else None
+            return str(v) if v else None
+        except Exception:
+            return None
+
+    def set(self, key, value):
+        try:
+            if self._d is not None:
+                self._d.setObject_forKey_(str(value), key)
+                self._d.synchronize()
+        except Exception:
+            pass
+
+
+def ensure_install_id(load_settings, save_settings, prefs=None) -> str:
+    """Identifiant d'installation stable, dans cet ordre : settings.json ; sinon la
+    copie gardée dans les préférences macOS (le dossier de l'app a été vidé ou
+    l'app réinstallée : la personne garde son identifiant au lieu d'apparaître
+    deux fois dans la console) ; sinon un nouvel UUID aléatoire. Jamais dérivé de
+    la machine. La copie est réalignée sur settings.json à chaque lancement."""
+    prefs = prefs if prefs is not None else MacPrefs()
+
+    def _lire():
+        try:
+            return str(prefs.get("install_id") or "").strip()
+        except Exception:
+            return ""
+
+    cur = str((load_settings() or {}).get("install_id") or "").strip()
+    if not cur:
+        cur = _lire()
+        if cur:
+            print("[telemetry] identifiant d'installation retrouvé dans les préférences macOS.")
+        else:
+            cur = new_install_id()
+        save_settings({"install_id": cur})
+    if _lire() != cur:
+        try:
+            prefs.set("install_id", cur)
+        except Exception:
+            pass   # la copie de secours est un confort, jamais un point de blocage
+    return cur
+
+
 def is_enabled(settings: dict) -> bool:
     """True seulement si l'utilisateur a explicitement accepté."""
     return settings.get("telemetry_enabled") is True and bool(settings.get("install_id"))

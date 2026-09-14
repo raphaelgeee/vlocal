@@ -62,7 +62,7 @@ Données partagées), l'app envoie une fois par jour :
 
 | Champ | Usage |
 | --- | --- |
-| un identifiant d'installation aléatoire (UUID) | compter les installations, sans lien avec la machine |
+| un identifiant d'installation aléatoire (UUID) | compter les installations, sans lien avec la machine ; une copie est gardée dans les préférences macOS pour qu'une réinstallation garde le même |
 | prénom et nom, tels que saisis | savoir qui utilise Vlocal |
 | adresse e-mail, si vous en donnez une | vous joindre ; facultative, validée, jamais utilisée pour autre chose |
 | version de Vlocal et de macOS | support |

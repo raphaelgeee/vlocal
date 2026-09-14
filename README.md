@@ -60,7 +60,7 @@ data), the app sends once a day:
 
 | Field | Purpose |
 | --- | --- |
-| a random install identifier (UUID) | count installs, no link to the machine |
+| a random install identifier (UUID) | count installs, no link to the machine; a copy is kept in the macOS preferences so a reinstall keeps the same one |
 | first name, last name, as typed | know who uses Vlocal |
 | email address, if you give one | reach you; optional, validated, never used for anything else |
 | Vlocal version, macOS version | support |

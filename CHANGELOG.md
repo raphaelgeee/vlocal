@@ -3,6 +3,14 @@
 Dates are publication dates on the update channel. Earlier internal versions
 (3.x, June 2026) are not listed.
 
+## Unreleased
+
+- **One installation per person.** The installation id lives in the app's
+  settings file; emptying the app folder or reinstalling produced a new id, and
+  the same person showed up twice in the console with their figures split. A
+  copy of the id is now kept in the macOS preferences and restored when the
+  settings file lost it. Still a random UUID, never derived from the machine.
+
 ## 1.3.5, 13 September 2026
 
 - **Light mode, second pass.** The first light theme put grey text on a

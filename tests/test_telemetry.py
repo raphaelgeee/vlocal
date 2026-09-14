@@ -225,3 +225,74 @@ class SchedulerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FauxPrefs:
+    """Préférences en mémoire, ou en panne si `casse`."""
+    def __init__(self, valeur=None, casse=False):
+        self.d = {"install_id": valeur} if valeur else {}
+        self.casse = casse
+    def get(self, k):
+        if self.casse:
+            raise RuntimeError("préférences indisponibles")
+        return self.d.get(k)
+    def set(self, k, v):
+        if self.casse:
+            raise RuntimeError("préférences indisponibles")
+        self.d[k] = v
+
+
+class TestIdentifiantInstallationStable(unittest.TestCase):
+    """v1.3.6 : une réinstallation ne fabrique plus une deuxième personne."""
+
+    def _settings(self, initial):
+        store = dict(initial)
+        return store, (lambda: dict(store)), (lambda patch: store.update(patch))
+
+    def test_settings_prime_et_copie_alignee(self):
+        store, load, save = self._settings({"install_id": "aaa"})
+        prefs = FauxPrefs("bbb")
+        self.assertEqual(telemetry.ensure_install_id(load, save, prefs), "aaa")
+        self.assertEqual(prefs.d["install_id"], "aaa")
+
+    def test_dossier_vide_identifiant_retrouve(self):
+        store, load, save = self._settings({})
+        prefs = FauxPrefs("ccc")
+        self.assertEqual(telemetry.ensure_install_id(load, save, prefs), "ccc")
+        self.assertEqual(store["install_id"], "ccc")
+
+    def test_premier_lancement_nouvel_uuid_copie(self):
+        store, load, save = self._settings({})
+        prefs = FauxPrefs()
+        ident = telemetry.ensure_install_id(load, save, prefs)
+        self.assertEqual(len(ident), 36)
+        self.assertEqual(store["install_id"], ident)
+        self.assertEqual(prefs.d["install_id"], ident)
+
+    def test_preferences_en_panne_ne_bloquent_pas(self):
+        store, load, save = self._settings({})
+        prefs = FauxPrefs(casse=True)
+        # MacPrefs absorbe ses erreurs ; un objet qui lève doit être toléré au même titre.
+        try:
+            ident = telemetry.ensure_install_id(load, save, prefs)
+        except RuntimeError:
+            self.fail("une panne des préférences a bloqué le démarrage")
+        self.assertEqual(store["install_id"], ident)
+
+    def test_mac_prefs_desactivees_ne_levent_jamais(self):
+        # Sans suite (ou en banc d'essai), aucune écriture dans les préférences de la session.
+        p = telemetry.MacPrefs(suite=None)
+        p.set("essai_vlocal", "x")
+        self.assertIsNone(p.get("essai_vlocal"))
+
+    def test_mac_prefs_en_banc_d_essai_sont_muettes(self):
+        import os
+        avant = os.environ.get("VLOCAL_INSTANCE_SCOPE")
+        os.environ["VLOCAL_INSTANCE_SCOPE"] = "home"
+        try:
+            self.assertIsNone(telemetry.MacPrefs().get("install_id"))
+        finally:
+            if avant is None:
+                del os.environ["VLOCAL_INSTANCE_SCOPE"]
+            else:
+                os.environ["VLOCAL_INSTANCE_SCOPE"] = avant
