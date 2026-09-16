@@ -116,6 +116,11 @@ for pkg in ("faster_whisper", "ctranslate2", "onnxruntime", "av",
         # au runtime). On ne bloque pas le build.
         print(f"[spec] collect_all({pkg}) ignore : {_e}")
 
+# v1.4.0 : collect_all(transformers) ramène la fiche torch-*.dist-info (métadonnées
+# seules, sans le paquet). On l'écarte : un test de présence par métadonnées
+# croirait torch installé et transformers prendrait un chemin qui n'existe pas.
+datas = [x for x in datas if not ("torch-" in str(x[1]) and ".dist-info" in str(x[1]))]
+
 block_cipher = None
 
 a = Analysis(

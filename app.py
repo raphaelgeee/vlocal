@@ -69,6 +69,27 @@ if "--mic-worker" in sys.argv:
     import micworker as _mic_worker
     sys.exit(_mic_worker.worker_main(sys.argv))
 
+# v1.4.0, AUTO-TEST DE L'INTELLIGENCE LOCALE (--assist-selftest) : porte de build.
+# Prouve que l'app EMPAQUETÉE importe mlx_lm sans torch et, si le modèle est dans
+# le cache de cette machine, qu'elle génère. Imprime un JSON, code 0 si tout va bien.
+if "--assist-selftest" in sys.argv:
+    _hide_worker_from_dock()
+    import json as _sj
+    import time as _st
+    import importlib.util as _su
+    import assist as _sa
+    import model_store as _sm
+    _rep = {"importable": _sa.Assist.importable(), "torch": _su.find_spec("torch") is not None}
+    _dir = _sm.optional_dir(_sa.MODEL_NAME)
+    _a = _sa.Assist(lambda: _dir, log=lambda *x: None)
+    _rep["model_present"] = _a.model_present()
+    if _rep["model_present"]:
+        _t = _st.time()
+        _out, _info = _a.transformer("liste", "acheter du lait, appeler Paul pour le devis, relire le contrat")
+        _rep.update({"out": _out, "info": _info, "s": round(_st.time() - _t, 2), "error": _a.last_error})
+    print(_sj.dumps(_rep, ensure_ascii=False))
+    sys.exit(0 if _rep["importable"] and not _rep["torch"] and (not _rep["model_present"] or _rep.get("out")) else 1)
+
 import functools
 import json
 import os
