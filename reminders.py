@@ -162,6 +162,38 @@ def _extract_time(norm: str):
 # --------------------------------------------------------------------------- #
 # Cœur temporel
 # --------------------------------------------------------------------------- #
+_EN_FR = [
+    (r"\btomorrow morning\b", "demain matin"), (r"\btomorrow afternoon\b", "demain après-midi"), (r"\btomorrow evening\b", "demain soir"),
+    (r"\btomorrow\b", "demain"), (r"\btonight\b", "ce soir"), (r"\bthis evening\b", "ce soir"), (r"\bthis afternoon\b", "cet après-midi"),
+    (r"\bthis morning\b", "ce matin"), (r"\btoday\b", "aujourd'hui"), (r"\bnoon\b", "midi"), (r"\bmidnight\b", "minuit"),
+    (r"\bnext week\b", "la semaine prochaine"), (r"\bnext\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", r"\1 prochain"),
+    (r"\bmonday\b", "lundi"), (r"\btuesday\b", "mardi"), (r"\bwednesday\b", "mercredi"), (r"\bthursday\b", "jeudi"),
+    (r"\bfriday\b", "vendredi"), (r"\bsaturday\b", "samedi"), (r"\bsunday\b", "dimanche"),
+    (r"\bjanuary\b", "janvier"), (r"\bfebruary\b", "février"), (r"\bmarch\b", "mars"), (r"\bapril\b", "avril"), (r"\bmay\b", "mai"),
+    (r"\bjune\b", "juin"), (r"\bjuly\b", "juillet"), (r"\baugust\b", "août"), (r"\bseptember\b", "septembre"), (r"\boctober\b", "octobre"),
+    (r"\bnovember\b", "novembre"), (r"\bdecember\b", "décembre"),
+    (r"\bin\s+(\d+|an?|one|two|three|four|five|six|ten|fifteen|twenty|thirty)\s+(minutes?|mins?)\b", r"dans \1 minutes"),
+    (r"\bin\s+(\d+|an?|one|two|three|four|five|six)\s+hours?\b", r"dans \1 heures"),
+    (r"\bin\s+(\d+|an?|one|two|three)\s+days?\b", r"dans \1 jours"), (r"\bin\s+(\d+|an?|one|two)\s+weeks?\b", r"dans \1 semaines"),
+    (r"\bhalf an hour\b", "une demi-heure"), (r"\ba quarter of an hour\b", "un quart d'heure"),
+    (r"\bbefore\b", "avant"), (r"\bat\s+(\d{1,2})(?::(\d{2}))?\s*(am|a\.m\.)\b", r"à \1h\2"),
+    (r"\bat\s+(\d{1,2})(?::(\d{2}))?\s*(pm|p\.m\.)\b", lambda m: "à %dh%s" % ((int(m.group(1)) % 12) + 12, m.group(2) or "")),
+    (r"\bat\s+(\d{1,2})(?::(\d{2}))?\b", r"à \1h\2"), (r"\bon\s+(lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche)\b", r"\1"),
+    (r"\bone\b", "1"), (r"\btwo\b", "2"), (r"\bthree\b", "3"), (r"\bfour\b", "4"), (r"\bfive\b", "5"), (r"\bsix\b", "6"),
+    (r"\bten\b", "10"), (r"\bfifteen\b", "15"), (r"\btwenty\b", "20"), (r"\bthirty\b", "30"), (r"\ban?\b", "1"),
+]
+
+
+def en_to_fr_time(text: str) -> str:
+    """v1.4.0, Ramène une expression de temps anglaise vers l'équivalent français que
+    parse_datetime comprend (« tomorrow at 10 am » -> « demain à 10h »). Déterministe,
+    sans effet sur un texte déjà français (les mots anglais seuls sont touchés)."""
+    s = (text or "")
+    for pat, rep in _EN_FR:
+        s = re.sub(pat, rep, s, flags=re.I)
+    return s
+
+
 def parse_datetime(raw_text: str, now: _dt.datetime):
     norm = _norm(raw_text)
     spans, lead_minutes, deadline = [], 0, False

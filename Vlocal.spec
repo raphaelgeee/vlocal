@@ -102,7 +102,10 @@ for pkg in ("faster_whisper", "ctranslate2", "onnxruntime", "av",
             # des word-timestamps. SANS elles, `import mlx_whisper` lève
             # ModuleNotFoundError -> available() False -> le GPU ne s'active
             # JAMAIS (repli CPU silencieux). C'était LE bug du build v23 initial.
-            "scipy", "numba", "llvmlite"):
+            "scipy", "numba", "llvmlite",
+            # v1.4.0, intelligence locale : mlx_lm (LFM2.5) et son tokenizer (transformers,
+            # sans torch, exclu plus bas).
+            "mlx_lm", "transformers"):
     try:
         d, b, h = collect_all(pkg)
         datas += d

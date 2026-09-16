@@ -40,9 +40,12 @@ Dock icon):
    transcribes the remainder. Chained dictations are serialized with FIFO
    tickets so text is inserted in the order of the releases.
 4. The text goes through the glossary and deterministic formatting
-   (`processor.py`), is copied to the clipboard and inserted at the cursor
-   through the Accessibility API (`inserter.py`). Reminders are detected and
-   scheduled (`reminders.py`, `notifier.py`).
+   (`processor.py`). If local intelligence is on and the dictation carries a
+   declared intent (see below), it is formatted by the model, under a time
+   budget and guardrails; otherwise it is untouched. It is then copied to the
+   clipboard and inserted at the cursor through the Accessibility API
+   (`inserter.py`). Reminders are detected and scheduled (`reminders.py`,
+   `notifier.py`).
 5. Usage counters are updated (`storage.record_usage`), and the telemetry
    scheduler is notified.
 
@@ -87,11 +90,44 @@ attributes words to speakers with boundary snapping to the nearest speech
 boundary. `voiceid.py` matches centroids against named voices from previous
 meetings (cosine 0.75 with a margin over the second best).
 
+## Local intelligence (preview)
+
+`assist.py` wraps a small instruction model (LFM2.5-1.2B, 4-bit, MLX) behind
+three rules: it never runs unless the person turned it on, it never touches
+the raw path (any failure returns the dictated text), and it never decides a
+fact it cannot compute (dates come from `reminders.parse_datetime`).
+
+- **Intents.** `detect_intent()` recognises a spoken marker at the head
+  ("c'est un mail pour Marie :"), at the tail ("... mets ça en liste", "... en
+  anglais") or a reply marker ("réponds :" with a message on the clipboard),
+  strips it and returns the content. Each intent has one instruction, text
+  first, instruction last. `sortie_acceptable()` rejects an output that copies
+  the instruction, loses the content (word coverage per intent), drifts too far
+  for a cleanup (sequence similarity) or has an implausible length for a
+  translation. Rejected means the raw text is inserted.
+- **Reminders.** A second pass only when `reminders.is_reminder()` said no and
+  a cheap cue ("rappelle", "oublie", "remind"...) is present: the model returns
+  `{titre, quand}` as JSON, `resoudre_rappel()` computes the date with the
+  deterministic parser (English phrases mapped first, spelled hours turned into
+  digits) and falls back to the whole sentence. No date, no reminder.
+- **Meetings.** A one-hour transcript is read in chunks of about 9,000
+  characters; each chunk yields JSON (decisions, actions, open topics, first
+  names a speaker gives or is called by). Chunks are merged and rendered by
+  Python, not by the model. First names are offered as suggestions in the UI
+  and applied through the usual `rename_speaker`.
+- **Lifecycle.** The model lives in the optional section of the R2 manifest
+  (`model_store.download_optional`), downloaded on demand into the model cache,
+  loaded on first use (about a second), unloaded after ten minutes idle by the
+  same watchdog that unloads Whisper. The settings card is shown only where the
+  preview flag is set (`com.vlocal.identity preview_assist = 1`, or
+  `VLOCAL_PREVIEW=assist`).
+
 ## Storage and settings
 
 SQLite (WAL) in `~/Library/Application Support/Vlocal/vlocal.db`: reminders,
-dictations (if history is enabled), meetings with their word timings and
-speaker blocks, glossary, daily usage counters. Settings are a JSON file in the
+dictations (if history is enabled, with the raw text next to a formatted
+one), meetings with their word timings, speaker blocks and an optional report,
+glossary, daily usage counters. Settings are a JSON file in the
 same folder, read through `_load_settings()` with an mtime cache.
 
 ## Interface

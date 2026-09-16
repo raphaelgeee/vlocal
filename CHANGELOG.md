@@ -3,8 +3,25 @@
 Dates are publication dates on the update channel. Earlier internal versions
 (3.x, June 2026) are not listed.
 
-## Unreleased
+## 1.4.0, 16 September 2026
 
+- **Local intelligence, in preview.** A small language model (LFM2.5-1.2B by
+  Liquid AI, 4-bit, about 630 MB) can run on your Mac, downloaded on demand,
+  never online. It does nothing until you ask: say "this is an email for
+  Marie", "make it a list", "in English", "shorter", "more formal", "this is a
+  prompt", "this is a post", or "reply" (to a message you copied), and the
+  dictation is formatted before it is inserted. Every result is checked: too
+  slow, an instruction copied into the text, content lost, and you get your
+  dictation exactly as spoken. The original text is kept in the history next to
+  the formatted one. Reminders get a second reading when the deterministic
+  parser does not recognise one: the model extracts the action and the moment,
+  Vlocal computes the date, nothing is created without one. Meetings get a
+  "Report" button: decisions, actions, open topics and first names heard, read
+  chunk by chunk and assembled without the model, with the names offered to
+  apply, never applied on their own. The model loads on first request and
+  unloads after ten minutes idle. The card appears in Settings only on Macs
+  where the preview flag is set; everyone else sees no change. Not in the
+  bundle, not downloaded unless you ask.
 - **One installation per person.** The installation id lives in the app's
   settings file; emptying the app folder or reinstalling produced a new id, and
   the same person showed up twice in the console with their figures split. A

@@ -79,7 +79,10 @@ formula as the dashboard: words at 40 words per minute typed versus 150 spoken.
 
 Two other network calls exist: a version check (`get-latest-version`, no
 personal data) and the "Send a diagnostic" button in Settings, which sends the
-message you type and, if you fill it, your email.
+message you type and, if you fill it, your email. A third one happens only if
+you turn on Local intelligence (preview) and click "Download the model": the
+model files are fetched once from the same bucket as the speech models,
+checksum-verified, and everything the model does afterwards happens on your Mac.
 
 ## How it works
 
@@ -88,7 +91,8 @@ message you type and, if you fill it, your email.
 | Speech to text | Whisper large-v3-turbo. GPU path: [mlx-whisper](https://github.com/ml-explore/mlx-examples) with 8-bit weights. CPU path: [faster-whisper](https://github.com/SYSTRAN/faster-whisper) int8, plus a small model for low memory. |
 | Voice activity | Silero VAD (through faster-whisper) and an RMS gate shared by the live-tail. |
 | Speaker separation | [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) CAM++ 192-d embeddings, spherical k-means, speaker count by spectral gap (silhouette as fallback) with a duration cap, boundary snapping to speech. |
-| Text formatting | Deterministic rules ([processor.py](processor.py)); no generative model, nothing is rewritten. |
+| Text formatting | Deterministic rules ([processor.py](processor.py)); nothing is rewritten by default. |
+| Local intelligence (preview) | [LFM2.5-1.2B-Instruct](https://huggingface.co/LiquidAI/LFM2.5-1.2B-Instruct) by Liquid AI, 4-bit MLX build, through [mlx-lm](https://github.com/ml-explore/mlx-lm). Off by default, downloaded on demand, used only for a declared intent ("this is an email for..."), reminders the parser missed, and meeting reports. Every output passes guardrails in [assist.py](assist.py) or the raw dictation is kept. LFM Open License. |
 | Storage | SQLite in WAL mode ([storage.py](storage.py)). |
 | UI | A single HTML file ([vlocal-interface.html](vlocal-interface.html)) in a pywebview window, a floating dictation overlay, a menu bar item. |
 | Reliability | The microphone is captured in a disposable subprocess that is killed and respawned if it hangs; GPU inference has a proportional timeout and a temporary CPU fallback; a supervisor bounds every step of a dictation. |
@@ -155,6 +159,7 @@ voiceid.py             known voices across meetings
 live_meeting.py        incremental meeting transcription
 recorder.py, meeting_visio.py, visio_recorder.py   meeting audio capture
 processor.py           deterministic text formatting and glossary
+assist.py              local intelligence (preview): intents, prompts, guardrails, meeting reports
 reminders.py           French reminder parser
 storage.py             SQLite persistence
 telemetry.py           declared usage data (see "Data")

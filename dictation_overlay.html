@@ -237,6 +237,8 @@ html[data-theme="light"] .cfoot{color:rgba(20,22,30,.55)}
   };
   function setLvl(v){ body.style.setProperty('--lvl', clamp(v).toFixed(3)); }
   window.ovLevel=function(v){ setLvl(v); };
+  // v1.4.0, étape intermédiaire nommée (mise en forme par le modèle local)
+  window.ovWork=function(label){ var wl=document.querySelector('.worklabel'); if(wl) wl.textContent=label||tt('work'); };
   window.ovTranscribing=function(rec_s){
     setState('transcribing'); setLvl(.18);
     var wl=document.querySelector('.worklabel'); if(wl) wl.textContent=tt('work');

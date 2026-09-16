@@ -445,6 +445,13 @@ def transcribing(rec_s):
     _js("ovTranscribing(%.3f)" % float(rec_s))
 
 
+def work(label):
+    """v1.4.0, libellé de l'étape en cours dans la pilule (« Mise en forme »),
+    à la place de « Transcription », le temps que le modèle local travaille."""
+    import json as _json
+    _js("ovWork(%s)" % _json.dumps(str(label or "")))
+
+
 def result(trans_s, inserted, branch=None, text=""):
     import json as _json
     _js("ovResult(%.3f,%s,%s,%s)" % (float(trans_s),

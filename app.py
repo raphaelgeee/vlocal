@@ -106,6 +106,7 @@ import hotkey_mac
 import reminders
 import obsidian         # v1.0.13 — connecteur Obsidian local (capture des dictées dans un coffre, ADDITIF)
 import telemetry        # v1.1.0 — télémétrie minimale déclarée (installs, usage par jour)
+import assist           # v1.4.0, intelligence locale (LFM2.5 en 4 bits, à la demande) : import léger, mlx_lm chargé plus tard
 from supabase_config import edge_url, auth_headers  # v1.1.0 — backend centralisé
 import updater          # v1.0.5 — mise à jour in-app (téléchargement + swap atomique)
 from engine import (SAMPLE_RATE, SMALL_DIR_NAME, TURBO_DIR_NAME, VlocalEngine,
@@ -165,7 +166,7 @@ _window_visible = True   # suivi de visibilité (fenêtre naît affichée)
 WIN_W = 1180            # v3.1 — dashboard plein écran (était 380, carte flottante)
 WIN_H = 780             # v3.1 — (était 720)
 PANEL_W = 840            # (hérité ; set_meeting_panel neutralisé en v3.1)
-APP_VERSION = "1.3.5"   # 13 septembre 2026. Synchrone avec le fichier VERSION (build) ;
+APP_VERSION = "1.4.0"   # 16 septembre 2026. Synchrone avec le fichier VERSION (build) ;
                         # affiché dans l'onglet « Mises à jour ». Historique : CHANGELOG.md.
 # Libellé humain du raccourci global actif (posé par start_global_hotkey,
 # consommé par le message de permission _check_hotkey_perm).
@@ -367,6 +368,12 @@ _UI_LANG = "fr"
 # le formulaire d'envoi (l'envoi transmet quand même les métadonnées sanitisées au
 # support). Override possible par VLOCAL_DEV=1 (build dev local).
 _BT = {
+  "Mise en forme…": "Formatting…",
+  "Téléchargement interrompu. Vérifiez votre connexion et réessayez.": "Download interrupted. Check your connection and try again.",
+  "Activez l'intelligence locale et téléchargez le modèle dans les Réglages.": "Turn on local intelligence and download the model in Settings.",
+  "Le compte rendu par l'intelligence locale est désactivé dans les Réglages.": "Meeting reports by local intelligence are turned off in Settings.",
+  "Cette réunion n'a pas encore de transcription.": "This meeting has no transcript yet.",
+  "Le modèle n'a rien pu extraire de cette réunion.": "The model could not extract anything from this meeting.",
   "Microphone indisponible. Vérifiez Réglages Système > Confidentialité et sécurité > Microphone (et qu'aucune autre app ne le capte).":
     "Microphone unavailable. Check System Settings > Privacy & Security > Microphone (and that no other app is using it).",
   "La transcription a calé un instant (GPU), c'est réinitialisé. Relancez votre dictée, ça repart.":
@@ -1631,6 +1638,18 @@ class DictationController:
         except Exception:
             pass
 
+        # v1.4.0, INTELLIGENCE LOCALE (aperçu, désactivée par défaut) : mise en forme
+        # d'une intention déclarée ou nettoyage, APRÈS tout le déterministe et AVANT la
+        # copie. Bornée dans le temps, garde-fous dans assist.py ; toute erreur = brut.
+        # Le texte dicté d'origine est conservé (historique, détection de rappel).
+        raw_dicte = raw
+        try:
+            if _current_mode() == "DICTEE" and _assist_ready():
+                raw = _assist_transform(raw, notify_ui) or raw
+        except Exception as _ae:
+            print(f"[assist] ignoré ({_ae}) : brut conservé.")
+            raw = raw_dicte
+
         # v29.10 — la copie EST le produit (collage Cmd+V). Si elle échoue (rare),
         # on NE ment PAS avec flashCopied : on prévient clairement, sinon le texte
         # serait perdu en silence. Le chemin SUCCÈS est INCHANGÉ (= dictée validée).
@@ -1679,8 +1698,8 @@ class DictationController:
             # dictée (fini le doublon « rappel + dictée » remonté par Raphael).
             if _current_mode() == "DICTEE" and _store is not None \
                     and _load_settings().get("history_scope", "all") == "all" \
-                    and not _looks_like_timed_reminder(raw):
-                _store.add_dictation(raw, mode="DICTEE")
+                    and not _looks_like_timed_reminder(raw_dicte):
+                _store.add_dictation(raw, mode="DICTEE", raw=raw_dicte)
                 # Bug #4 — rafraîchit l'accueil (mots / temps gagné / sessions du
                 # mois) après une dictée, comme le fait déjà le chemin réunion.
                 # Non bloquant (via _ui fire-and-forget), hors chemin de copie,
@@ -1695,7 +1714,7 @@ class DictationController:
         # Le texte brut est déjà copié (chemin presse-papier instantané).
         threading.Thread(
             target=_post_process_by_mode,
-            args=(raw, _current_mode()),
+            args=(raw_dicte, _current_mode(), raw),
             daemon=True,
         ).start()
         return raw
@@ -2062,7 +2081,7 @@ def _looks_like_timed_reminder(raw: str) -> bool:
         return False
 
 
-def _post_process_by_mode(raw: str, mode: str):
+def _post_process_by_mode(raw: str, mode: str, final: str = None):
     """v2 — DEUX modes seulement : DICTÉE et RÉUNION.
 
     DICTÉE : si le texte dicté est MANIFESTEMENT un rappel (« rappelle-moi… »,
@@ -2077,8 +2096,15 @@ def _post_process_by_mode(raw: str, mode: str):
     try:
         if reminders.is_reminder(raw):
             _create_reminder_from_text(raw)
+        # v1.4.0, le parseur n'a rien reconnu mais la phrase parle de rappeler :
+        # second passage par l'intelligence locale (si activée), qui extrait, et le
+        # parseur qui date. Pré-filtre strict : le modèle ne lit pas tout ce qu'on dicte.
+        elif _assist_reminder_candidate(raw) and _assist_ready() \
+                and _assist_settings()["assist_reminders"]:
+            _create_reminder_hybride(raw)
     except Exception as e:
         print(f"[dictée] auto-rappel ignoré ({e}).")
+    raw = final or raw   # Obsidian range le texte tel qu'il a été inséré
     # v1.0.13 — Capture Obsidian (ADDITIF, 100% local) : si un coffre est connecté,
     # chaque dictée est rangée au bon endroit via un routeur à mots-clés déterministe.
     # Hors du chemin critique (on est déjà sur un thread daemon) ; échec silencieux,
@@ -2170,6 +2196,13 @@ def _create_reminder_from_text(raw: str):
     if not datetime_iso:
         print("[dictée] rappel sans horaire -> ignoré (anti faux positif).")
         return
+    _register_reminder(titre, datetime_iso, echeance_naturelle, raw)
+
+
+def _register_reminder(titre: str, datetime_iso: str, echeance_naturelle: str, raw: str):
+    """Enregistre un rappel déjà daté : base, coffre Obsidian, notification native,
+    confirmation à l'écran. Partagé par le parseur (v1.0) et l'intelligence locale (v1.4.0)."""
+    now_ts = time.time()
     try:
         tid = _store.add_task(titre=titre, echeance=echeance_naturelle,
                               echeance_iso=datetime_iso, details=None,
@@ -4334,6 +4367,133 @@ class Api:
         finally:
             _dl_in_flight = False
 
+    # ---- v1.4.0, intelligence locale (aperçu) ---------------------------------
+    @_api_safe(default=lambda: {"preview": False})
+    def assist_state(self):
+        """État complet pour la carte Réglages : aperçu, dépendances, modèle, réglages."""
+        prefs = _assist_settings()
+        a = _get_assist()
+        st = {"preview": _preview_features()["assist"], "importable": a.importable(),
+              "model_present": a.model_present(), "loaded": a.loaded(), "loading": a.loading,
+              "last_error": a.last_error, "last_latency_s": a.last_latency_s,
+              "model_label": assist.MODEL_LABEL, "model_name": assist.MODEL_NAME,
+              "download": dict(_assist_dl)}
+        try:
+            st["model_size"] = model_store.optional_size(assist.MODEL_NAME) if not st["model_present"] else \
+                sum(os.path.getsize(os.path.join(dp, f)) for dp, _, fs in os.walk(_assist_model_dir()) for f in fs)
+        except Exception:
+            st["model_size"] = 0
+        st.update(prefs)
+        return st
+
+    @_api_safe(default=lambda: {"ok": False})
+    def assist_set(self, patch):
+        """Enregistre les réglages assist_* (clés blanches). Activation : préchauffe le
+        modèle s'il est là ; désactivation : le décharge tout de suite (RAM rendue)."""
+        patch = {k: v for k, v in (patch or {}).items() if k in _ASSIST_KEYS}
+        if "assist_signature" in patch:
+            patch["assist_signature"] = str(patch["assist_signature"] or "").strip()[:80]
+        for k in patch:
+            if k != "assist_signature":
+                patch[k] = bool(patch[k])
+        _save_settings(patch)
+        a = _get_assist()
+        if patch.get("assist_enabled") is True and a.model_present() and a.importable():
+            threading.Thread(target=a.load, name="assist-warm", daemon=True).start()
+        elif patch.get("assist_enabled") is False:
+            threading.Thread(target=a.unload, name="assist-unload", daemon=True).start()
+        return {"ok": True, **_assist_settings()}
+
+    @_api_safe(default=lambda: {"ok": False, "error": "Téléchargement impossible."})
+    def assist_download(self):
+        """Télécharge le modèle optionnel (vérifié, atomique, reprise). Non bloquant :
+        la progression est poussée à l'UI (assistProgress 0..1), la fin aussi."""
+        if _assist_dl["running"]:
+            return {"ok": False, "error": "Téléchargement déjà en cours."}
+        try:
+            import shutil as _sh
+            need = model_store.optional_size(assist.MODEL_NAME) or 700_000_000
+            if _sh.disk_usage(os.path.expanduser("~")).free < need + 500_000_000:
+                return {"ok": False, "error": "Espace disque insuffisant : libérez environ 1,5 Go puis réessayez."}
+        except Exception:
+            pass
+
+        def _run():
+            def _prog(done, total, label):
+                _assist_dl["pct"] = (float(done) / total) if total else 0.0
+                _ui("if(typeof assistProgress==='function') assistProgress(%.4f);" % _assist_dl["pct"])
+            try:
+                model_store.download_optional(assist.MODEL_NAME, progress=_prog)
+                _assist_dl["error"] = ""
+                _ui("if(typeof assistProgress==='function') assistProgress(1);")
+                a = _get_assist()
+                if _assist_settings()["assist_enabled"] and a.importable():
+                    a.load()
+            except Exception as e:
+                _assist_dl["error"] = str(e)[:160]
+                if _EV:
+                    _EV.log(_EV.E.ASSIST_FAIL, stage="download", reason=str(e)[:120])
+                _ui("if(typeof assistDownloadFailed==='function') assistDownloadFailed(%s);"
+                    % json.dumps(_te("Téléchargement interrompu. Vérifiez votre connexion et réessayez.")))
+            finally:
+                _assist_dl["running"] = False
+                _ui("if(typeof assistRefresh==='function') assistRefresh();")
+
+        _assist_dl.update({"running": True, "pct": 0.0, "error": ""})
+        threading.Thread(target=_run, name="assist-download", daemon=True).start()
+        return {"ok": True}
+
+    @_api_safe(default=lambda: {"ok": False, "error": "Compte rendu impossible."})
+    def assist_meeting_report(self, mid):
+        """Compte rendu d'une réunion par l'intelligence locale : extraction par morceaux,
+        rédaction déterministe, prénoms entendus proposés (jamais appliqués tout seuls).
+        Bloquant (comme la ré-analyse) ; progression poussée via assistReportProgress."""
+        if not _assist_ready():
+            return {"ok": False, "error": _te("Activez l'intelligence locale et téléchargez le modèle dans les Réglages.")}
+        if not _assist_settings()["assist_meetings"]:
+            return {"ok": False, "error": _te("Le compte rendu par l'intelligence locale est désactivé dans les Réglages.")}
+        m = self.get_meeting(mid)
+        if not m:
+            return {"ok": False, "error": "Réunion introuvable."}
+        data = self._load_speaker_payload(mid) or {}
+        blocks, names = data.get("blocks") or [], data.get("names") or {}
+        if not blocks:
+            plain = (m.get("transcription_structuree") or m.get("transcription_brute") or "").strip()
+            if not plain:
+                return {"ok": False, "error": _te("Cette réunion n'a pas encore de transcription.")}
+            blocks = [{"speaker": "spk_0", "text": plain}]
+
+        def _prog(i, n):
+            _ui("if(typeof assistReportProgress==='function') assistReportProgress(%d,%d);" % (i, n))
+        t0 = time.time()
+        try:
+            res = _get_assist().compte_rendu(blocks, names, progress=_prog)
+        except Exception as e:
+            res = None
+            if _EV:
+                _EV.log(_EV.E.ASSIST_FAIL, stage="meeting", reason=str(e)[:120])
+        if not res:
+            return {"ok": False, "error": _te("Le modèle n'a rien pu extraire de cette réunion.")}
+        # « Locuteur N » (numérotation humaine) -> identifiant de locuteur des blocs, seulement
+        # pour ceux qui n'ont pas encore de nom : la personne applique ou ignore chaque proposition.
+        ids = []
+        for b in blocks:
+            sid = b.get("speaker") or b.get("name") or b.get("locuteur") or ""
+            if sid and sid not in ids:
+                ids.append(sid)
+        suggestions = []
+        for loc, prenom in (res.get("noms") or {}).items():
+            for sid in ids:
+                if assist.libelle_locuteur(sid) == "Locuteur %s" % loc and not names.get(sid):
+                    suggestions.append({"speaker_id": sid, "label": assist.libelle_locuteur(sid), "prenom": prenom})
+        try:
+            _store.set_meeting_report(int(mid), res["markdown"])
+        except Exception:
+            pass
+        print(f"[assist] compte rendu : {res['morceaux_ok']}/{res['morceaux']} morceaux en {time.time() - t0:.0f} s.")
+        return {"ok": True, "markdown": res["markdown"], "suggestions": suggestions,
+                "morceaux": res["morceaux"], "morceaux_ok": res["morceaux_ok"]}
+
     @_api_safe(default=lambda: {})
     def get_diagnostics(self):
         """v3.3 — TOUR DE CONTRÔLE : état complet pour le diagnostic (à copier/envoyer
@@ -5610,6 +5770,135 @@ _telemetry = None           # v1.1.0 — planificateur de télémétrie (telemet
 _api_instance = None        # v3.3 — handle de l'instance Api (re-vérif licence en arrière-plan)
 _engine_ready = threading.Event()
 
+# --------------------------------------------------------------------------- #
+# v1.4.0, INTELLIGENCE LOCALE (aperçu). Un petit modèle de langue (LFM2.5-1.2B,
+# 4 bits, ~630 Mo) téléchargé à la demande, chargé paresseusement, déchargé après
+# dix minutes d'inactivité. Il ne touche JAMAIS au chemin brut : la dictée reste
+# le produit, il n'intervient que si la personne l'a activé, et tout résultat
+# douteux (trop lent, consigne recopiée, contenu perdu) rend le brut. Voir assist.py.
+# --------------------------------------------------------------------------- #
+_assist = None
+_assist_lock = threading.Lock()
+_assist_dl = {"running": False, "pct": 0.0, "error": ""}
+_ASSIST_KEYS = ("assist_enabled", "assist_intents", "assist_clean", "assist_reminders",
+                "assist_meetings", "assist_signature")
+_ASSIST_DEFAULTS = {"assist_enabled": False, "assist_intents": True, "assist_clean": False,
+                    "assist_reminders": True, "assist_meetings": True, "assist_signature": ""}
+
+
+def _assist_model_dir():
+    return model_store.optional_dir(assist.MODEL_NAME)
+
+
+def _get_assist():
+    """Instance unique, créée au premier besoin (aucun import lourd tant qu'on ne génère pas)."""
+    global _assist
+    with _assist_lock:
+        if _assist is None:
+            _assist = assist.Assist(_assist_model_dir, log=print)
+        return _assist
+
+
+def _preview_features() -> dict:
+    """Fonctions en aperçu, visibles seulement sur les Mac où le drapeau est posé :
+    `defaults write com.vlocal.identity preview_assist -string 1`, ou VLOCAL_PREVIEW=assist.
+    Le réglage vit hors du dépôt et hors de settings.json : personne ne l'active par accident."""
+    flags = set(f for f in (os.environ.get("VLOCAL_PREVIEW") or "").replace(",", " ").split() if f)
+    try:
+        if telemetry.MacPrefs().get("preview_assist") == "1":
+            flags.add("assist")
+    except Exception:
+        pass
+    return {"assist": "assist" in flags}
+
+
+def _assist_settings() -> dict:
+    s = _load_settings()
+    out = {}
+    for k, d in _ASSIST_DEFAULTS.items():
+        v = s.get(k, d)
+        out[k] = (str(v or "")[:80] if k == "assist_signature" else bool(v))
+    return out
+
+
+def _assist_ready() -> bool:
+    """Activé par la personne, en aperçu sur ce Mac, dépendances présentes, modèle téléchargé."""
+    try:
+        if not _assist_settings()["assist_enabled"] or not _preview_features()["assist"]:
+            return False
+        a = _get_assist()
+        return a.importable() and a.model_present()
+    except Exception:
+        return False
+
+
+def _assist_transform(raw: str, notify_ui: bool = True) -> str:
+    """Met en forme une dictée si elle porte une intention déclarée (« c'est un mail
+    pour Marie : … », « … en anglais ») ou, si le nettoyage est activé, la nettoie.
+    Retourne TOUJOURS un texte : le résultat s'il est digne de confiance, sinon le
+    texte dicté (sans le marqueur d'intention, qui n'est pas du contenu)."""
+    if not raw or not raw.strip():
+        return raw
+    prefs = _assist_settings()
+    intent, params, contenu = assist.detect_intent(raw, _UI_LANG)
+    if intent and not prefs["assist_intents"]:
+        intent = None
+    if intent is None:
+        if not prefs["assist_clean"]:
+            return raw
+        intent, contenu, params = "propre", raw, {}
+    if not contenu or not contenu.strip():
+        return raw
+    try:
+        overlay.work(_te("Mise en forme…"))
+    except Exception:
+        pass
+    ctx = {"signature": prefs["assist_signature"], "dest": (params or {}).get("dest") or "",
+           "lang": _UI_LANG}
+    t0 = time.time()
+    try:
+        out, info = _get_assist().transformer(intent, contenu, ctx)
+    except Exception as e:
+        out, info = None, str(e)[:120]
+    if out:
+        print(f"[assist] {intent} en {time.time() - t0:.1f} s ({info}).")
+        return out
+    print(f"[assist] {intent} : brut conservé ({info}).")
+    if _EV:
+        _EV.log(_EV.E.ASSIST_FALLBACK, level="warning", intent=intent, reason=str(info)[:80])
+    # Intention déclarée mais modèle muet : on rend le contenu SANS le marqueur,
+    # plus utile que « c'est un mail pour Marie : » inséré tel quel.
+    return contenu if intent != "propre" else raw
+
+
+_ASSIST_REMINDER_CUE = re.compile(r"(?i)\b(rappel|rappelle|rappeler|oublie|oublier|pense à|penser à|pensez à|"
+                                  r"remind|forget|remember|note pour|à ne pas oublier)\b")
+
+
+def _assist_reminder_candidate(raw: str) -> bool:
+    """Pré-filtre déterministe : le modèle n'est consulté que pour une phrase courte
+    qui parle de rappeler quelque chose. Tout le reste ne le réveille pas."""
+    return bool(raw) and len(raw) <= 320 and bool(_ASSIST_REMINDER_CUE.search(raw))
+
+
+def _create_reminder_hybride(raw: str):
+    """v1.4.0, Second passage quand le parseur déterministe n'a pas reconnu un rappel :
+    le modèle extrait {titre, quand}, le parseur calcule la date (le modèle ne date jamais).
+    Sans date fiable, rien n'est créé."""
+    if _recently_added_same(raw, _store):
+        return
+    import datetime as _dt
+    a = _get_assist()
+    extrait = a.extraire_rappel(raw)
+    r = assist.resoudre_rappel(extrait, raw, _dt.datetime.now())
+    if not r:
+        print("[assist] rappel : rien de fiable (%s)." % ("sans date" if extrait else "pas un rappel"))
+        return
+    glossary = _store.glossary_pairs() if _store else []
+    titre = processor.apply_glossary(r["titre"], glossary) if glossary else r["titre"]
+    _register_reminder(titre[:80], r["when"].strftime("%Y-%m-%d %H:%M"), r["label"] or "aucune", raw)
+    print(f"[assist] rappel créé : « {titre} » ({r['label']}).")
+
 
 # Phase 2 (RAM) — DÉCHARGEMENT À L'INACTIVITÉ : Whisper turbo (~1,6 Go) est le
 # poids lourd. On le libère après quelques minutes sans usage (RAM au repos
@@ -5724,6 +6013,12 @@ def _start_idle_unloader():
                               f"{_idle_mlx:.0f}s d'inactivité (RAM rendue).")
                 except Exception:
                     pass
+            # v1.4.0, modèle de langue (~700 Mo résidents) : rendu après 10 min sans usage.
+            try:
+                if _assist is not None:
+                    _assist.unload_if_idle()
+            except Exception:
+                pass
         except Exception:
             pass
         finally:
