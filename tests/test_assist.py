@@ -237,3 +237,78 @@ class TestNettoyageSansPerte(unittest.TestCase):
     def test_titre_rappeler_retire(self):
         r = assist.rappel_depuis_json('{"rappel": true, "titre": "Rappeler le point avec Gaspard", "quand": "vendredi"}')
         self.assertEqual(r["titre"], "Le point avec Gaspard")
+
+
+class TestCommande(unittest.TestCase):
+    OUI = ["Rédige un prompt pour créer une image d'un train qui est poursuivi par un avion.",
+           "Peux-tu me donner cinq idées de titres pour un post LinkedIn sur la dictée vocale",
+           "Traduis ça en anglais", "Corrige ce mail", "Explique la photosynthèse à un enfant de huit ans",
+           "Write a short email to Paul to confirm Tuesday's meeting", "Give me three names for a dictation app",
+           "Il faudrait que tu me rédiges une bio LinkedIn de trois lignes pour un développeur indépendant"]
+    NON = ["Peux-tu m'envoyer le devis avant jeudi", "Donne le message à Paul.", "Je fais la liste des courses ce soir",
+           "Rédige un compte rendu de la réunion et envoie-le à Paul avant ce soir", "Explique-lui que je serai en retard",
+           "Je vais écrire un mail à Marie ce soir pour lui expliquer", "Merci pour la note", "Je t'envoie le résumé ce soir",
+           "Fais la liste des participants avant la réunion s'il te plaît", "Trouve une salle pour vendredi et réserve-la",
+           "Propose-moi un objet de mail pour une relance commerciale et envoie-le à Marc"]
+
+    def test_rappel(self):
+        for t in self.OUI:
+            self.assertEqual(assist.detect_intent(t)[0], "commande", t)
+
+    def test_precision(self):
+        for t in self.NON:
+            self.assertIsNone(assist.detect_intent(t)[0], t)
+
+    def test_source_presse_papier(self):
+        it, p, _ = assist.detect_intent("Résume ce texte en trois phrases")
+        self.assertEqual((it, p["source"], p["transforme"]), ("commande", "clipboard", True))
+        it, p, _ = assist.detect_intent("Je veux que tu me rédiges un mail, ça c'est pour le contexte, il m'a proposé un rendez-vous")
+        self.assertEqual((it, p["source"]), ("commande", None))
+        it, p, _ = assist.detect_intent("Rédige un résumé de la réunion d'hier")
+        self.assertTrue(p["transforme"])          # un résumé suppose une matière : sans texte copié, rien
+
+    def test_garde_fous_commande(self):
+        c = "Rédige un prompt pour créer une image d'un train qui est poursuivi par un avion."
+        self.assertFalse(assist.commande_acceptable(c, c)[0])
+        self.assertFalse(assist.commande_acceptable(c, "A steam train races across the plains, chased by a fighter jet.")[0])
+        self.assertTrue(assist.commande_acceptable(c, "Un train à vapeur fonce sur des rails à travers une plaine, poursuivi par un avion de chasse volant bas, image cinématographique.")[0])
+        self.assertFalse(assist.commande_acceptable(c, "Une plage au coucher du soleil, palmiers et sable fin.")[0])
+        ok, info = assist.commande_acceptable("Résume ce texte en trois phrases", "Les licornes dansent sur Mars avec des dauphins volants et des robots.", source="La réunion a validé le budget et le périmètre de la version un.")
+        self.assertFalse(ok)
+
+    def test_queue_nom_nu(self):
+        self.assertIsNone(assist.detect_intent("Je te renvoie la version corrigée du contrat, merci pour la note")[0])
+        self.assertEqual(assist.detect_intent("on a validé le périmètre et le budget est confirmé, plus court")[0], "court")
+
+    def test_besoin_nettoyage(self):
+        self.assertFalse(assist.besoin_nettoyage("Rédige un prompt pour créer une image d'un train."))
+        self.assertTrue(assist.besoin_nettoyage("bonjour marie la réunion est confirmée"))
+        self.assertTrue(assist.besoin_nettoyage("Bonjour, la la réunion est confirmée."))
+
+
+class TestRoutageTransformations(unittest.TestCase):
+    def r(self, phrase, source="Bonjour, on peut organiser l'essai la semaine prochaine."):
+        it, p, _ = assist.detect_intent(phrase)
+        self.assertEqual(it, "commande", phrase)
+        return assist.intention_pour_transformation(p, phrase, source)
+
+    def test_routage(self):
+        self.assertEqual(self.r("Corrige ce mail"), "corrige")
+        self.assertEqual(self.r("Traduis ça en anglais"), "en")
+        self.assertEqual(self.r("Traduis ce texte", source="Hello, can we plan the trial next week?"), "fr")
+        self.assertEqual(self.r("Résume ce texte en trois phrases"), "court")
+        self.assertEqual(self.r("Reformule ça de manière plus formelle"), "formel")
+        self.assertEqual(self.r("Reformule ce message"), "propre")
+
+    def test_nettoyer_commande(self):
+        self.assertEqual(assist.nettoyer_commande("Sure, here are three names: A, B, C."), "A, B, C.")
+        self.assertTrue(assist.nettoyer_commande("Voici une liste :\n- a\n- b").startswith("- a"))
+        self.assertEqual(assist.nettoyer_commande("Réponse : paresseux, lent"), "paresseux, lent")
+
+    def test_repetitif(self):
+        self.assertTrue(assist.repetitif("\n".join("- Fromages %d" % i for i in range(8))))
+        self.assertFalse(assist.repetitif("- lait\n- pain\n- oeufs\n- beurre\n- sel\n- poivre"))
+
+    def test_meta_refusee(self):
+        ok, info = assist.commande_acceptable("Corrige ce mail", "Je corrige ce message.")
+        self.assertFalse(ok)

@@ -3,6 +3,28 @@
 Dates are publication dates on the update channel. Earlier internal versions
 (3.x, June 2026) are not listed.
 
+## 1.4.1, 16 September 2026
+
+- **Local intelligence: instructions, not just frames.** "Rédige un prompt pour
+  créer une image d'un train poursuivi par un avion" now produces the prompt;
+  "donne-moi trois idées de…", "écris un mail à Marie pour…", "explique…",
+  "peux-tu me…" work the same, in French and English. "Traduis ça", "résume ce
+  texte", "reformule ça de manière formelle" act on the text you copied. An
+  instruction meant for a person ("… et envoie-le à Paul") or a plain sentence
+  that happens to start with a verb is left alone: zero false positive on 80
+  real dictations. Every answer is checked (not a copy of the request, in its
+  language, on its subject, no "here is", no looping list) or the dictation is
+  inserted as spoken. Spelling correction on request is deliberately off: the
+  model changed the meaning half the time in tests.
+- **Fast when there is nothing to do.** Cleanup only wakes the model when the
+  text shows a visible flaw (hesitation, doubled word, missing punctuation);
+  a clean dictation goes through with no wait. The model loads while you are
+  still speaking, so the end of a dictation never pays the load time, and it
+  stays unloaded when free memory is under 1.2 GB.
+- **Typing effect.** With local intelligence on, the text is written at the
+  cursor in small pieces, like an answer arriving. A switch in the card turns it
+  off. What is inserted does not change, and Cmd+V still pastes the whole text.
+
 ## 1.4.0, 16 September 2026
 
 - **Local intelligence, in preview.** A small language model (LFM2.5-1.2B by

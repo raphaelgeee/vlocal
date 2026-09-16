@@ -187,7 +187,7 @@ _window_visible = True   # suivi de visibilité (fenêtre naît affichée)
 WIN_W = 1180            # v3.1 — dashboard plein écran (était 380, carte flottante)
 WIN_H = 780             # v3.1 — (était 720)
 PANEL_W = 840            # (hérité ; set_meeting_panel neutralisé en v3.1)
-APP_VERSION = "1.4.0"   # 16 septembre 2026. Synchrone avec le fichier VERSION (build) ;
+APP_VERSION = "1.4.1"   # 16 septembre 2026. Synchrone avec le fichier VERSION (build) ;
                         # affiché dans l'onglet « Mises à jour ». Historique : CHANGELOG.md.
 # Libellé humain du raccourci global actif (posé par start_global_hotkey,
 # consommé par le message de permission _check_hotkey_perm).
@@ -390,6 +390,7 @@ _UI_LANG = "fr"
 # support). Override possible par VLOCAL_DEV=1 (build dev local).
 _BT = {
   "Mise en forme…": "Formatting…",
+  "Rédaction…": "Writing…",
   "Téléchargement interrompu. Vérifiez votre connexion et réessayez.": "Download interrupted. Check your connection and try again.",
   "Activez l'intelligence locale et téléchargez le modèle dans les Réglages.": "Turn on local intelligence and download the model in Settings.",
   "Le compte rendu par l'intelligence locale est désactivé dans les Réglages.": "Meeting reports by local intelligence are turned off in Settings.",
@@ -3113,6 +3114,7 @@ class Api:
                 return False
         except Exception:
             pass
+        _assist_prewarm()
         return bool(_controller.start())
 
     def engine_ready(self):
@@ -5410,6 +5412,7 @@ def start_global_hotkey():
         # instantanée ; le micro s'ouvre derrière, et on bascule l'overlay seulement
         # si ça échoue (micro indispo) ou si c'est refusé (occupé).
         overlay.recording()             # overlay État 1 (waveform live) — INSTANTANÉ
+        _assist_prewarm()               # v1.4.1 : le modèle local se charge pendant qu'on parle
         try:
             started = bool(_controller.start())
         except Exception as e:
@@ -5518,7 +5521,18 @@ def start_global_hotkey():
                     import inserter
                     # v1.0.22 — chaînage : collages sérialisés (jamais entrelacés).
                     with _insert_serial_lock:
-                        inserted = bool(inserter.insert_at_cursor(text, original=_orig_clip))
+                        # v1.4.1 : effet d'écriture (insertion par morceaux) quand l'intelligence
+                        # locale est active et que la personne l'a gardé ; sinon collage d'un bloc.
+                        _tw = False
+                        try:
+                            _tw = _assist_settings()["assist_typewriter"] and _assist_ready() \
+                                and len(text) <= 4000
+                        except Exception:
+                            _tw = False
+                        if _tw:
+                            inserted = bool(inserter.insert_at_cursor_progressive(text, original=_orig_clip))
+                        else:
+                            inserted = bool(inserter.insert_at_cursor(text, original=_orig_clip))
                     if not inserted:
                         # v1.0.6 — OBSERVABILITÉ (tour de contrôle) : on compte les
                         # échecs d'insertion, friction n°1 connue (Accessibilité non
@@ -5802,9 +5816,12 @@ _assist = None
 _assist_lock = threading.Lock()
 _assist_dl = {"running": False, "pct": 0.0, "error": ""}
 _ASSIST_KEYS = ("assist_enabled", "assist_intents", "assist_clean", "assist_reminders",
-                "assist_meetings", "assist_signature")
+                "assist_meetings", "assist_signature", "assist_typewriter")
 _ASSIST_DEFAULTS = {"assist_enabled": False, "assist_intents": True, "assist_clean": False,
-                    "assist_reminders": True, "assist_meetings": True, "assist_signature": ""}
+                    "assist_reminders": True, "assist_meetings": True, "assist_signature": "",
+                    "assist_typewriter": True}
+_ASSIST_RAM_MIN_GB = 1.2      # en dessous, on ne charge pas le modèle (~0,7 Go résidents)
+_assist_ram_warned = [0.0]
 
 
 def _assist_model_dir():
@@ -5843,14 +5860,38 @@ def _assist_settings() -> dict:
 
 
 def _assist_ready() -> bool:
-    """Activé par la personne, en aperçu sur ce Mac, dépendances présentes, modèle téléchargé."""
+    """Activé par la personne, en aperçu sur ce Mac, dépendances présentes, modèle téléchargé,
+    et assez de mémoire libre pour le tenir sans mettre le Mac à genoux."""
     try:
         if not _assist_settings()["assist_enabled"] or not _preview_features()["assist"]:
             return False
         a = _get_assist()
-        return a.importable() and a.model_present()
+        if not (a.importable() and a.model_present()):
+            return False
+        if not a.loaded():
+            try:
+                import psutil as _ps
+                libre = _ps.virtual_memory().available / 2 ** 30
+                if libre < _ASSIST_RAM_MIN_GB:
+                    if time.time() - _assist_ram_warned[0] > 600:
+                        _assist_ram_warned[0] = time.time()
+                        print(f"[assist] mémoire libre {libre:.1f} Go < {_ASSIST_RAM_MIN_GB} Go : modèle non chargé, brut conservé.")
+                    return False
+            except Exception:
+                pass
+        return True
     except Exception:
         return False
+
+
+def _assist_prewarm():
+    """Au début d'une dictée : charge le modèle en fond pendant que la personne parle,
+    pour que la fin de dictée ne paie jamais le chargement (1 à 2 s)."""
+    try:
+        if _assist_ready() and not _get_assist().loaded() and not _get_assist().loading:
+            threading.Thread(target=_get_assist().load, name="assist-prewarm", daemon=True).start()
+    except Exception:
+        pass
 
 
 def _assist_transform(raw: str, notify_ui: bool = True) -> str:
@@ -5861,21 +5902,38 @@ def _assist_transform(raw: str, notify_ui: bool = True) -> str:
     if not raw or not raw.strip():
         return raw
     prefs = _assist_settings()
+    _assist_last["intent"] = None
     intent, params, contenu = assist.detect_intent(raw, _UI_LANG)
     if intent and not prefs["assist_intents"]:
         intent = None
     if intent is None:
         if not prefs["assist_clean"]:
             return raw
+        # Le nettoyage coûte une seconde et ne change presque jamais rien : on ne réveille
+        # le modèle que si le texte porte un défaut visible (tics, doublon, ponctuation absente).
+        if not assist.besoin_nettoyage(raw):
+            return raw
         intent, contenu, params = "propre", raw, {}
     if not contenu or not contenu.strip():
         return raw
+    ctx = {"signature": prefs["assist_signature"], "dest": (params or {}).get("dest") or "",
+           "lang": _UI_LANG, "params": params or {}, "contexte": ""}
+    # Le texte copié sert de matière : réponse à un message, ou consigne qui vise « ça / ce texte ».
+    if intent == "reponse" or (params or {}).get("source") == "clipboard":
+        try:
+            import clipboard as _cb
+            src = (_cb.get_clipboard() or "").strip()
+            if src and src != raw.strip() and len(src) <= 12000:
+                ctx["contexte"] = src
+        except Exception:
+            pass
+        if not ctx["contexte"]:
+            print(f"[assist] {intent} : rien de copié à retravailler, brut conservé.")
+            return contenu if intent == "commande" and not (params or {}).get("transforme") else raw
     try:
-        overlay.work(_te("Mise en forme…"))
+        overlay.work(_te("Rédaction…") if intent in ("commande", "reponse") else _te("Mise en forme…"))
     except Exception:
         pass
-    ctx = {"signature": prefs["assist_signature"], "dest": (params or {}).get("dest") or "",
-           "lang": _UI_LANG}
     t0 = time.time()
     try:
         out, info = _get_assist().transformer(intent, contenu, ctx)
@@ -5883,6 +5941,7 @@ def _assist_transform(raw: str, notify_ui: bool = True) -> str:
         out, info = None, str(e)[:120]
     if out:
         print(f"[assist] {intent} en {time.time() - t0:.1f} s ({info}).")
+        _assist_last["intent"] = intent
         return out
     print(f"[assist] {intent} : brut conservé ({info}).")
     if _EV:
@@ -5890,6 +5949,9 @@ def _assist_transform(raw: str, notify_ui: bool = True) -> str:
     # Intention déclarée mais modèle muet : on rend le contenu SANS le marqueur,
     # plus utile que « c'est un mail pour Marie : » inséré tel quel.
     return contenu if intent != "propre" else raw
+
+
+_assist_last = {"intent": None}    # intention de la dernière dictée transformée (effet d'écriture)
 
 
 _ASSIST_REMINDER_CUE = re.compile(r"(?i)\b(rappel|rappelle|rappeler|oublie|oublier|pense à|penser à|pensez à|"

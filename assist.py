@@ -30,6 +30,7 @@ IDLE_UNLOAD_S = 10 * 60                          # déchargé après dix minutes
 TIMEOUT_INTENT_S = 8.0                           # mise en forme demandée
 TIMEOUT_CLEAN_S = 3.0                            # nettoyage léger : au-delà, brut
 TIMEOUT_REMINDER_S = 4.0
+TIMEOUT_COMMANDE_S = 12.0                        # une consigne exécutée (rédaction libre)
 TIMEOUT_MEETING_S = 120.0
 
 # --------------------------------------------------------------------------- #
@@ -53,29 +54,157 @@ _NOMS = {
     "text": "message", "text message": "message", "shorter": "court", "summary": "court", "formal": "formel",
     "formal tone": "formel", "linkedin post": "post",
 }
+# Marqueurs de queue qui se suffisent à eux-mêmes (« …, plus court. »)
+_NOMS_QUEUE_LIBRES = {"plus court", "version courte", "version formelle", "ton formel", "shorter", "formal tone", "bullet points", "to-do", "todo", "to do", "liste à puces"}
 _NOMS_ALT = "|".join(sorted((re.escape(k) for k in _NOMS), key=len, reverse=True))
 
 # « c'est un mail pour Marie : … » / « this is an email to Paul: … » / « en anglais : … »
 _TETE = re.compile(
     r"^\s*(?:alors|bon|ok|okay|donc)?[,\s]*"
-    r"(?:(?:c'est|c est|ceci est|voici|voilà|voila|ça sera|ce sera|this is|it's|it is|here is|make this)\s+(?:un|une|le|la|an?|the)?\s*)?"
+    r"(?:(?:c'est|c est|ceci est|voici|voilà|voila|ça sera|ce sera|this is|it's|it is|here is|make this|"
+    r"fais[- ]moi|fais|rédige[- ]moi|rédige|redige|écris[- ]moi|écris|ecris|prépare[- ]moi|prépare|tu me fais|tu me rédiges|tu rédiges|"
+    r"je veux|je voudrais|j'aimerais|il me faut|mets[- ]moi ça en|mets ça en|mets[- ]moi en|"
+    r"write me|write|draft me|draft|make me|give me|i want|i need|i'd like|turn this into|put this in)\s+(?:un|une|le|la|an?|the)?\s*)?"
     r"(?:(?:en|in|version|as)\s+)?"
     r"(?P<nom>" + _NOMS_ALT + r")"
     r"(?:\s+(?:pour|à|a|to|for)\s+(?P<dest>[^:,.\n]{1,40}?))?"
-    r"\s*[:,.]\s+(?P<contenu>.+)$", re.I | re.S)
+    r"\s*[:,]\s+(?P<contenu>.+)$", re.I | re.S)
 # « … voilà, mets ça en mail. » / « … make it a list » / « … en anglais. »
 _QUEUE = re.compile(
     r"^(?P<contenu>.+?)"
     r"[\s,.;:!]+(?:et\s+)?(?:voilà|voila|bon|donc|ok)?[,\s]*"
-    r"(?:(?:mets|met|mets-moi|mets moi|met moi|transforme|passe|fais|formate|mets-le|mets le|tu me mets|tu mets|tu le mets|make|turn|put|format)"
-    r"\s*(?:ça|sa|le|la|moi|moi ça|tout ça|le tout|tout|it|this|that|this into|it into)?\s*(?:en|dans|into|in|as|to)?\s*(?:un|une|an?|the)?\s*)?"
-    r"(?:en\s+|in\s+|as\s+(?:an?\s+)?)?(?P<nom>" + _NOMS_ALT + r")"
+    r"(?:(?P<verbe>(?:mets|met|mets-moi|mets moi|met moi|transforme|passe|fais|formate|mets-le|mets le|tu me mets|tu mets|tu le mets|make|turn|put|format)"
+    r"\s*(?:ça|sa|le|la|moi|moi ça|tout ça|le tout|tout|it|this|that|this into|it into)?\s*(?:en|dans|into|in|as|to)?\s*(?:un|une|an?|the)?\s*)"
+    r"|(?P<prep>en\s+|in\s+|as\s+(?:an?\s+)?|version\s+|ton\s+))?(?P<nom>" + _NOMS_ALT + r")"
     r"(?:\s+(?:pour|à|a|to|for)\s+(?P<dest>[^:,.\n]{1,40}?))?"
     r"\s*[.!,]*\s*$", re.I | re.S)
 # « réponds-lui que … » : la réponse s'appuie sur le texte copié
 _REPONSE = re.compile(
     r"^\s*(?:alors|bon|ok)?[,\s]*(?:réponds|repond|répond|réponds-lui|réponds lui|réponds-leur|réponds leur|reply|answer)(?:\s*(?:-|\s)(?:lui|leur|him|her|them))?"
     r"\s*(?:que|qu'|:|,|that)?\s*(?P<contenu>.+)$", re.I | re.S)
+
+
+# Une CONSIGNE adressée au modèle : un verbe d'action en tête (impératif ou demande
+# polie) ET un livrable nommé dans les premiers mots. « Rédige un prompt pour créer une
+# image d'un train poursuivi par un avion » -> le modèle rédige le prompt. Sans
+# livrable nommé (« peux-tu m'envoyer le devis »), c'est du texte dicté, pas une consigne.
+_CMD_VERBES = (r"rédige|redige|écris|ecris|génère|genere|crée|cree|propose|donne|trouve|fais|prépare|prepare|liste|traduis|résume|resume|"
+               r"reformule|corrige|améliore|ameliore|explique|décris|decris|invente|imagine|suggère|suggere|formule|développe|developpe|"
+               r"complète|complete|raccourcis|synthétise|synthetise|structure|produis|construis|dresse|élabore|elabore|"
+               r"rédiges|rediges|écrives|ecrives|génères|generes|crées|crees|proposes|donnes|trouves|fasses|prépares|prepares|listes|traduises|"
+               r"résumes|resumes|reformules|corriges|améliores|ameliores|expliques|décrives|decrives|inventes|suggères|suggeres|formules|"
+               r"développes|developpes|complètes|completes|synthétises|synthetises|structures|produises|construises|dresses|élabores|elabores|"
+               r"rédiger|rediger|écrire|ecrire|générer|generer|créer|creer|proposer|donner|trouver|faire|préparer|preparer|lister|traduire|"
+               r"résumer|resumer|reformuler|corriger|améliorer|ameliorer|expliquer|décrire|decrire|inventer|imaginer|suggérer|suggerer|"
+               r"formuler|développer|developper|compléter|completer|raccourcir|synthétiser|synthetiser|structurer|produire|construire|dresser|élaborer|elaborer|"
+               r"write|draft|generate|create|give|find|make|prepare|list|translate|summarize|summarise|rewrite|fix|improve|explain|"
+               r"describe|invent|imagine|suggest|come up with|develop|complete|shorten|structure|produce|build|compose")
+_CMD_POLI = (r"(?:peux[- ]tu|pourrais[- ]tu|tu peux|est[- ]ce que tu (?:peux|pourrais)|j'aimerais que tu|je veux que tu|je voudrais que tu|"
+             r"il faudrait que tu|tu (?:me|vas)|s'il te plaît|stp|"
+             r"can you|could you|would you|please|i want you to|i need you to|i'd like you to)\s+(?:me\s+|m'|moi\s+)?")
+_CMD_LIVRABLES = (r"prompts?|e-?mails?|mails?|courriels?|messages?|textos?|sms|textes?|réponses?|reponses?|résumés?|resumes?|synthèses?|syntheses?|"
+                  r"descriptions?|listes?|idées?|idees?|titres?|noms?|slogans?|accroches?|plans?|paragraphes?|phrases?|introductions?|intros?|"
+                  r"conclusions?|bios?|biographies?|posts?|publications?|tweets?|légendes?|legendes?|traductions?|versions?|brouillons?|notes?|"
+                  r"exemples?|questions?|arguments?|synonymes?|définitions?|definitions?|explications?|poèmes?|poemes?|histoires?|discours|"
+                  r"scripts?|comptes? rendus?|ordres? du jour|objets? de mail|formules?|reformulations?|recettes?|programmes?|planning|"
+                  r"tableaux?|comparatifs?|pitch|argumentaires?|fiches?|checklists?|to-?do|variantes?|"
+                  r"emails?|replies|reply|summary|summaries|list|lists|ideas?|titles?|names?|taglines?|hooks?|plans?|paragraphs?|sentences?|"
+                  r"introduction|conclusion|bio|post|caption|captions|translation|version|draft|drafts|note|notes|examples?|questions?|"
+                  r"arguments?|synonyms?|definitions?|explanation|poem|story|speech|script|report|agenda|subject line|checklist|pitch|table")
+_COMMANDE = re.compile(
+    r"^\s*(?:alors|bon|ok|okay|donc|hey|dis[- ]moi|dis)?[,\s]*"
+    r"(?:" + _CMD_POLI + r")?"
+    r"(?P<verbe>(?:" + _CMD_VERBES + r"))(?:[- ](?:moi|nous|me|le|la|les|lui|leur|y|en))?\s+"
+    r"(?P<avant>(?:\w+[' ]){0,4}?)"                  # « un », « moi un », « cinq », « une bonne »
+    r"(?P<objet>(?:" + _CMD_LIVRABLES + r"))\b"
+    r"(?P<reste>.*)$", re.I | re.S)
+# La consigne porte sur un texte déjà copié : « résume ça », « traduis ce texte », « corrige ce mail »
+_CMD_SOURCE = re.compile(r"(?i)\b(ça|ca|cela|ce texte|ce mail|ce message|ce paragraphe|cet e-?mail|ce qui est copié|le texte copié|le message copié|"
+                         r"le presse-papiers?|ci-dessus|this|it|that|the copied text|the clipboard|this text|this email|this message)\b")
+# Verbes qui TRANSFORMENT un texte : sans texte inline ni presse-papier, pas de source, on ne fait rien.
+_CMD_TRANSFORME = re.compile(r"(?i)^(traduis|résume|resume|reformule|corrige|améliore|ameliore|raccourcis|synthétise|synthetise|structure|complète|complete|"
+                             r"translate|summarize|summarise|rewrite|fix|improve|shorten|complete)$")
+
+
+_COMMANDE_SRC = re.compile(
+    r"^\s*(?:alors|bon|ok|okay|donc)?[,\s]*(?:" + _CMD_POLI + r")?"
+    r"(?P<verbe>" + _CMD_TRANSFORME.pattern.strip("^$(?i:)").lstrip("(").rstrip(")") + r"|traduire|résumer|resumer|reformuler|corriger|améliorer|ameliorer|raccourcir|synthétiser|synthetiser|structurer|compléter|completer)"
+    r"(?:[- ](?:moi|me))?\s+(?P<src>ça|ca|cela|ce texte|ce mail|ce message|ce paragraphe|cet e-?mail|le texte copié|le message copié|le presse-papiers?|"
+    r"this|it|that|this text|this email|this message|the copied text)\b(?P<reste>.*)$", re.I | re.S)
+# explication d'un sujet : pas de livrable nommé mais un verbe qui n'a de sens que pour le modèle
+_COMMANDE_EXPLIQUE = re.compile(
+    r"^\s*(?:alors|bon|ok|okay|donc)?[,\s]*(?:" + _CMD_POLI + r")?"
+    r"(?P<verbe>explique|expliquer|décris|decris|décrire|decrire|définis|definis|définir|definir|explain|describe|define)(?:[- ](?:moi|me))?\s+"
+    r"(?!(?:lui|leur|à|a|au|aux|que|qu'|him|her|them|to)\b)(?P<reste>\S+(?:\s+\S+){2,}.*)$", re.I | re.S)
+# Livrables qui supposent une matière première (on ne les fabrique pas à partir de rien)
+_OBJETS_AVEC_SOURCE = re.compile(r"(?i)^(comptes? rendus?|résumés?|resumes?|synthèses?|syntheses?|traductions?|reformulations?|corrections?|summary|summaries|translation|report)$")
+# Suite qui s'adresse à un humain : « … et envoie-le à Paul », « … puis préviens Julien »
+_SUITE_HUMAINE = re.compile(r"(?i)\b(et|puis|ensuite)\s+(envoie|envoies|transmets|appelle|préviens|previens|passe|dis|rappelle|apporte|mets|range|send|call|tell|forward)\b")
+
+
+def detect_commande(text):
+    """(params, texte) si la dictée est une consigne pour le modèle, sinon None.
+    params : objet (livrable), verbe, source ('clipboard' si la consigne vise un texte copié),
+    transforme (le verbe attend un texte à retravailler)."""
+    t = (text or "").strip()
+    if len(t.split()) < 3 or len(t) > 1200:
+        return None
+    m = _COMMANDE.match(t) if len(t.split()) >= 4 else None
+    if not m:
+        ms = _COMMANDE_SRC.match(t)
+        if ms:
+            return {"objet": None, "verbe": ms.group("verbe").lower(), "source": "clipboard", "transforme": True}, t
+        me = _COMMANDE_EXPLIQUE.match(t)
+        if me and not _SUITE_HUMAINE.search(me.group("reste")):
+            return {"objet": None, "verbe": me.group("verbe").lower(), "source": None, "transforme": False}, t
+        return None
+    verbe = m.group("verbe").lower()
+    objet = m.group("objet").lower()
+    reste = m.group("reste") or ""
+    if _SUITE_HUMAINE.search(reste):
+        return None
+    # « donne le message à Paul », « fais la liste des courses demain » : un impératif adressé à
+    # un HUMAIN a souvent un destinataire ; on ne le prend pas pour une consigne au modèle.
+    if re.match(r"(?i)^\s*(à|a|au|aux|pour)\s+[A-ZÀ-Ý][\w'-]+\s*[.!]?\s*$", reste) and verbe in ("donne", "fais", "give", "make", "envoie"):
+        return None
+    # La source (texte copié) n'est retenue que si le démonstratif suit de près le verbe ou le
+    # livrable (« résume ce texte en trois phrases »), pas un « ça » perdu plus loin.
+    source = "clipboard" if _CMD_SOURCE.match(" ".join(reste.split()[:4])) else None
+    if verbe in ("fais", "make", "donne", "give", "trouve", "find", "faire", "donner", "trouver") and not re.search(
+            r"(?i)\b(un|une|des|deux|trois|quatre|cinq|six|dix|quelques|plusieurs|\d+|me|moi|a|an|some|two|three|four|five|ten|few|several)\b", m.group("avant") or ""):
+        # « fais liste courses » / « donne message Paul » : trop court pour être une demande claire
+        return None
+    transforme = bool(_CMD_TRANSFORME.match(verbe)) or bool(_OBJETS_AVEC_SOURCE.match(objet))
+    return {"objet": objet, "verbe": verbe, "source": source or ("clipboard" if transforme else None),
+            "transforme": transforme}, t
+
+
+def intention_pour_transformation(params, consigne, source):
+    """Une consigne de transformation sur un texte copié devient l'intention spécialisée
+    correspondante, appliquée à la source : « corrige ce mail » -> propre, « résume ça » -> court,
+    « traduis ça en anglais » -> en, « reformule ça de manière formelle » -> formel."""
+    verbe = (params.get("verbe") or "").lower()
+    objet = (params.get("objet") or "").lower()
+    c = (consigne or "").lower()
+    if re.match(r"^(traduis|traduire|translate)", verbe) or re.match(r"^(traductions?|translation)$", objet):
+        if re.search(r"\b(anglais|english)\b", c):
+            return "en"
+        if re.search(r"\b(français|francais|french)\b", c):
+            return "fr"
+        return "fr" if langue_probable(source) == "en" else "en"
+    if re.match(r"^(résume|resume|résumer|resumer|synthétise|synthetise|synthétiser|synthetiser|raccourcis|raccourcir|summarize|summarise|shorten)", verbe) \
+            or re.match(r"^(résumés?|resumes?|synthèses?|syntheses?|summary|summaries)$", objet):
+        return "court"
+    if re.search(r"\b(formel|formelle|soutenu|professionnel|professionnelle|formal|professional)\b", c):
+        return "formel"
+    if re.search(r"\b(liste|puces|list|bullet)\b", c):
+        return "liste"
+    if re.match(r"^(structure|structurer)", verbe) or re.search(r"\b(note)\b", c):
+        return "note"
+    if re.match(r"^(corrige|corriger|fix)", verbe) or re.match(r"^(corrections?)$", objet):
+        return "corrige"
+    # reformule, améliore, complète : on garde le propos et les mots (garde-fous du nettoyage)
+    return "propre"
 
 
 def detect_intent(text, lang="fr"):
@@ -95,11 +224,41 @@ def detect_intent(text, lang="fr"):
         params = {"dest": (m.group("dest") or "").strip()} if m.group("dest") else {}
         return nom, params, m.group("contenu").strip()
     m = _QUEUE.match(t)
-    if m and len(m.group("contenu").split()) >= 3:
+    # Un nom nu en fin de phrase (« … la note », « … un objet de mail pour X ») n'est pas une
+    # demande : il faut un verbe de mise en forme, une préposition, ou un marqueur qui se suffit.
+    if m and len(m.group("contenu").split()) >= 3 and (m.group("verbe") or m.group("prep")
+                                                       or m.group("nom").lower() in _NOMS_QUEUE_LIBRES):
         nom = _NOMS[m.group("nom").lower()]
         params = {"dest": (m.group("dest") or "").strip()} if m.group("dest") else {}
         return nom, params, m.group("contenu").strip().rstrip(",;:")
+    c = detect_commande(t)
+    if c:
+        return "commande", c[0], c[1]
     return None, {}, text
+
+
+# Le nettoyage par le modèle coûte une seconde et ne change presque jamais rien :
+# Whisper ponctue déjà, processor retire les tics. On ne réveille le modèle que si
+# le texte porte un défaut visible.
+_DOUBLON = re.compile(r"(?i)\b(\w{2,})\s+\1\b")
+_HESITATION = re.compile(r"(?i)\b(euh+|heu+|hum+|hmm+|bah|ben|hein)\b")
+
+
+def besoin_nettoyage(texte):
+    """True si un nettoyage a une chance d'apporter quelque chose."""
+    t = (texte or "").strip()
+    if not t:
+        return False
+    if _HESITATION.search(t) or _DOUBLON.search(t):
+        return True
+    mots = t.split()
+    if t[0].islower() and len(mots) >= 3:
+        return True
+    if len(mots) >= 12 and not re.search(r"[.!?…]", t):
+        return True
+    if len(mots) >= 30 and len(re.findall(r"[.!?…,;:]", t)) < len(mots) / 25:
+        return True
+    return False
 
 
 # --------------------------------------------------------------------------- #
@@ -112,6 +271,7 @@ REGLE_COMMUNE = ("Tu mets en forme le texte dicté par la personne. Tu gardes so
 # La consigne vient APRÈS le texte : un modèle de cette taille recopie les
 # interdits s'ils sont énoncés avant, et les traite comme du contenu.
 CONSIGNES = {
+    "corrige": "Corrige uniquement l'orthographe, la grammaire, les accords et la ponctuation de ce texte. Mêmes mots, même ordre, même sens ; ne reformule rien, n'ajoute rien.",
     "propre": "Réécris ce texte à l'identique, en corrigeant seulement la ponctuation, les majuscules, les hésitations (euh, hum) et les répétitions involontaires. Les nombres, dates et heures en chiffres. Même ordre, mêmes mots.",
     "mail": "Réécris ce texte sous forme de courriel{dest} : une ligne d'ouverture, le contenu en paragraphes courts, une formule de politesse{signature}. Garde les mots, les informations et le tutoiement ou vouvoiement du texte.",
     "note": "Réécris ce texte sous forme de note : un titre court sur la première ligne, puis une puce par idée, avec les mots du texte.",
@@ -123,6 +283,7 @@ CONSIGNES = {
     "fr": "Traduis ce texte en français naturel et professionnel. Réponds uniquement par la traduction.",
     "court": "Raccourcis ce texte de moitié en gardant toutes les informations concrètes : noms, dates, chiffres, décisions.",
     "formel": "Réécris ce texte dans un registre formel et soutenu, avec exactement les mêmes informations.",
+    "commande": "",   # traité à part : la demande EST le message, voir messages_pour
     "reponse": "La personne répond au message reçu ci-dessus. Rédige sa réponse à partir de son texte, dans la langue du message reçu, avec une ouverture et une formule de politesse courtes{signature}. Réponds uniquement par la réponse.",
 }
 
@@ -151,10 +312,35 @@ CR_CHUNK_REGLE = ("Tu lis un extrait de transcription de réunion ; chaque ligne
 CR_CHUNK_CHARS = 9000    # environ 2 500 tokens : la taille où l'extraction reste fidèle
 
 
+REGLE_COMMANDE = ("Tu es un assistant d'écriture qui tourne sur l'ordinateur de la personne. Elle te dicte une demande : "
+                  "tu y réponds directement, par le résultat demandé et rien d'autre : pas d'introduction, pas de commentaire, "
+                  "pas de rappel de la demande, pas de question, pas de « voici ». Tu réponds dans la langue de la demande, "
+                  "de façon concrète et précise, sans te répéter. Si un texte source est fourni, tu travailles uniquement "
+                  "à partir de lui, sans inventer de fait, de nom ni de chiffre.\n"
+                  "Exemples.\n"
+                  "Demande : Donne-moi trois synonymes de lent.\nRéponse : paresseux, traînant, poussif\n"
+                  "Demande : Écris un mail à Paul pour reporter le point de mardi à jeudi.\nRéponse : Bonjour Paul,\n\n"
+                  "Je dois reporter notre point de mardi. Est-ce que jeudi, à la même heure, te conviendrait ?\n\nMerci et bonne journée,\n"
+                  "Demande : Rédige un prompt pour créer une image d'un chat qui lit un journal.\nRéponse : Un chat roux assis dans un "
+                  "fauteuil en cuir, lunettes sur le nez, lisant un journal déplié, lumière chaude du matin, style photo réaliste, 50 mm.")
+
+
 def messages_pour(intent, contenu, ctx=None):
-    """Construit (system, user) pour une intention. ctx : signature, dest, contexte, lang.
-    Le texte vient d'abord, la consigne ensuite."""
+    """Construit (system, user) pour une intention. ctx : signature, dest, contexte, lang, params.
+    Le texte vient d'abord, la consigne ensuite. Pour une commande, la demande EST le message."""
     ctx = ctx or {}
+    if intent == "commande":
+        user = ""
+        src = (ctx.get("contexte") or "").strip()
+        if src:
+            user += "Texte source :\n" + src[:6000] + "\n\n"
+        user += contenu.strip()
+        lp = langue_probable(contenu)
+        if lp == "en":
+            user += "\n\n(Answer in English.)"
+        elif lp == "fr":
+            user += "\n\n(Réponds en français.)"
+        return REGLE_COMMANDE, user
     consigne = CONSIGNES[intent]
     dest = ctx.get("dest") or ""
     signature = (ctx.get("signature") or "").strip()
@@ -189,7 +375,8 @@ _PREAMBULES = re.compile(r"^\s*(voici|here is|here's|bien sûr|certainly|sure)[^
 _FUITES = re.compile(r"(?i)(texte dicté|la dictée|cette dictée|this dictation|dictation has been|reformul|"
                      r"n'ajout|ne pas ajouter|n'invent|ne pas inventer|sans commentaire|guillemets|langue du texte|"
                      r"assistant ia|format attendu :|cher\(e\)|interlocuteur\(e\)|objet : réponse à votre|maintains the original|"
-                     r"garder le sens|modifier le sens|changer le sens|conserver (?:son|le) sens|sens initial|première (?:ligne|phrase) (?:courte|accroch)|consigne)")
+                     r"garder le sens|modifier le sens|changer le sens|conserver (?:son|le) sens|sens initial|première (?:ligne|phrase) (?:courte|accroch)|"
+                     r"texte source|résultat demandé|consigne)")
 # Pour un prompt, « assistant IA » et « Format attendu : » sont le résultat demandé, pas une fuite.
 _FUITES_PROMPT = re.compile(_FUITES.pattern.replace("assistant ia|format attendu :|", ""))
 # Seuil de couverture (part des mots pleins retrouvés) par intention : une publication
@@ -230,7 +417,113 @@ def nettoyer_sortie(out):
     return s
 
 
-def sortie_acceptable(intent, original, out):
+_MOTS_EN = set("the and with for that this from your you are will can would should about into their there".split())
+_MOTS_FR = set("le la les des une et pour que qui dans avec sur pas est sont vous nous votre cette".split())
+
+
+def langue_probable(texte):
+    w = re.findall(r"[a-zàâçéèêëîïôûùüÿœ']+", (texte or "").lower())
+    en = sum(1 for x in w if x in _MOTS_EN); fr = sum(1 for x in w if x in _MOTS_FR)
+    if en == fr == 0:
+        return None
+    return "en" if en > fr * 1.5 else ("fr" if fr > en * 1.5 else None)
+
+
+_META = re.compile(r"(?i)^\s*(voici|here (?:is|are)|bien sûr|certainly|sure|d'accord|ok[,!]|je vais|je peux|je comprends|i can|i will|i'll|"
+                   r"je te propose|je vous propose|je corrige|je reformule|je résume|je traduis|réponse\s*:|answer\s*:)")
+
+
+def nettoyer_commande(out):
+    """Retire les lignes d'annonce (« Voici … : », « Je vais t'aider … ») en tête d'une réponse
+    et l'étiquette « Réponse : » que l'exemple a pu induire."""
+    lignes = (out or "").strip().split("\n")
+    while lignes and _META.match(lignes[0]):
+        premiere = lignes.pop(0)
+        # « Here are three names: A, B, C. » : le contenu suit le deux-points sur la même ligne
+        if ":" in premiere and not premiere.rstrip().endswith(":"):
+            lignes.insert(0, premiere.split(":", 1)[1].strip())
+            break
+        if not lignes:
+            lignes = [premiere]      # rien d'autre : on laisse le garde-fou trancher
+            break
+    s = "\n".join(lignes).strip()
+    return re.sub(r"(?i)^(réponse|answer)\s*:\s*", "", s)
+
+
+def repetitif(out):
+    """Une liste dont plus de 40 % des lignes commencent par les mêmes deux mots tourne en rond."""
+    lignes = [re.sub(r"^[\s\-\*\d\.\)]+", "", l).strip().lower() for l in (out or "").split("\n")]
+    lignes = [l for l in lignes if l]
+    if len(lignes) < 6:
+        return False
+    tetes = {}
+    for l in lignes:
+        k = re.sub(r"\W+$", "", l.split()[0]) if l.split() else ""
+        tetes[k] = tetes.get(k, 0) + 1
+    return max(tetes.values()) / len(lignes) > 0.4 or len(lignes) > 40
+
+
+def commande_acceptable(consigne, out, source=None, params=None):
+    """Une consigne exécutée : résultat différent de la consigne, dans sa langue, sur son
+    sujet (la moitié des mots pleins de la demande s'y retrouvent, hors verbe et livrable),
+    borné en longueur ; avec un texte source, au moins un tiers des mots pleins du résultat
+    viennent de la source ou de la demande (anti-invention)."""
+    ls = len(out)
+    if ls > 3000:
+        return False, "trop long"
+    if similarite(consigne, out) > 0.85:
+        return False, "consigne recopiée"
+    if _META.match(out) or re.search(r"(?i)\b(je vais (?:t'|vous )?aider|n'hésitez pas|n'hésite pas|si tu veux|if you (?:want|need))\b", out[:200]):
+        return False, "réponse méta"
+    if repetitif(out):
+        return False, "répétitif"
+    if len(mots_pleins(out)) < 1:
+        return False, "vide"
+    params = params or {}
+    lc, lo = langue_probable(consigne), langue_probable(out)
+    traduction = bool(re.search(r"(?i)\b(anglais|english|français|french|traduis|translate|traduction|translation|in english|en anglais|en français)\b", consigne))
+    if lc and lo and lc != lo and not traduction:
+        return False, "langue différente (%s -> %s)" % (lc, lo)
+    # Sujet : la demande nomme des choses (train, avion) que le résultat doit reprendre.
+    # Sans objet pour une transformation d'un texte source, le sujet est la source elle-même.
+    if not (source and params.get("transforme")):
+        m = _COMMANDE.match(consigne.strip())
+        sujet = (m.group("reste") or "") if m else consigne
+        mots_sujet = [w for w in mots_pleins(sujet) if not re.match(r"(?i)^(" + _CMD_LIVRABLES + r")$", w)]
+        if len(mots_sujet) >= 2:
+            ms = set(mots_pleins(out))
+            n = sum(1 for w in mots_sujet if w in ms or any(x.startswith(w[:5]) for x in ms))
+            if n == 0 or n / len(mots_sujet) < 0.25:
+                return False, "hors sujet (couverture %.2f)" % (n / len(mots_sujet))
+    if source and not traduction:
+        base = set(mots_pleins(source)) | set(mots_pleins(consigne))
+        mo = mots_pleins(out)
+        if mo:
+            part = sum(1 for w in mo if w in base or any(x.startswith(w[:5]) for x in base)) / len(mo)
+            if part < 0.34:
+                return False, "s'éloigne de la source (%.2f)" % part
+        verbe = (params.get("verbe") or "").lower()
+        if re.match(r"(?i)^(corrige|corriger|reformule|reformuler|améliore|ameliore|améliorer|ameliorer|structure|structurer|complète|complete|compléter|fix|rewrite|improve)", verbe):
+            # une correction ou une reformulation garde le propos : les mots pleins de la source
+            # se retrouvent, la longueur reste comparable
+            cv = couverture(source, out)
+            if cv < 0.6 or len(out) < len(source) * 0.6 or len(out) > len(source) * 1.8 + 60:
+                return False, "transformation infidèle (couverture %.2f)" % cv
+        if re.match(r"(?i)^(résume|resume|résumer|resumer|synthétise|synthetise|raccourcis|raccourcir|summarize|summarise|shorten)", verbe) or \
+                re.match(r"(?i)^(résumés?|resumes?|synthèses?|syntheses?|summary)$", (params.get("objet") or "")):
+            if len(out) >= len(source):
+                return False, "pas plus court que la source"
+            mo = mots_pleins(out); ms = set(mots_pleins(source))
+            if mo and sum(1 for w in mo if w in ms or any(x.startswith(w[:5]) for x in ms)) / len(mo) < 0.5:
+                return False, "résumé qui s'éloigne de la source"
+    if source and traduction:
+        ls_, lo_ = len(source), len(out)
+        if lo_ < ls_ * 0.45 or lo_ > ls_ * 2.2 + 40:
+            return False, "longueur incohérente pour une traduction"
+    return True, "ok"
+
+
+def sortie_acceptable(intent, original, out, ctx_source=None, ctx_params=None):
     """Le résultat est-il digne d'être inséré à la place du brut ?
 
     Nettoyage : proche du texte (au moins 72 % des mots retrouvés dans l'ordre),
@@ -246,9 +539,9 @@ def sortie_acceptable(intent, original, out):
     fuite = detecteur.search(s)
     if fuite and not detecteur.search(original or ""):
         return False, "consigne recopiée (« %s »)" % fuite.group(0)
-    if intent == "propre":
+    if intent in ("propre", "corrige"):
         sim = similarite(original, s)
-        if sim < 0.72:
+        if sim < (0.72 if intent == "propre" else 0.8):
             return False, "trop modifié (%.2f)" % sim
         if ls > lo * 1.3 + 20:
             return False, "rallongé"
@@ -263,6 +556,8 @@ def sortie_acceptable(intent, original, out):
         if ls < lo * 0.45 or ls > lo * 2.2 + 40:
             return False, "longueur incohérente pour une traduction"
         return True, "ok"
+    if intent == "commande":
+        return commande_acceptable(original, s, ctx_source, ctx_params)
     if intent == "court":
         if ls > lo:
             return False, "pas plus court"
@@ -436,7 +731,7 @@ class Assist:
             self.unload()
 
     # ---- génération bornée ----------------------------------------------
-    def generate(self, system, user, max_tokens=600, timeout_s=8.0):
+    def generate(self, system, user, max_tokens=600, timeout_s=8.0, repetition_penalty=None):
         """Texte généré, ou None si délai dépassé / erreur. Greedy (température 0)."""
         if not self.load():
             return None
@@ -452,8 +747,12 @@ class Assist:
                         [{"role": "system", "content": system}, {"role": "user", "content": user}],
                         tokenize=False, add_generation_prompt=True)
                     t = time.time()
+                    kw = {}
+                    if repetition_penalty:
+                        from mlx_lm.sample_utils import make_logits_processors
+                        kw["logits_processors"] = make_logits_processors(repetition_penalty=repetition_penalty, repetition_context_size=64)
                     out = _gen(self._model, tok, prompt=prompt, max_tokens=max_tokens,
-                               sampler=make_sampler(temp=0.0), verbose=False)
+                               sampler=make_sampler(temp=0.0), verbose=False, **kw)
                     result["out"] = out
                     result["dt"] = time.time() - t
                     self.last_use = time.time()
@@ -483,14 +782,40 @@ class Assist:
         budget = timeout_s or (TIMEOUT_CLEAN_S if intent == "propre" else TIMEOUT_INTENT_S)
         n_mots = len(contenu.split())
         max_tokens = min(1200, max(80, int(n_mots * 3.0) + 60))
-        out = self.generate(system, user, max_tokens=max_tokens, timeout_s=budget)
+        if intent == "commande":
+            params = (ctx or {}).get("params") or {}
+            source = ((ctx or {}).get("contexte") or "").strip()
+            if params.get("transforme"):
+                if not source:
+                    return None, "consigne de transformation sans texte source"
+                cible = intention_pour_transformation(params, contenu, source)
+                if cible == "corrige":
+                    # Mesuré sur le vrai modèle : la correction orthographique change le sens
+                    # une fois sur deux (« on peut » -> « sur peu »). Tant que ce n'est pas
+                    # fiable, une demande de correction laisse le texte tel quel.
+                    return None, "correction désactivée sur ce modèle (change le sens)"
+                out, info = self.transformer(cible, source, dict(ctx or {}, params={}, contexte=""), timeout_s)
+                return out, "%s -> %s : %s" % ("commande", cible, info)
+            max_tokens = 700
+            budget = timeout_s or TIMEOUT_COMMANDE_S
+        out = self.generate(system, user, max_tokens=max_tokens, timeout_s=budget,
+                            repetition_penalty=1.15 if intent == "commande" else None)
         if out is None:
             return None, self.last_error or "sans réponse"
-        ok, info = sortie_acceptable(intent, contenu, out)
+        if intent == "commande":
+            out = nettoyer_commande(out)
+        ok, info = sortie_acceptable(intent, contenu, out, (ctx or {}).get("contexte"), (ctx or {}).get("params"))
         if not ok:
             self._log("[assist] résultat refusé (%s) : brut conservé." % info)
             return None, info
-        return nettoyer_sortie(out), info
+        texte = nettoyer_sortie(out)
+        if intent == "commande":
+            signature = ((ctx or {}).get("signature") or "").strip()
+            objet = (((ctx or {}).get("params") or {}).get("objet") or "").lower()
+            if signature and re.match(r"(?i)^(e-?mails?|mails?|courriels?|réponses?|reponses?|replies|reply)$", objet) \
+                    and signature.lower() not in texte[-80:].lower():
+                texte = texte.rstrip() + "\n\n" + signature
+        return texte, info
 
     def extraire_rappel(self, texte):
         """{titre, quand} ou None. La date se calcule ensuite avec reminders.parse_datetime(quand)."""

@@ -16,6 +16,7 @@ Si le collage échoue, le texte reste dans le presse-papier (repli garanti).
 
 import sys
 import threading
+import re
 import time
 
 import clipboard
@@ -58,6 +59,77 @@ def _secure_input_active() -> bool:
         return bool(carbon.IsSecureEventInputEnabled())
     except Exception:
         return False
+
+
+def _preconditions(text: str) -> bool:
+    """Permission Accessibilité et saisie sécurisée : mêmes garde-fous que insert_at_cursor.
+    False = texte laissé au presse-papier, l'appelant guide l'utilisateur."""
+    try:
+        import permissions
+        if not permissions.accessibility_ok():
+            clipboard.set_clipboard(text)
+            return False
+    except Exception:
+        pass
+    try:
+        if _secure_input_active():
+            clipboard.set_clipboard(text)
+            return False
+    except Exception:
+        pass
+    return True
+
+
+def _morceaux(text: str, n_cible: int = 16, mini: int = 12):
+    """Découpe en morceaux aux frontières de mots, ~n_cible morceaux (au plus 40), au moins
+    `mini` caractères chacun : une phrase courte s'écrit en une dizaine de pas, un long texte en
+    une quinzaine, jamais lettre à lettre."""
+    if len(text) <= mini * 2:
+        return [text]
+    taille = max(mini, len(text) // n_cible)
+    out, cur = [], ""
+    for mot in re.split(r"(\s+)", text):
+        cur += mot
+        if len(cur) >= taille and not mot.isspace():
+            out.append(cur)
+            cur = ""
+    if cur:
+        out.append(cur)
+    while len(out) > 40:   # texte très long : on regroupe
+        out = ["".join(out[i:i + 2]) for i in range(0, len(out), 2)]
+    return out
+
+
+def insert_at_cursor_progressive(text: str, original=None, delay_s: float = 0.025) -> bool:
+    """v1.4.1 : insère `text` par morceaux successifs (effet d'écriture), par le même
+    mécanisme presse-papier + Cmd+V. Le texte complet est ensuite remis au presse-papier
+    (un Cmd+V manuel colle tout), puis l'original est restauré comme d'habitude.
+    True si tous les morceaux ont été collés ; False dès le premier échec (le reste du
+    texte est alors au presse-papier)."""
+    if not text:
+        return False
+    if not _preconditions(text):
+        return False
+    saved = original if original is not None else clipboard.get_clipboard()
+    morceaux = _morceaux(text)
+    for i, m in enumerate(morceaux):
+        if not clipboard.set_clipboard(m):
+            clipboard.set_clipboard("".join(morceaux[i:]))
+            return False
+        time.sleep(0.04 if i == 0 else 0.02)
+        if not _paste_keystroke():
+            clipboard.set_clipboard("".join(morceaux[i:]))
+            return False
+        time.sleep(delay_s)
+    time.sleep(0.05)
+    clipboard.set_clipboard(text)
+    if saved:
+        def _restore():
+            time.sleep(0.9)
+            if clipboard.get_clipboard() == text:
+                clipboard.set_clipboard(saved)
+        threading.Thread(target=_restore, daemon=True).start()
+    return True
 
 
 def insert_at_cursor(text: str, restore_clipboard: bool = True, original=None) -> bool:

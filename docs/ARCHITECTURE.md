@@ -105,6 +105,18 @@ fact it cannot compute (dates come from `reminders.parse_datetime`).
   the instruction, loses the content (word coverage per intent), drifts too far
   for a cleanup (sequence similarity) or has an implausible length for a
   translation. Rejected means the raw text is inserted.
+- **Instructions.** `detect_commande()` recognises a request addressed to the
+  model: an action verb at the head (imperative, infinitive after "peux-tu",
+  second person after "il faudrait que tu") plus a named deliverable within the
+  first words (prompt, mail, idées, titres, description...), or a transform
+  verb aimed at the copied text ("traduis ça", "résume ce texte"). Requests
+  that continue with a human-directed action ("et envoie-le à Paul") or that
+  need material we do not have (a report of a meeting, no clipboard) are left
+  alone. Creation requests get their own system prompt with three short
+  examples and a repetition penalty; transforms are routed to the specialised
+  intents and their guards. `commande_acceptable()` rejects a copy of the
+  request, a meta answer ("here is", "je vais"), a looping list, a language
+  switch, an off-topic answer, and, with a source, an answer that drifts from it.
 - **Reminders.** A second pass only when `reminders.is_reminder()` said no and
   a cheap cue ("rappelle", "oublie", "remind"...) is present: the model returns
   `{titre, quand}` as JSON, `resoudre_rappel()` computes the date with the
