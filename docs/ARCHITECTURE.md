@@ -40,12 +40,9 @@ Dock icon):
    transcribes the remainder. Chained dictations are serialized with FIFO
    tickets so text is inserted in the order of the releases.
 4. The text goes through the glossary and deterministic formatting
-   (`processor.py`). If local intelligence is on and the dictation carries a
-   declared intent (see below), it is formatted by the model, under a time
-   budget and guardrails; otherwise it is untouched. It is then copied to the
-   clipboard and inserted at the cursor through the Accessibility API
-   (`inserter.py`). Reminders are detected and scheduled (`reminders.py`,
-   `notifier.py`).
+   (`processor.py`), is copied to the clipboard and inserted at the cursor
+   through the Accessibility API (`inserter.py`). Reminders are detected and
+   scheduled (`reminders.py`, `notifier.py`).
 5. Usage counters are updated (`storage.record_usage`), and the telemetry
    scheduler is notified.
 
@@ -90,65 +87,11 @@ attributes words to speakers with boundary snapping to the nearest speech
 boundary. `voiceid.py` matches centroids against named voices from previous
 meetings (cosine 0.75 with a margin over the second best).
 
-## Local intelligence (preview)
-
-Three layers, and the model only in the last one.
-
-1. **Recognition** (`intents.py`, no model, under a millisecond). A request is
-   a named deliverable (mail, prompt, message, note, liste, post) or a modifier
-   (a language, "plus court", "plus formel") found at the edge of the
-   dictation: in its first words (declarative "c'est un mail pour Marie :",
-   objective "l'objectif c'est un prompt", imperative "rédige-moi un mail",
-   polite "tu peux me faire un message", conversion "mets ça en liste") or as
-   its last clause, detached by punctuation ("…, mets ça en liste"). Never in
-   the middle of a sentence: "je t'envoie ça en mail demain" is not a request.
-   Two modes come out of it: FORMAT (the dictation is the text) and COMPOSE (the
-   dictation describes what to write). A definite article ("fais la liste des
-   participants") or a human-directed follow-up ("… et envoie-le à Paul") means
-   a task for a person. When the frontmost app is an AI assistant, a terminal
-   or a code editor (`contexte_assistant`, bundle id and window title captured
-   at the start of the dictation), COMPOSE requests are for that app and are
-   ignored; announced formats still apply.
-2. **Formatting** (`mise_en_forme.py`, no model). FORMAT requests for an email,
-   a message, a note, a list or a post are built from the dictated words:
-   oral hesitations removed, sentences split at their connectors, bullets,
-   greeting and closing chosen by "tu" or "vous", signature appended.
-3. **Writing** (`assist.py`, model). Prompts, COMPOSE requests, translations,
-   shorter or more formal versions, replies to copied text. One instruction
-   per deliverable and mode, one short example given as a real exchange,
-   output length capped per deliverable, time budget sized to it and doubled
-   in Low Power Mode. `accepte_demande()` rejects a copy of the request, an
-   instruction leak, a meta answer ("voici", "je vais"), a looping list, a
-   language or register switch, missing key words or proper names of the
-   request, and, in FORMAT mode, lost content. Knowledge requests (a shopping
-   list for a raclette, "explique…") are not sent to the model at all.
-
-- **Reminders.** A second pass only when `reminders.is_reminder()` said no and
-  a cheap cue ("rappelle", "oublie", "remind"...) is present: the model returns
-  `{titre, quand}` as JSON, `resoudre_rappel()` computes the date with the
-  deterministic parser (English phrases mapped first, spelled hours turned into
-  digits) and falls back to the whole sentence. No date, no reminder.
-- **Meetings.** A one-hour transcript is read in chunks of about 9,000
-  characters; each chunk yields JSON (decisions, actions, open topics, first
-  names a speaker gives or is called by). Chunks are merged and rendered by
-  Python, not by the model. First names are offered as suggestions in the UI
-  and applied through the usual `rename_speaker`.
-- **Lifecycle.** The model (Qwen3-4B-Instruct-2507, 4-bit, 2.3 GB) lives in the
-  optional section of the R2 manifest (`model_store.download_optional`). It is
-  loaded only when a writing request arrives, or at the start of a dictation
-  if it was used in the last fifteen minutes, never below 3.2 GB of free
-  memory, and unloaded after ten minutes idle by the watchdog that unloads
-  Whisper. The settings card is shown only where the preview flag is set
-  (`com.vlocal.identity preview_assist = 1`, or `VLOCAL_PREVIEW=assist`).
-  `Vlocal --assist-selftest` is a build gate: the packaged app must import
-  mlx-lm without torch and, if the model is cached, write a prompt.
-
 ## Storage and settings
 
 SQLite (WAL) in `~/Library/Application Support/Vlocal/vlocal.db`: reminders,
-dictations (if history is enabled, with the raw text next to a formatted
-one), meetings with their word timings, speaker blocks and an optional report,
-glossary, daily usage counters. Settings are a JSON file in the
+dictations (if history is enabled), meetings with their word timings and
+speaker blocks, glossary, daily usage counters. Settings are a JSON file in the
 same folder, read through `_load_settings()` with an mtime cache.
 
 ## Interface

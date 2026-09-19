@@ -69,28 +69,6 @@ if "--mic-worker" in sys.argv:
     import micworker as _mic_worker
     sys.exit(_mic_worker.worker_main(sys.argv))
 
-# v1.4.0, AUTO-TEST DE L'INTELLIGENCE LOCALE (--assist-selftest) : porte de build.
-# Prouve que l'app EMPAQUETÉE importe mlx_lm sans torch et, si le modèle est dans
-# le cache de cette machine, qu'elle génère. Imprime un JSON, code 0 si tout va bien.
-if "--assist-selftest" in sys.argv:
-    _hide_worker_from_dock()
-    import json as _sj
-    import time as _st
-    import importlib.util as _su
-    import assist as _sa
-    import model_store as _sm
-    _rep = {"importable": _sa.Assist.importable(), "torch": _su.find_spec("torch") is not None}
-    _dir = _sm.optional_dir(_sa.MODEL_NAME)
-    _a = _sa.Assist(lambda: _dir, log=lambda *x: None)
-    _rep["model_present"] = _a.model_present()
-    if _rep["model_present"]:
-        _t = _st.time()
-        import intents as _si
-        _out, _info = _a.rediger(_si.detect("Rédige un prompt pour générer une image d'un train poursuivi par un avion."), {})
-        _rep.update({"out": _out, "info": _info, "s": round(_st.time() - _t, 2), "error": _a.last_error})
-    print(_sj.dumps(_rep, ensure_ascii=False))
-    sys.exit(0 if _rep["importable"] and not _rep["torch"] and (not _rep["model_present"] or _rep.get("out")) else 1)
-
 import functools
 import json
 import os
@@ -106,14 +84,6 @@ try:
     import errors as _EV
 except Exception:
     _EV = None
-
-# v1.4.2, IPv4 d'abord pour toutes les connexions (modèles, mise à jour, statistiques) :
-# sur un réseau où IPv6 ne passe pas, chaque connexion attendait l'expiration du délai.
-try:
-    import reseau as _reseau
-    _reseau.appliquer()
-except Exception:
-    pass
 
 # Verrou HORS-LIGNE HuggingFace — posé AVANT tout import applicatif (engine
 # importe faster-whisper, qui embarque huggingface_hub) : sur tout chemin de
@@ -136,9 +106,6 @@ import hotkey_mac
 import reminders
 import obsidian         # v1.0.13 — connecteur Obsidian local (capture des dictées dans un coffre, ADDITIF)
 import telemetry        # v1.1.0 — télémétrie minimale déclarée (installs, usage par jour)
-import assist           # v1.4.0, intelligence locale (modèle local à la demande) : import léger, mlx_lm chargé plus tard
-import intents          # v1.4.2, reconnaissance des demandes dictées (« c'est un mail… »), sans modèle
-import mise_en_forme    # v1.4.2, mise en forme déterministe (mail, message, liste, note, post), sans modèle
 from supabase_config import edge_url, auth_headers  # v1.1.0 — backend centralisé
 import updater          # v1.0.5 — mise à jour in-app (téléchargement + swap atomique)
 from engine import (SAMPLE_RATE, SMALL_DIR_NAME, TURBO_DIR_NAME, VlocalEngine,
@@ -198,7 +165,7 @@ _window_visible = True   # suivi de visibilité (fenêtre naît affichée)
 WIN_W = 1180            # v3.1 — dashboard plein écran (était 380, carte flottante)
 WIN_H = 780             # v3.1 — (était 720)
 PANEL_W = 840            # (hérité ; set_meeting_panel neutralisé en v3.1)
-APP_VERSION = "1.4.2"   # 19 septembre 2026. Synchrone avec le fichier VERSION (build) ;
+APP_VERSION = "1.4.3"   # 19 septembre 2026 : code de la 1.3.5 (retour arrière). Synchrone avec le fichier VERSION (build) ;
                         # affiché dans l'onglet « Mises à jour ». Historique : CHANGELOG.md.
 # Libellé humain du raccourci global actif (posé par start_global_hotkey,
 # consommé par le message de permission _check_hotkey_perm).
@@ -400,21 +367,6 @@ _UI_LANG = "fr"
 # le formulaire d'envoi (l'envoi transmet quand même les métadonnées sanitisées au
 # support). Override possible par VLOCAL_DEV=1 (build dev local).
 _BT = {
-  "Mise en forme…": "Formatting…",
-  "Rédaction…": "Writing…",
-  "%s prêt": "%s ready",
-  "%s prête": "%s ready",
-  "Traduction": "Translation",
-  "Plus court": "Shorter",
-  "Plus formel": "More formal",
-  "Rien de copié : dictée gardée": "Nothing copied: dictation kept",
-  "Modèle indisponible : dictée gardée": "Model unavailable: dictation kept",
-  "Dictée gardée telle quelle": "Dictation kept as spoken",
-  "Téléchargement interrompu. Vérifiez votre connexion et réessayez.": "Download interrupted. Check your connection and try again.",
-  "Activez l'intelligence locale et téléchargez le modèle dans les Réglages.": "Turn on local intelligence and download the model in Settings.",
-  "Le compte rendu par l'intelligence locale est désactivé dans les Réglages.": "Meeting reports by local intelligence are turned off in Settings.",
-  "Cette réunion n'a pas encore de transcription.": "This meeting has no transcript yet.",
-  "Le modèle n'a rien pu extraire de cette réunion.": "The model could not extract anything from this meeting.",
   "Microphone indisponible. Vérifiez Réglages Système > Confidentialité et sécurité > Microphone (et qu'aucune autre app ne le capte).":
     "Microphone unavailable. Check System Settings > Privacy & Security > Microphone (and that no other app is using it).",
   "La transcription a calé un instant (GPU), c'est réinitialisé. Relancez votre dictée, ça repart.":
@@ -1679,19 +1631,6 @@ class DictationController:
         except Exception:
             pass
 
-        # v1.4.0, INTELLIGENCE LOCALE (aperçu, désactivée par défaut) : mise en forme
-        # d'une intention déclarée ou nettoyage, APRÈS tout le déterministe et AVANT la
-        # copie. Bornée dans le temps, garde-fous dans assist.py ; toute erreur = brut.
-        # Le texte dicté d'origine est conservé (historique, détection de rappel).
-        raw_dicte = raw
-        try:
-            _assist_last.update({"intent": None, "note": None})
-            if _current_mode() == "DICTEE" and _assist_active():
-                raw = _assist_transform(raw, notify_ui) or raw
-        except Exception as _ae:
-            print(f"[assist] ignoré ({_ae}) : brut conservé.")
-            raw = raw_dicte
-
         # v29.10 — la copie EST le produit (collage Cmd+V). Si elle échoue (rare),
         # on NE ment PAS avec flashCopied : on prévient clairement, sinon le texte
         # serait perdu en silence. Le chemin SUCCÈS est INCHANGÉ (= dictée validée).
@@ -1740,8 +1679,8 @@ class DictationController:
             # dictée (fini le doublon « rappel + dictée » remonté par Raphael).
             if _current_mode() == "DICTEE" and _store is not None \
                     and _load_settings().get("history_scope", "all") == "all" \
-                    and not _looks_like_timed_reminder(raw_dicte):
-                _store.add_dictation(raw, mode="DICTEE", raw=raw_dicte)
+                    and not _looks_like_timed_reminder(raw):
+                _store.add_dictation(raw, mode="DICTEE")
                 # Bug #4 — rafraîchit l'accueil (mots / temps gagné / sessions du
                 # mois) après une dictée, comme le fait déjà le chemin réunion.
                 # Non bloquant (via _ui fire-and-forget), hors chemin de copie,
@@ -1756,7 +1695,7 @@ class DictationController:
         # Le texte brut est déjà copié (chemin presse-papier instantané).
         threading.Thread(
             target=_post_process_by_mode,
-            args=(raw_dicte, _current_mode(), raw),
+            args=(raw, _current_mode()),
             daemon=True,
         ).start()
         return raw
@@ -2123,7 +2062,7 @@ def _looks_like_timed_reminder(raw: str) -> bool:
         return False
 
 
-def _post_process_by_mode(raw: str, mode: str, final: str = None):
+def _post_process_by_mode(raw: str, mode: str):
     """v2 — DEUX modes seulement : DICTÉE et RÉUNION.
 
     DICTÉE : si le texte dicté est MANIFESTEMENT un rappel (« rappelle-moi… »,
@@ -2138,15 +2077,8 @@ def _post_process_by_mode(raw: str, mode: str, final: str = None):
     try:
         if reminders.is_reminder(raw):
             _create_reminder_from_text(raw)
-        # v1.4.0, le parseur n'a rien reconnu mais la phrase parle de rappeler :
-        # second passage par l'intelligence locale (si activée), qui extrait, et le
-        # parseur qui date. Pré-filtre strict : le modèle ne lit pas tout ce qu'on dicte.
-        elif _assist_reminder_candidate(raw) and _assist_ready() \
-                and _assist_settings()["assist_reminders"]:
-            _create_reminder_hybride(raw)
     except Exception as e:
         print(f"[dictée] auto-rappel ignoré ({e}).")
-    raw = final or raw   # Obsidian range le texte tel qu'il a été inséré
     # v1.0.13 — Capture Obsidian (ADDITIF, 100% local) : si un coffre est connecté,
     # chaque dictée est rangée au bon endroit via un routeur à mots-clés déterministe.
     # Hors du chemin critique (on est déjà sur un thread daemon) ; échec silencieux,
@@ -2238,13 +2170,6 @@ def _create_reminder_from_text(raw: str):
     if not datetime_iso:
         print("[dictée] rappel sans horaire -> ignoré (anti faux positif).")
         return
-    _register_reminder(titre, datetime_iso, echeance_naturelle, raw)
-
-
-def _register_reminder(titre: str, datetime_iso: str, echeance_naturelle: str, raw: str):
-    """Enregistre un rappel déjà daté : base, coffre Obsidian, notification native,
-    confirmation à l'écran. Partagé par le parseur (v1.0) et l'intelligence locale (v1.4.0)."""
-    now_ts = time.time()
     try:
         tid = _store.add_task(titre=titre, echeance=echeance_naturelle,
                               echeance_iso=datetime_iso, details=None,
@@ -3134,7 +3059,6 @@ class Api:
                 return False
         except Exception:
             pass
-        _assist_prewarm()
         return bool(_controller.start())
 
     def engine_ready(self):
@@ -4410,133 +4334,6 @@ class Api:
         finally:
             _dl_in_flight = False
 
-    # ---- v1.4.0, intelligence locale (aperçu) ---------------------------------
-    @_api_safe(default=lambda: {"preview": False})
-    def assist_state(self):
-        """État complet pour la carte Réglages : aperçu, dépendances, modèle, réglages."""
-        prefs = _assist_settings()
-        a = _get_assist()
-        st = {"preview": _preview_features()["assist"], "importable": a.importable(),
-              "model_present": a.model_present(), "loaded": a.loaded(), "loading": a.loading,
-              "last_error": a.last_error, "last_latency_s": a.last_latency_s,
-              "model_label": assist.MODEL_LABEL, "model_name": assist.MODEL_NAME,
-              "download": dict(_assist_dl)}
-        try:
-            st["model_size"] = model_store.optional_size(assist.MODEL_NAME) if not st["model_present"] else \
-                sum(os.path.getsize(os.path.join(dp, f)) for dp, _, fs in os.walk(_assist_model_dir()) for f in fs)
-        except Exception:
-            st["model_size"] = 0
-        st.update(prefs)
-        return st
-
-    @_api_safe(default=lambda: {"ok": False})
-    def assist_set(self, patch):
-        """Enregistre les réglages assist_* (clés blanches). Activation : préchauffe le
-        modèle s'il est là ; désactivation : le décharge tout de suite (RAM rendue)."""
-        patch = {k: v for k, v in (patch or {}).items() if k in _ASSIST_KEYS}
-        if "assist_signature" in patch:
-            patch["assist_signature"] = str(patch["assist_signature"] or "").strip()[:80]
-        for k in patch:
-            if k != "assist_signature":
-                patch[k] = bool(patch[k])
-        _save_settings(patch)
-        a = _get_assist()
-        if patch.get("assist_enabled") is True and a.model_present() and a.importable():
-            threading.Thread(target=a.load, name="assist-warm", daemon=True).start()
-        elif patch.get("assist_enabled") is False:
-            threading.Thread(target=a.unload, name="assist-unload", daemon=True).start()
-        return {"ok": True, **_assist_settings()}
-
-    @_api_safe(default=lambda: {"ok": False, "error": "Téléchargement impossible."})
-    def assist_download(self):
-        """Télécharge le modèle optionnel (vérifié, atomique, reprise). Non bloquant :
-        la progression est poussée à l'UI (assistProgress 0..1), la fin aussi."""
-        if _assist_dl["running"]:
-            return {"ok": False, "error": "Téléchargement déjà en cours."}
-        try:
-            import shutil as _sh
-            need = model_store.optional_size(assist.MODEL_NAME) or 700_000_000
-            if _sh.disk_usage(os.path.expanduser("~")).free < need + 500_000_000:
-                return {"ok": False, "error": "Espace disque insuffisant : libérez environ 1,5 Go puis réessayez."}
-        except Exception:
-            pass
-
-        def _run():
-            def _prog(done, total, label):
-                _assist_dl["pct"] = (float(done) / total) if total else 0.0
-                _ui("if(typeof assistProgress==='function') assistProgress(%.4f);" % _assist_dl["pct"])
-            try:
-                model_store.download_optional(assist.MODEL_NAME, progress=_prog)
-                _assist_dl["error"] = ""
-                _ui("if(typeof assistProgress==='function') assistProgress(1);")
-                a = _get_assist()
-                if _assist_settings()["assist_enabled"] and a.importable():
-                    a.load()
-            except Exception as e:
-                _assist_dl["error"] = str(e)[:160]
-                if _EV:
-                    _EV.log(_EV.E.ASSIST_FAIL, stage="download", reason=str(e)[:120])
-                _ui("if(typeof assistDownloadFailed==='function') assistDownloadFailed(%s);"
-                    % json.dumps(_te("Téléchargement interrompu. Vérifiez votre connexion et réessayez.")))
-            finally:
-                _assist_dl["running"] = False
-                _ui("if(typeof assistRefresh==='function') assistRefresh();")
-
-        _assist_dl.update({"running": True, "pct": 0.0, "error": ""})
-        threading.Thread(target=_run, name="assist-download", daemon=True).start()
-        return {"ok": True}
-
-    @_api_safe(default=lambda: {"ok": False, "error": "Compte rendu impossible."})
-    def assist_meeting_report(self, mid):
-        """Compte rendu d'une réunion par l'intelligence locale : extraction par morceaux,
-        rédaction déterministe, prénoms entendus proposés (jamais appliqués tout seuls).
-        Bloquant (comme la ré-analyse) ; progression poussée via assistReportProgress."""
-        if not _assist_ready():
-            return {"ok": False, "error": _te("Activez l'intelligence locale et téléchargez le modèle dans les Réglages.")}
-        if not _assist_settings()["assist_meetings"]:
-            return {"ok": False, "error": _te("Le compte rendu par l'intelligence locale est désactivé dans les Réglages.")}
-        m = self.get_meeting(mid)
-        if not m:
-            return {"ok": False, "error": "Réunion introuvable."}
-        data = self._load_speaker_payload(mid) or {}
-        blocks, names = data.get("blocks") or [], data.get("names") or {}
-        if not blocks:
-            plain = (m.get("transcription_structuree") or m.get("transcription_brute") or "").strip()
-            if not plain:
-                return {"ok": False, "error": _te("Cette réunion n'a pas encore de transcription.")}
-            blocks = [{"speaker": "spk_0", "text": plain}]
-
-        def _prog(i, n):
-            _ui("if(typeof assistReportProgress==='function') assistReportProgress(%d,%d);" % (i, n))
-        t0 = time.time()
-        try:
-            res = _get_assist().compte_rendu(blocks, names, progress=_prog)
-        except Exception as e:
-            res = None
-            if _EV:
-                _EV.log(_EV.E.ASSIST_FAIL, stage="meeting", reason=str(e)[:120])
-        if not res:
-            return {"ok": False, "error": _te("Le modèle n'a rien pu extraire de cette réunion.")}
-        # « Locuteur N » (numérotation humaine) -> identifiant de locuteur des blocs, seulement
-        # pour ceux qui n'ont pas encore de nom : la personne applique ou ignore chaque proposition.
-        ids = []
-        for b in blocks:
-            sid = b.get("speaker") or b.get("name") or b.get("locuteur") or ""
-            if sid and sid not in ids:
-                ids.append(sid)
-        suggestions = []
-        for loc, prenom in (res.get("noms") or {}).items():
-            for sid in ids:
-                if assist.libelle_locuteur(sid) == "Locuteur %s" % loc and not names.get(sid):
-                    suggestions.append({"speaker_id": sid, "label": assist.libelle_locuteur(sid), "prenom": prenom})
-        try:
-            _store.set_meeting_report(int(mid), res["markdown"])
-        except Exception:
-            pass
-        print(f"[assist] compte rendu : {res['morceaux_ok']}/{res['morceaux']} morceaux en {time.time() - t0:.0f} s.")
-        return {"ok": True, "markdown": res["markdown"], "suggestions": suggestions,
-                "morceaux": res["morceaux"], "morceaux_ok": res["morceaux_ok"]}
-
     @_api_safe(default=lambda: {})
     def get_diagnostics(self):
         """v3.3 — TOUR DE CONTRÔLE : état complet pour le diagnostic (à copier/envoyer
@@ -5432,7 +5229,6 @@ def start_global_hotkey():
         # instantanée ; le micro s'ouvre derrière, et on bascule l'overlay seulement
         # si ça échoue (micro indispo) ou si c'est refusé (occupé).
         overlay.recording()             # overlay État 1 (waveform live) — INSTANTANÉ
-        _assist_prewarm()               # v1.4.1 : le modèle local se charge pendant qu'on parle
         try:
             started = bool(_controller.start())
         except Exception as e:
@@ -5541,18 +5337,7 @@ def start_global_hotkey():
                     import inserter
                     # v1.0.22 — chaînage : collages sérialisés (jamais entrelacés).
                     with _insert_serial_lock:
-                        # v1.4.1 : effet d'écriture (insertion par morceaux) quand l'intelligence
-                        # locale est active et que la personne l'a gardé ; sinon collage d'un bloc.
-                        _tw = False
-                        try:
-                            _tw = bool(_assist_last.get("intent")) and _assist_settings()["assist_typewriter"] \
-                                and len(text) <= 4000
-                        except Exception:
-                            _tw = False
-                        if _tw:
-                            inserted = bool(inserter.insert_at_cursor_progressive(text, original=_orig_clip))
-                        else:
-                            inserted = bool(inserter.insert_at_cursor(text, original=_orig_clip))
+                        inserted = bool(inserter.insert_at_cursor(text, original=_orig_clip))
                     if not inserted:
                         # v1.0.6 — OBSERVABILITÉ (tour de contrôle) : on compte les
                         # échecs d'insertion, friction n°1 connue (Accessibilité non
@@ -5605,7 +5390,7 @@ def start_global_hotkey():
                 else:
                     trans_dur = time.time() - t_rel
                     branch = getattr(_controller.engine, "last_model", None)
-                    overlay.result(trans_dur, inserted, branch, text, note=_assist_last.get("note"))   # texte fidèle à l'app
+                    overlay.result(trans_dur, inserted, branch, text)   # texte fidèle à l'app
                     _schedule_overlay_hide(3.0)
         threading.Thread(target=_finalize, daemon=True).start()
 
@@ -5825,287 +5610,6 @@ _telemetry = None           # v1.1.0 — planificateur de télémétrie (telemet
 _api_instance = None        # v3.3 — handle de l'instance Api (re-vérif licence en arrière-plan)
 _engine_ready = threading.Event()
 
-# --------------------------------------------------------------------------- #
-# v1.4.0, INTELLIGENCE LOCALE (aperçu). Un petit modèle de langue (LFM2.5-1.2B,
-# 4 bits, ~630 Mo) téléchargé à la demande, chargé paresseusement, déchargé après
-# dix minutes d'inactivité. Il ne touche JAMAIS au chemin brut : la dictée reste
-# le produit, il n'intervient que si la personne l'a activé, et tout résultat
-# douteux (trop lent, consigne recopiée, contenu perdu) rend le brut. Voir assist.py.
-# --------------------------------------------------------------------------- #
-_assist = None
-_assist_lock = threading.Lock()
-_assist_dl = {"running": False, "pct": 0.0, "error": ""}
-# v1.4.2 : le nettoyage de chaque dictée par le modèle est supprimé. Il faisait attendre (jusqu'à 3 s)
-# et changeait des mots (« ça n'arrive pas » -> « ce n'arrive pas ») : sans demande, rien ne bouge.
-_ASSIST_KEYS = ("assist_enabled", "assist_intents", "assist_reminders",
-                "assist_meetings", "assist_signature", "assist_typewriter")
-_ASSIST_DEFAULTS = {"assist_enabled": False, "assist_intents": True,
-                    "assist_reminders": True, "assist_meetings": True, "assist_signature": "",
-                    "assist_typewriter": True}
-_ASSIST_RAM_MIN_GB = 3.2      # mémoire libre nécessaire pour charger le modèle de rédaction (~2,6 Go résidents)
-_dictee_ctx = {"bundle": "", "titre": ""}   # application au premier plan au début de la dictée
-_assist_ram_warned = [0.0]
-
-
-def _assist_model_dir():
-    return model_store.optional_dir(assist.MODEL_NAME)
-
-
-def _get_assist():
-    """Instance unique, créée au premier besoin (aucun import lourd tant qu'on ne génère pas)."""
-    global _assist
-    with _assist_lock:
-        if _assist is None:
-            _assist = assist.Assist(_assist_model_dir, log=print)
-        return _assist
-
-
-def _preview_features() -> dict:
-    """Fonctions en aperçu, visibles seulement sur les Mac où le drapeau est posé :
-    `defaults write com.vlocal.identity preview_assist -string 1`, ou VLOCAL_PREVIEW=assist.
-    Le réglage vit hors du dépôt et hors de settings.json : personne ne l'active par accident."""
-    flags = set(f for f in (os.environ.get("VLOCAL_PREVIEW") or "").replace(",", " ").split() if f)
-    try:
-        if telemetry.MacPrefs().get("preview_assist") == "1":
-            flags.add("assist")
-    except Exception:
-        pass
-    return {"assist": "assist" in flags}
-
-
-def _assist_settings() -> dict:
-    s = _load_settings()
-    out = {}
-    for k, d in _ASSIST_DEFAULTS.items():
-        v = s.get(k, d)
-        out[k] = (str(v or "")[:80] if k == "assist_signature" else bool(v))
-    return out
-
-
-def _assist_active() -> bool:
-    """La personne a activé l'intelligence locale, et l'aperçu est ouvert sur ce Mac. Suffit pour
-    la mise en forme sans modèle (mail, liste…), qui ne demande ni téléchargement ni mémoire."""
-    try:
-        return bool(_assist_settings()["assist_enabled"] and _preview_features()["assist"])
-    except Exception:
-        return False
-
-
-def _frontmost_context():
-    """(identifiant, titre de fenêtre) de l'application au premier plan. Sert à savoir si la
-    personne parle à une autre IA (Claude, ChatGPT, un terminal) : ses consignes sont alors pour elle."""
-    bid, titre = "", ""
-    try:
-        from AppKit import NSWorkspace
-        app_ = NSWorkspace.sharedWorkspace().frontmostApplication()
-        bid = str(app_.bundleIdentifier() or "")
-        pid = app_.processIdentifier()
-        try:
-            from ApplicationServices import AXUIElementCreateApplication, AXUIElementCopyAttributeValue
-            ax = AXUIElementCreateApplication(pid)
-            err, win = AXUIElementCopyAttributeValue(ax, "AXFocusedWindow", None)
-            if err == 0 and win is not None:
-                err, t = AXUIElementCopyAttributeValue(win, "AXTitle", None)
-                if err == 0 and t:
-                    titre = str(t)[:200]
-        except Exception:
-            pass
-    except Exception:
-        pass
-    return bid, titre
-
-
-def _note_dictee_ctx():
-    """Mémorise l'application visée au début de la dictée (la pilule ne prend pas le focus)."""
-    try:
-        if _assist_active():
-            b, t = _frontmost_context()
-            _dictee_ctx.update({"bundle": b, "titre": t})
-        else:
-            _dictee_ctx.update({"bundle": "", "titre": ""})
-    except Exception:
-        pass
-
-
-def _assist_ready() -> bool:
-    """Activé par la personne, en aperçu sur ce Mac, dépendances présentes, modèle téléchargé,
-    et assez de mémoire libre pour le tenir sans mettre le Mac à genoux."""
-    try:
-        if not _assist_active():
-            return False
-        a = _get_assist()
-        if not (a.importable() and a.model_present()):
-            return False
-        if not a.loaded():
-            try:
-                import psutil as _ps
-                libre = _ps.virtual_memory().available / 2 ** 30
-                if libre < _ASSIST_RAM_MIN_GB:
-                    if time.time() - _assist_ram_warned[0] > 600:
-                        _assist_ram_warned[0] = time.time()
-                        print(f"[assist] mémoire libre {libre:.1f} Go < {_ASSIST_RAM_MIN_GB} Go : modèle non chargé, brut conservé.")
-                    return False
-            except Exception:
-                pass
-        return True
-    except Exception:
-        return False
-
-
-def _assist_prewarm():
-    """Au début d'une dictée : note l'application visée et, si la personne est en train d'écrire
-    avec le modèle (utilisé il y a moins de quinze minutes), le recharge pendant qu'elle parle.
-    Hors de ces sessions, rien n'est chargé : la mémoire n'est prise que pour une vraie demande.
-    (Le modèle est utilisé « récemment » s'il a servi dans l'heure.)"""
-    _note_dictee_ctx()
-    try:
-        a = _get_assist()
-        recent = a.last_use and (time.time() - a.last_use) < 60 * 60
-        if recent and _assist_ready() and not a.loaded() and not a.loading:
-            threading.Thread(target=a.load, name="assist-prewarm", daemon=True).start()
-    except Exception:
-        pass
-
-
-_NOMS_PILULE = {"fr": {"mail": "Mail", "message": "Message", "note": "Note", "liste": "Liste", "prompt": "Prompt",
-                       "post": "Publication", "reponse": "Réponse", "commande": "Réponse", "transforme": "Texte"},
-                "en": {"mail": "Email", "message": "Message", "note": "Note", "liste": "List", "prompt": "Prompt",
-                       "post": "Post", "reponse": "Reply", "commande": "Answer", "transforme": "Text"}}
-
-
-def _nom_demande(d) -> str:
-    """Nom court de la demande, pour la pilule (« Mail », « Prompt », « English »)."""
-    noms = _NOMS_PILULE.get(_UI_LANG, _NOMS_PILULE["fr"])
-    if d.get("kind") == "transforme":
-        if d.get("langue") and d.get("langue") != "auto":
-            return {"en": "English", "fr": "Français", "es": "Español", "de": "Deutsch", "it": "Italiano"}.get(d["langue"], noms["transforme"])
-        if d.get("langue") == "auto":
-            return _te("Traduction")
-        if d.get("court"):
-            return _te("Plus court")
-        if d.get("formel"):
-            return _te("Plus formel")
-        return noms["transforme"]
-    return noms.get(d.get("livrable") or d.get("kind"), noms["transforme"])
-
-
-_FEMININS = {"Liste", "Note", "Publication", "Réponse", "Traduction"}
-
-
-def _pret(nom) -> str:
-    if _UI_LANG == "en":
-        return "%s ready" % nom
-    return (_te("%s prête") if nom in _FEMININS else _te("%s prêt")) % nom
-
-
-def _assist_transform(raw: str, notify_ui: bool = True) -> str:
-    """v1.4.2, Une dictée qui porte une demande (« c'est un mail pour Marie : … », « rédige-moi
-    un prompt pour… », « …, mets ça en liste ») est mise en forme ou rédigée ; toute autre dictée
-    est rendue telle quelle, instantanément, sans que le modèle soit réveillé.
-
-    Mise en forme d'un texte dicté : code déterministe (mise_en_forme.py), quelques millisecondes,
-    aucun mot inventé. Rédaction (prompt, mail décrit, traduction…) : modèle local, sous garde-fous
-    (assist.accepte_demande). Retourne TOUJOURS un texte : le résultat s'il est digne de confiance,
-    sinon la dictée telle qu'elle a été dite."""
-    _assist_last.update({"intent": None, "note": None})
-    if not raw or not raw.strip():
-        return raw
-    prefs = _assist_settings()
-    if not prefs["assist_intents"]:
-        return raw
-    dans_ia = intents.contexte_assistant(_dictee_ctx.get("bundle"), _dictee_ctx.get("titre"))
-    t0 = time.time()
-    d = intents.detect(raw, contexte_assistant_actif=dans_ia)
-    if d is None:
-        return raw
-    # Le modèle rédige à partir de ce que la personne dit, jamais de ses propres connaissances :
-    # une liste de courses « pour une raclette » ou « explique la photosynthèse » restent des
-    # questions à poser à une vraie IA, pas à un petit modèle local.
-    if d.get("kind") == "commande" or (d.get("mode") == "compose" and d.get("livrable") in ("liste", "note")):
-        print(f"[assist] {d.get('kind')}/{d.get('livrable')} : demande de connaissances, dictée conservée.")
-        return raw
-    nom = _nom_demande(d)
-    ctx = {"signature": prefs["assist_signature"], "lang": _UI_LANG, "contexte": ""}
-    # 1) Mise en forme sans modèle
-    det = assist.rediger_sans_modele(d, ctx)
-    if det:
-        print(f"[assist] {d.get('livrable')} mis en forme sans modèle en {(time.time() - t0) * 1000:.0f} ms.")
-        _assist_last.update({"intent": d.get("livrable"), "note": _pret(nom)})
-        return det
-    # 2) Rédaction par le modèle
-    if d.get("source") == "presse-papiers":
-        try:
-            import clipboard as _cb
-            src = (_cb.get_clipboard() or "").strip()
-            if src and src != raw.strip() and len(src) <= 12000:
-                ctx["contexte"] = src
-        except Exception:
-            pass
-        if not ctx["contexte"]:
-            print(f"[assist] {d.get('kind')} : rien de copié à retravailler, dictée conservée.")
-            _assist_last["note"] = _te("Rien de copié : dictée gardée")
-            return raw
-    if not _assist_ready():
-        print("[assist] modèle indisponible (non téléchargé, désactivé ou mémoire insuffisante) : dictée conservée.")
-        _assist_last["note"] = _te("Modèle indisponible : dictée gardée")
-        return raw
-    try:
-        overlay.work(nom + "…")
-    except Exception:
-        pass
-
-    def _prog(n_mots):
-        try:
-            overlay.work("%s · %d %s" % (nom, n_mots, "mots" if _UI_LANG != "en" else "words"))
-        except Exception:
-            pass
-    ctx["progression"] = _prog
-    try:
-        out, info = _get_assist().rediger(d, ctx)
-    except Exception as e:
-        out, info = None, str(e)[:120]
-    if out:
-        print(f"[assist] {d.get('kind')}/{d.get('livrable')} ({d.get('mode')}) rédigé en {time.time() - t0:.1f} s ({info}).")
-        _assist_last.update({"intent": d.get("livrable") or d.get("kind"), "note": _pret(nom)})
-        return out
-    print(f"[assist] {d.get('kind')}/{d.get('livrable')} : dictée conservée ({info}).")
-    _assist_last["note"] = _te("Dictée gardée telle quelle")
-    if _EV:
-        _EV.log(_EV.E.ASSIST_FALLBACK, level="warning", intent=str(d.get("livrable") or d.get("kind")), reason=str(info)[:80])
-    return raw
-
-
-_assist_last = {"intent": None, "note": None}    # dernière demande traitée : effet d'écriture et libellé de la pilule
-
-
-_ASSIST_REMINDER_CUE = re.compile(r"(?i)\b(rappel|rappelle|rappeler|oublie|oublier|pense à|penser à|pensez à|"
-                                  r"remind|forget|remember|note pour|à ne pas oublier)\b")
-
-
-def _assist_reminder_candidate(raw: str) -> bool:
-    """Pré-filtre déterministe : le modèle n'est consulté que pour une phrase courte
-    qui parle de rappeler quelque chose. Tout le reste ne le réveille pas."""
-    return bool(raw) and len(raw) <= 320 and bool(_ASSIST_REMINDER_CUE.search(raw))
-
-
-def _create_reminder_hybride(raw: str):
-    """v1.4.0, Second passage quand le parseur déterministe n'a pas reconnu un rappel :
-    le modèle extrait {titre, quand}, le parseur calcule la date (le modèle ne date jamais).
-    Sans date fiable, rien n'est créé."""
-    if _recently_added_same(raw, _store):
-        return
-    import datetime as _dt
-    a = _get_assist()
-    extrait = a.extraire_rappel(raw)
-    r = assist.resoudre_rappel(extrait, raw, _dt.datetime.now())
-    if not r:
-        print("[assist] rappel : rien de fiable (%s)." % ("sans date" if extrait else "pas un rappel"))
-        return
-    glossary = _store.glossary_pairs() if _store else []
-    titre = processor.apply_glossary(r["titre"], glossary) if glossary else r["titre"]
-    _register_reminder(titre[:80], r["when"].strftime("%Y-%m-%d %H:%M"), r["label"] or "aucune", raw)
-    print(f"[assist] rappel créé : « {titre} » ({r['label']}).")
-
 
 # Phase 2 (RAM) — DÉCHARGEMENT À L'INACTIVITÉ : Whisper turbo (~1,6 Go) est le
 # poids lourd. On le libère après quelques minutes sans usage (RAM au repos
@@ -6220,12 +5724,6 @@ def _start_idle_unloader():
                               f"{_idle_mlx:.0f}s d'inactivité (RAM rendue).")
                 except Exception:
                     pass
-            # v1.4.0, modèle de langue (~700 Mo résidents) : rendu après 10 min sans usage.
-            try:
-                if _assist is not None:
-                    _assist.unload_if_idle()
-            except Exception:
-                pass
         except Exception:
             pass
         finally:

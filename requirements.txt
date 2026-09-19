@@ -28,5 +28,3 @@ mlx-whisper>=0.4 ; platform_machine == "arm64" and sys_platform == "darwin"
 #   de sortir. Installer le core macOS 14 : cf. mémoire vlocal-mlx-metallib-target.
 mlx==0.31.2 ; platform_machine == "arm64" and sys_platform == "darwin"
 mlx-metal==0.31.2 ; platform_machine == "arm64" and sys_platform == "darwin"
-# v1.4.0, intelligence locale (LFM2.5-1.2B en 4 bits, téléchargé à la demande depuis R2)
-mlx-lm>=0.31 ; platform_machine == "arm64" and sys_platform == "darwin"

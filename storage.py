@@ -224,22 +224,6 @@ class Store:
             self._conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
 
     # ---------------- meetings (v12) ---------------- #
-            # v1.4.0, dictée mise en forme par l'intelligence locale : le brut est gardé à côté.
-            try:
-                cols = [r[1] for r in self._conn.execute("PRAGMA table_info(dictations)").fetchall()]
-                if "raw" not in cols:
-                    self._conn.execute("ALTER TABLE dictations ADD COLUMN raw TEXT")
-                    self._conn.commit()
-            except Exception:
-                pass
-            # v1.4.0, compte rendu rédigé par l'intelligence locale, gardé avec la réunion.
-            try:
-                cols = [r[1] for r in self._conn.execute("PRAGMA table_info(meetings)").fetchall()]
-                if "report_md" not in cols:
-                    self._conn.execute("ALTER TABLE meetings ADD COLUMN report_md TEXT")
-                    self._conn.commit()
-            except Exception:
-                pass
     def add_meeting(self, titre, wav_path, status="recording"):
         with self._lock:
             cur = self._conn.execute(
@@ -350,26 +334,15 @@ class Store:
         return len(rows)
 
     # ---------------- dictations (v18.4 — historique) ---------------- #
-    def set_meeting_report(self, mid, report_md):
-        """v1.4.0, enregistre (ou efface avec None) le compte rendu d'une réunion."""
-        with self._lock:
-            self._conn.execute("UPDATE meetings SET report_md=? WHERE id=?", (report_md, mid))
-            self._conn.commit()
-
-    def add_dictation(self, content, mode=None, raw=None):
-        """raw (v1.4.0) : texte dicté d'origine quand content a été mis en forme
-        par l'intelligence locale ; None si content est le brut."""
+    def add_dictation(self, content, mode=None):
         content = (content or "").strip()
         if not content:
             return None
-        raw = (raw or "").strip() or None
-        if raw == content:
-            raw = None
         with self._lock:
             cur = self._conn.execute(
-                "INSERT INTO dictations(content,created_at,mode,chars,raw) "
-                "VALUES(?,?,?,?,?)",
-                (content, time.time(), mode, len(content), raw),
+                "INSERT INTO dictations(content,created_at,mode,chars) "
+                "VALUES(?,?,?,?)",
+                (content, time.time(), mode, len(content)),
             )
             return cur.lastrowid
 

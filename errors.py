@@ -40,8 +40,6 @@ class E:
     TRANSCRIBE_FAIL = "transcribe_fail"    # exception pendant la transcription
     INSERT_FAIL = "insert_fail"            # insertion clavier KO (repli presse-papier)
     CLIPBOARD_FAIL = "clipboard_fail"      # copie presse-papier KO
-    ASSIST_FALLBACK = "assist_fallback"    # v1.4.0, intelligence locale : résultat refusé ou trop lent, brut conservé
-    ASSIST_FAIL = "assist_fail"            # v1.4.0, intelligence locale : modèle absent, chargement ou génération KO
     MODEL_MISSING = "model_missing"        # modèle absent/corrompu
     DISK_FULL = "disk_full"                # espace disque insuffisant
     MEETING_FAIL = "meeting_fail"          # pipeline réunion en échec

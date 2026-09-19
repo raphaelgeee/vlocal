@@ -205,14 +205,6 @@ except Exception as e:
     sys.exit(1)
 PYEOF
 
-echo "==> 3bis-3  Smoke-test de l'INTELLIGENCE LOCALE GELÉE (--assist-selftest, AVANT signature)"
-# v1.4.0 : l'app empaquetée doit importer mlx_lm SANS torch ; si le modèle est dans
-# le cache de cette machine, elle doit aussi générer. Sinon la carte Réglages dirait
-# « indisponible » chez tout le monde et personne ne verrait pourquoi.
-SELFTEST="$(dist/Vlocal.app/Contents/MacOS/Vlocal --assist-selftest 2>/dev/null)" \
-  || { echo "  >>> INTELLIGENCE LOCALE GELÉE KO : $SELFTEST"; exit 1; }
-echo "  intelligence locale gelée : OK  $SELFTEST"
-
 echo "==> 3ter  GARDE MLX minos<=14 + metallib macosx<=14 (anti-régression cross-device)"
 # v3.2.8 — Empêche À TOUT JAMAIS de re-livrer un core MLX ciblé macOS 26 (ne charge
 # pas sous macOS 14/15 -> GPU KO -> repli CPU lent chez la majorité des clients).

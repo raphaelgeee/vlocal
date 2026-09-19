@@ -79,10 +79,7 @@ formula as the dashboard: words at 40 words per minute typed versus 150 spoken.
 
 Two other network calls exist: a version check (`get-latest-version`, no
 personal data) and the "Send a diagnostic" button in Settings, which sends the
-message you type and, if you fill it, your email. A third one happens only if
-you turn on Local intelligence (preview) and click "Download the model": the
-model files are fetched once from the same bucket as the speech models,
-checksum-verified, and everything the model does afterwards happens on your Mac.
+message you type and, if you fill it, your email.
 
 ## How it works
 
@@ -91,8 +88,7 @@ checksum-verified, and everything the model does afterwards happens on your Mac.
 | Speech to text | Whisper large-v3-turbo. GPU path: [mlx-whisper](https://github.com/ml-explore/mlx-examples) with 8-bit weights. CPU path: [faster-whisper](https://github.com/SYSTRAN/faster-whisper) int8, plus a small model for low memory. |
 | Voice activity | Silero VAD (through faster-whisper) and an RMS gate shared by the live-tail. |
 | Speaker separation | [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) CAM++ 192-d embeddings, spherical k-means, speaker count by spectral gap (silhouette as fallback) with a duration cap, boundary snapping to speech. |
-| Text formatting | Deterministic rules ([processor.py](processor.py)); nothing is rewritten by default. |
-| Local intelligence (preview) | Requests are recognised by rules ([intents.py](intents.py)); formatting your own words is done by code ([mise_en_forme.py](mise_en_forme.py)). Writing (a prompt, a described email, a translation) uses [Qwen3-4B-Instruct-2507](https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507), 4-bit MLX build, through [mlx-lm](https://github.com/ml-explore/mlx-lm), Apache 2.0. Off by default, downloaded on demand, loaded only to write. Every output passes guardrails in [assist.py](assist.py) or the dictation is kept as spoken. |
+| Text formatting | Deterministic rules ([processor.py](processor.py)); no generative model, nothing is rewritten. |
 | Storage | SQLite in WAL mode ([storage.py](storage.py)). |
 | UI | A single HTML file ([vlocal-interface.html](vlocal-interface.html)) in a pywebview window, a floating dictation overlay, a menu bar item. |
 | Reliability | The microphone is captured in a disposable subprocess that is killed and respawned if it hangs; GPU inference has a proportional timeout and a temporary CPU fallback; a supervisor bounds every step of a dictation. |
@@ -159,9 +155,6 @@ voiceid.py             known voices across meetings
 live_meeting.py        incremental meeting transcription
 recorder.py, meeting_visio.py, visio_recorder.py   meeting audio capture
 processor.py           deterministic text formatting and glossary
-intents.py             recognition of spoken requests ("c'est un mail pour Marie : …"), no model
-mise_en_forme.py       deterministic formatting of dictated text (email, message, note, list, post)
-assist.py              local intelligence (preview): writing with the model, guardrails, meeting reports
 reminders.py           French reminder parser
 storage.py             SQLite persistence
 telemetry.py           declared usage data (see "Data")

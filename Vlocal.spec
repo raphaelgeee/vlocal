@@ -102,10 +102,7 @@ for pkg in ("faster_whisper", "ctranslate2", "onnxruntime", "av",
             # des word-timestamps. SANS elles, `import mlx_whisper` lève
             # ModuleNotFoundError -> available() False -> le GPU ne s'active
             # JAMAIS (repli CPU silencieux). C'était LE bug du build v23 initial.
-            "scipy", "numba", "llvmlite",
-            # v1.4.0, intelligence locale : mlx_lm (LFM2.5) et son tokenizer (transformers,
-            # sans torch, exclu plus bas).
-            "mlx_lm", "transformers"):
+            "scipy", "numba", "llvmlite"):
     try:
         d, b, h = collect_all(pkg)
         datas += d
@@ -115,11 +112,6 @@ for pkg in ("faster_whisper", "ctranslate2", "onnxruntime", "av",
         # mlx absent de l'environnement de build -> build CPU-only (repli auto
         # au runtime). On ne bloque pas le build.
         print(f"[spec] collect_all({pkg}) ignore : {_e}")
-
-# v1.4.0 : collect_all(transformers) ramène la fiche torch-*.dist-info (métadonnées
-# seules, sans le paquet). On l'écarte : un test de présence par métadonnées
-# croirait torch installé et transformers prendrait un chemin qui n'existe pas.
-datas = [x for x in datas if not ("torch-" in str(x[1]) and ".dist-info" in str(x[1]))]
 
 block_cipher = None
 

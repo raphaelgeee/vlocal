@@ -59,11 +59,6 @@ rclone delete r2:vlocal/Vlocal-<PREVIOUS>.dmg      # keep exactly one DMG
 ```
 
 The bucket also holds the model files (`models/`, `models_manifest.json`).
-The manifest has two sections: `models` (required Whisper sets, downloaded at
-first launch) and `optional` (same file format, downloaded only when a person
-turns on the feature that needs them, for example the local intelligence model).
-Older clients ignore `optional`. Never delete a model folder that a published
-version can still request.
 Never delete those: every fresh install downloads them.
 
 ## 6. Publish on both channels

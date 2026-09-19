@@ -75,13 +75,8 @@ _UA = "Vlocal-Updater (macOS)"
 
 
 def _open(url, timeout):
-    """urlopen avec User-Agent explicite (sinon Cloudflare R2 bloque en 403), IPv4 d'abord (reseau.py)."""
+    """urlopen avec User-Agent explicite (sinon Cloudflare R2 bloque en 403)."""
     import urllib.request
-    try:
-        import reseau
-        reseau.appliquer()
-    except Exception:
-        pass
     return urllib.request.urlopen(
         urllib.request.Request(url, headers={"User-Agent": _UA}), timeout=timeout)
 
@@ -93,97 +88,56 @@ def fetch_manifest(timeout=30):
         return json.loads(r.read().decode("utf-8"))
 
 
-def _download_files(base, model, files, progress=None, done=0, total=None):
-    """Télécharge les fichiers d'UN modèle dans le cache. Retourne le cumul d'octets.
-    Vérifié (sha256), atomique (.part puis os.replace), idempotent, 3 réessais."""
-    import os as _os
-    total = total or sum(f["size"] for f in files.values())
-    _os.makedirs(CACHE, exist_ok=True)
-    for rel, meta in files.items():
-        dst = _os.path.join(CACHE, model, rel)
-        if (_os.path.exists(dst) and _os.path.getsize(dst) == meta["size"]
-                and _sha256(dst) == meta["sha256"]):
-            done += meta["size"]
-            if progress:
-                progress(done, total, model)
-            continue
-        _os.makedirs(_os.path.dirname(dst), exist_ok=True)
-        url = "%s/%s/%s" % (base, model, rel)
-        tmp = dst + ".part"
-        last_err = None
-        for _attempt in range(3):
-            try:
-                base_done = done
-                with _open(url, 60) as resp, open(tmp, "wb") as out:
-                    while True:
-                        chunk = resp.read(1 << 20)
-                        if not chunk:
-                            break
-                        out.write(chunk)
-                        if progress:
-                            progress(base_done + out.tell(), total, model)
-                if _sha256(tmp) != meta["sha256"]:
-                    raise ValueError("checksum %s" % rel)
-                _os.replace(tmp, dst)
-                done = base_done + meta["size"]
-                last_err = None
-                break
-            except Exception as e:  # noqa: BLE001
-                last_err = e
-                try:
-                    _os.remove(tmp)
-                except Exception:
-                    pass
-        if last_err is not None:
-            raise RuntimeError("téléchargement impossible : %s/%s (%s)" % (model, rel, last_err))
-    return done
-
-
 def download_models(progress=None, manifest=None):
-    """Télécharge les modèles REQUIS manquants (transcription) de R2 vers le CACHE.
-    progress(done, total, label) optionnel. Lève en cas d'échec définitif (l'appelant
-    affiche un message clair + bouton Réessayer)."""
+    """Télécharge les modèles manquants de R2 vers le CACHE (App Support).
+    VÉRIFIÉ (sha256) + ATOMIQUE (.part puis os.replace) + IDEMPOTENT (un fichier
+    déjà présent et au bon checksum est sauté = reprise gratuite après coupure)
+    + 3 réessais par fichier. progress(done, total, label) optionnel. Lève en cas
+    d'échec définitif (l'appelant affiche un message clair + bouton Réessayer)."""
+    import urllib.request
+    import os as _os
     man = manifest or fetch_manifest()
     base = man["base_url"]
     total = sum(f["size"] for m in man["models"].values() for f in m.values())
     done = 0
+    _os.makedirs(CACHE, exist_ok=True)
     for model, files in man["models"].items():
-        done = _download_files(base, model, files, progress, done, total)
-
-
-# --------------------------------------------------------------------------- #
-# Modèles OPTIONNELS (v1.4.0) : section « optional » du manifeste, jamais
-# téléchargés au premier lancement, seulement quand la personne active la
-# fonction qui en a besoin (intelligence locale). Les anciennes versions de
-# l'app ignorent cette section : elles ne lisent que « models ».
-# --------------------------------------------------------------------------- #
-
-def optional_dir(name):
-    return os.path.join(CACHE, name)
-
-
-def optional_present(name, sentinel="config.json"):
-    d = optional_dir(name)
-    try:
-        return os.path.exists(os.path.join(d, sentinel)) and not any(f.endswith(".part") for f in os.listdir(d))
-    except Exception:
-        return False
-
-
-def optional_size(name, manifest=None):
-    """Taille annoncée par le manifeste, en octets (0 si absent)."""
-    try:
-        man = manifest or fetch_manifest()
-        return sum(f["size"] for f in man.get("optional", {}).get(name, {}).values())
-    except Exception:
-        return 0
-
-
-def download_optional(name, progress=None, manifest=None):
-    """Télécharge un modèle optionnel (vérifié, atomique, reprise). Lève si absent du manifeste ou échec."""
-    man = manifest or fetch_manifest()
-    files = man.get("optional", {}).get(name)
-    if not files:
-        raise RuntimeError("modèle « %s » absent du manifeste" % name)
-    _download_files(man["base_url"], name, files, progress)
-    return optional_dir(name)
+        for rel, meta in files.items():
+            dst = _os.path.join(CACHE, model, rel)
+            if (_os.path.exists(dst) and _os.path.getsize(dst) == meta["size"]
+                    and _sha256(dst) == meta["sha256"]):
+                done += meta["size"]
+                if progress:
+                    progress(done, total, model)
+                continue
+            _os.makedirs(_os.path.dirname(dst), exist_ok=True)
+            url = "%s/%s/%s" % (base, model, rel)
+            tmp = dst + ".part"
+            last_err = None
+            for _attempt in range(3):
+                try:
+                    base_done = done
+                    with _open(url, 60) as resp, open(tmp, "wb") as out:
+                        while True:
+                            chunk = resp.read(1 << 20)
+                            if not chunk:
+                                break
+                            out.write(chunk)
+                            if progress:
+                                progress(base_done + out.tell(), total, model)
+                    if _sha256(tmp) != meta["sha256"]:
+                        raise ValueError("checksum %s" % rel)
+                    _os.replace(tmp, dst)
+                    done = base_done + meta["size"]
+                    last_err = None
+                    break
+                except Exception as e:  # noqa: BLE001
+                    last_err = e
+                    try:
+                        _os.remove(tmp)
+                    except Exception:
+                        pass
+            if last_err is not None:
+                raise RuntimeError("Téléchargement modèle échoué (%s/%s) : %s"
+                                   % (model, rel, last_err))
+    return True

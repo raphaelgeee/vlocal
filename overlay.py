@@ -445,22 +445,12 @@ def transcribing(rec_s):
     _js("ovTranscribing(%.3f)" % float(rec_s))
 
 
-def work(label):
-    """v1.4.0, libellé de l'étape en cours dans la pilule (« Mise en forme »),
-    à la place de « Transcription », le temps que le modèle local travaille."""
+def result(trans_s, inserted, branch=None, text=""):
     import json as _json
-    _js("ovWork(%s)" % _json.dumps(str(label or "")))
-
-
-def result(trans_s, inserted, branch=None, text="", note=None):
-    """note (v1.4.2) : ce qu'a fait l'intelligence locale (« Mail prêt », « Dictée gardée telle
-    quelle »), affiché à la place de « Texte inséré »."""
-    import json as _json
-    _js("ovResult(%.3f,%s,%s,%s,%s)" % (float(trans_s),
-                                        "true" if inserted else "false",
-                                        _json.dumps(branch),
-                                        _json.dumps((text or "")[:240]),
-                                        _json.dumps(note or "")))
+    _js("ovResult(%.3f,%s,%s,%s)" % (float(trans_s),
+                                     "true" if inserted else "false",
+                                     _json.dumps(branch),
+                                     _json.dumps((text or "")[:240])))
 
 
 def too_short():
