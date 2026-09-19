@@ -1,121 +1,140 @@
-"""Intelligence locale : ce qui doit être vrai sans le modèle."""
-import time
+"""Intelligence locale : ce qui doit être vrai sans le modèle (garde-fous, consignes, rappels, comptes rendus)."""
 import unittest
 
 import assist
+import intents
 
 
-class TestIntentions(unittest.TestCase):
-    def t(self, texte, attendu, contenu_contient=None, dest=None):
-        intent, params, contenu = assist.detect_intent(texte)
-        self.assertEqual(intent, attendu, texte)
-        if contenu_contient:
-            self.assertIn(contenu_contient, contenu, texte)
-        if dest is not None:
-            self.assertEqual(params.get("dest"), dest, texte)
-        return contenu
-
-    def test_marqueur_en_tete(self):
-        c = self.t("c'est un mail pour Marie : on valide la proposition et on cale jeudi", "mail", "on valide", dest="Marie")
-        self.assertFalse(c.lower().startswith("c'est un mail"))
-        self.t("Alors, ceci est une note : trois points à traiter avant la démo", "note", "trois points")
-        self.t("Voici un prompt : je veux un plan de formation IA pour des commerciaux", "prompt", "plan de formation")
-        self.t("En anglais : bonjour Marie, la réunion est confirmée pour mardi", "en", "bonjour Marie")
-        self.t("This is an email to Paul: the meeting is confirmed for Tuesday", "mail", "meeting is confirmed", dest="Paul")
-
-    def test_marqueur_en_queue(self):
-        self.t("On valide la proposition et on cale les détails jeudi, voilà, mets ça en mail.", "mail", "on cale")
-        self.t("Acheter du lait, appeler Paul, relire le contrat, mets tout ça en liste", "liste", "relire le contrat")
-        self.t("Le rendez-vous est confirmé pour mardi à quatorze heures en anglais", "en", "confirmé pour mardi")
-        self.t("Bonjour Marie, la proposition est validée. Plus court.", "court", "proposition est validée")
-        self.t("We validated the scope and the budget, make it a list", "liste", "validated the scope")
-        self.t("Merci pour ton retour, je reviens vers toi demain, en français.", "fr", "je reviens")
-
-    def test_reponse_au_texte_copie(self):
-        self.t("Réponds-lui que c'est bon pour jeudi et que j'apporte les documents", "reponse", "c'est bon pour jeudi")
-        self.t("reply that Thursday works for me", "reponse", "Thursday works")
-
-    def test_pas_d_intention(self):
-        for texte in ("Bonjour Marie, c'est parfait pour moi, on valide la proposition.",
-                      "Je t'envoie un mail demain avec les détails.",           # « mail » au milieu : pas un marqueur
-                      "Il faut traduire le contrat en anglais avant vendredi.",  # « en anglais » au milieu
-                      "note",                                                    # marqueur seul, rien à mettre en forme
-                      "mets ça en liste",
-                      ""):
-            intent, _, contenu = assist.detect_intent(texte)
-            self.assertIsNone(intent, texte)
-            self.assertEqual(contenu, texte)
-
-    def test_le_contenu_garde_ses_mots(self):
-        _, _, c = assist.detect_intent("c'est un message : je serai en retard de dix minutes, commencez sans moi")
-        self.assertEqual(c, "je serai en retard de dix minutes, commencez sans moi")
+def dem(texte):
+    d = intents.detect(texte)
+    assert d is not None, texte
+    return d
 
 
-class TestConsignes(unittest.TestCase):
-    def test_signature_et_destinataire(self):
-        system, user = assist.messages_pour("mail", "on valide", {"dest": "Marie", "signature": "Raphael"})
-        self.assertIn("pour Marie", user)
-        self.assertIn("signature « Raphael »", user)
-        self.assertIn("Texte dicté :\non valide", user)
-        self.assertTrue(user.index("Texte dicté") < user.index("Consigne :"), "le texte vient avant la consigne")
-        self.assertIn("gardes son sens", system)
-
-    def test_sans_signature_rien_n_est_invente(self):
-        _, user = assist.messages_pour("mail", "on valide", {})
-        self.assertNotIn("{signature}", user)
-        self.assertNotIn("{dest}", user)
-        self.assertNotIn("signature «", user)
-
-    def test_reponse_embarque_le_texte_copie(self):
-        _, user = assist.messages_pour("reponse", "c'est bon pour jeudi", {"contexte": "Peux-tu jeudi ?"})
-        self.assertIn("Message reçu :\nPeux-tu jeudi ?", user)
-
-
-class TestGardeFous(unittest.TestCase):
-    def test_nettoyage_fidele_accepte(self):
-        ok, info = assist.sortie_acceptable("propre", "euh bonjour marie c'est parfait pour moi on valide la proposition",
-                                            "Bonjour Marie, c'est parfait pour moi. On valide la proposition.")
-        self.assertTrue(ok, info)
-
-    def test_nettoyage_qui_reformule_refuse(self):
-        ok, info = assist.sortie_acceptable("propre", "bonjour marie c'est parfait pour moi on valide la proposition et on cale jeudi",
-                                            "Chère Marie, je vous confirme mon accord total. Fixons une date.")
-        self.assertFalse(ok)
-        self.assertIn("trop modifié", info)
-
-    def test_vide_et_refus_du_modele(self):
-        self.assertFalse(assist.sortie_acceptable("mail", "x y z", "")[0])
-        self.assertFalse(assist.sortie_acceptable("mail", "x y z", "Je ne peux pas faire cela.")[0])
-
-    def test_plus_court_doit_etre_plus_court(self):
-        self.assertFalse(assist.sortie_acceptable("court", "un deux trois", "un deux trois quatre cinq six")[0])
-
-    def test_consigne_recopiee_refusee(self):
-        # ce que le banc a produit sur une vraie dictée : la consigne devenue contenu
-        ok, info = assist.sortie_acceptable("mail", "on valide la proposition et on cale les détails jeudi avec Marie",
-                                            "Bonjour,\nVoici la dictée transformée en courriel :\nCher(e) interlocuteur(e), je vous transmets la transcription.")
-        self.assertFalse(ok); self.assertIn("consigne recopiée", info)
-        ok, info = assist.sortie_acceptable("en", "on valide la proposition et on cale les détails jeudi avec Marie",
-                                            "This dictation has been translated into natural English professionally.")
-        self.assertFalse(ok)
-
-    def test_contenu_perdu_refuse(self):
-        ok, info = assist.sortie_acceptable("liste", "acheter du lait, appeler Paul, relire le contrat, prévenir Julien",
-                                            "- Choisir la bonne option\n- Rester fidèle\n- Ne rien changer")
-        self.assertFalse(ok); self.assertIn("contenu perdu", info)
-        ok, info = assist.sortie_acceptable("liste", "acheter du lait, appeler Paul, relire le contrat, prévenir Julien",
-                                            "- Acheter du lait\n- Appeler Paul\n- Relire le contrat\n- Prévenir Julien")
-        self.assertTrue(ok, info)
-
-    def test_traduction_longueur(self):
-        ok, _ = assist.sortie_acceptable("en", "Bonjour Marie, la réunion est confirmée pour mardi à quatorze heures.",
-                                         "Hello Marie, the meeting is confirmed for Tuesday at 2 pm.")
-        self.assertTrue(ok)
-        self.assertFalse(assist.sortie_acceptable("en", "Bonjour Marie, la réunion est confirmée pour mardi à quatorze heures.", "Hi.")[0])
-
+class TestNettoyage(unittest.TestCase):
     def test_preambule_retire(self):
         self.assertEqual(assist.nettoyer_sortie("Voici le mail :\nBonjour Marie,\nOn valide."), "Bonjour Marie,\nOn valide.")
         self.assertEqual(assist.nettoyer_sortie("« Bonjour »"), "Bonjour")
+
+    def test_annonce_retiree(self):
+        self.assertEqual(assist.nettoyer_commande("Sure, here are three names: A, B, C."), "A, B, C.")
+        self.assertTrue(assist.nettoyer_commande("Voici une liste :\n- a\n- b").startswith("- a"))
+
+    def test_repetitif(self):
+        self.assertTrue(assist.repetitif("\n".join("- Fromage %d" % i for i in range(8))))
+        self.assertFalse(assist.repetitif("- lait\n- pain\n- oeufs\n- beurre\n- sel\n- poivre"))
+
+
+class TestAiguillage(unittest.TestCase):
+    """Mettre en forme ce qui a été dicté passe par le code ; écrire passe par le modèle."""
+
+    def test_mise_en_forme_sans_modele(self):
+        d = dem("C'est un mail pour Julien : merci pour ton retour, la proposition est validée, on cale jeudi.")
+        out = assist.rediger_sans_modele(d, {"signature": "Raphael"})
+        self.assertTrue(out.startswith("Bonjour Julien,"))
+        self.assertTrue(out.endswith("Raphael"))
+        self.assertIn("la proposition est validée", out)
+
+    def test_redaction_passe_par_le_modele(self):
+        for t in ("Rédige un prompt pour créer une image d'un train poursuivi par un avion.",
+                  "C'est un prompt : je veux un plan de formation d'une journée sur l'IA pour des commerciaux",
+                  "C'est un mail pour Marie : la réunion est confirmée pour mardi, en anglais."):
+            self.assertIsNone(assist.rediger_sans_modele(dem(t), {}), t)
+
+    def test_consignes(self):
+        system, user, ex, mt = assist.consigne_demande(dem("Fais-moi un mail pour Marie pour décaler la réunion de jeudi."), {})
+        self.assertIn("n'inventes aucun fait", system)
+        self.assertIn("pour Marie", user)
+        self.assertEqual(len(ex), 1)
+        self.assertLessEqual(mt, 400)
+        _, user, _, _ = assist.consigne_demande(dem("Write an email to Paul to confirm Tuesday's meeting at 10."), {})
+        self.assertIn("in English", user)
+        _, user, _, _ = assist.consigne_demande(dem("Traduis ça en anglais"), {"contexte": "Bonjour, la réunion est confirmée."})
+        self.assertIn("Bonjour, la réunion est confirmée.", user)
+        self.assertIn("anglais", user)
+
+
+class TestGardeFous(unittest.TestCase):
+    def test_consigne_et_annonce_refusees(self):
+        d = dem("Rédige un prompt pour créer une image d'un train poursuivi par un avion.")
+        self.assertFalse(assist.accepte_demande(d, "Voici le prompt : un train")[0])
+        self.assertFalse(assist.accepte_demande(d, "Rédige un prompt pour créer une image d'un train poursuivi par un avion.")[0])
+        self.assertFalse(assist.accepte_demande(d, "Je ne peux pas faire ça.")[0])
+
+    def test_hors_sujet_refuse(self):
+        d = dem("Rédige un prompt pour créer une image d'un train poursuivi par un avion.")
+        self.assertFalse(assist.accepte_demande(d, "Une voiture de police en arrière-plan, lumière vive, style réaliste.")[0])
+        self.assertTrue(assist.accepte_demande(d, "Un train à vapeur poursuivi par un avion, lumière du soir, plan large.")[0])
+
+    def test_nom_propre_perdu_refuse(self):
+        d = dem("Tu peux me faire un mail pour Jacques pour lui dire que je rejoins Miria le premier octobre.")
+        self.assertFalse(assist.accepte_demande(d, "Bonjour Jacques,\n\nJe reviens le premier octobre.\n\nÀ bientôt,")[0])
+        self.assertTrue(assist.accepte_demande(d, "Bonjour Jacques,\n\nJe rejoins Miria le premier octobre.\n\nÀ bientôt,")[0])
+        d = dem("Fais-moi un prompt pour que Claude me génère un tableau de bord à partir d'un export Excel de production.")
+        self.assertTrue(assist.accepte_demande(d, "Tu vas créer un tableau de bord à partir d'un export Excel de production.")[0])
+
+    def test_registre_garde(self):
+        d = dem("Fais-moi un mail avec ça : bonjour Nabil, je vous propose un appel de vingt minutes la semaine prochaine.")
+        self.assertFalse(assist.accepte_demande(d, "Bonjour Nabil,\n\nJe te propose un appel de vingt minutes la semaine prochaine.")[0])
+
+    def test_langue_gardee(self):
+        d = dem("Write an email to Paul to confirm Tuesday's meeting at 10.")
+        self.assertFalse(assist.accepte_demande(d, "Bonjour Paul, je confirme la réunion de mardi à 10 heures, merci.")[0])
+        self.assertTrue(assist.accepte_demande(d, "Hi Paul,\n\nConfirming our meeting on Tuesday at 10.\n\nBest,")[0])
+
+    def test_format_qui_perd_du_contenu_refuse(self):
+        d = dem("C'est un prompt : je veux que tu analyses une liste de leads industriels en Île-de-France, garde celles de plus de "
+                "cinq millions de chiffre d'affaires et fais un tableau avec le dirigeant et une phrase d'accroche")
+        self.assertFalse(assist.accepte_demande(d, "Analyse des leads.")[0])
+
+    def test_signature_et_destinataire_egare(self):
+        d = dem("Fais-moi un mail pour Marie pour décaler la réunion de jeudi.")
+        self.assertTrue(assist.signer("Bonjour Marie,\n\nOn décale.\n\nMerci,", d, {"signature": "Raphael"}).endswith("Merci,\nRaphael"))
+        d = dem("Fais-moi un mail avec ça : bonjour Nabil, je vous propose un appel de vingt minutes.")
+        out = assist.signer("Bonjour Nabil,\n\nJe vous propose un appel.\n\nCordialement,\nNabil", d, {"signature": "Raphael"})
+        self.assertTrue(out.endswith("Cordialement,\nRaphael"))
+
+    def test_noms_propres(self):
+        self.assertEqual(assist.noms_propres("Écrire un mail pour Romain de LTC. Donc lui"), ["Romain", "LTC"])
+        self.assertEqual(assist.noms_propres("Rédige un prompt pour créer une image"), [])
+
+
+class TestElagage(unittest.TestCase):
+    def test_sections_inventees_retirees(self):
+        ref = ("je veux que tu m'aides à préparer une formation d'une journée sur l'IA pour des commerciaux dans l'industrie, "
+               "avec des démos sur leurs vrais fichiers Excel et un quiz à la fin")
+        out = ("Tu vas aider à préparer une formation d'une journée sur l'IA pour des commerciaux dans l'industrie.\n\n"
+               "Tâche : rédige un plan de formation comprenant des démos sur leurs vrais fichiers Excel et un quiz à la fin.\n\n"
+               "Contraintes : inclure des exemples concrets, adapter le contenu aux besoins, garder le langage simple et pratique.\n\n"
+               "Format attendu : un plan détaillé avec les modules, les objectifs de chaque partie.")
+        res = assist.elaguer_ajouts(ref, out)
+        self.assertIn("Tâche : rédige", res)
+        self.assertNotIn("Contraintes", res)
+        self.assertNotIn("Format attendu", res)
+
+    def test_contraintes_dictees_gardees(self):
+        ref = "analyse les leads, ne m'invente rien, si tu ne trouves pas une info tu mets non trouvé, fais un tableau"
+        out = "Tu analyses les leads.\n\nContraintes : n'invente rien ; si une info manque, mets « non trouvé ».\n\nFormat attendu : un tableau."
+        self.assertEqual(assist.elaguer_ajouts(ref, out), out)
+
+
+class TestBudget(unittest.TestCase):
+    def test_budget_borne(self):
+        self.assertGreater(assist.budget_redaction(360), 10)
+        self.assertLessEqual(assist.budget_redaction(5000), 45)
+
+
+class TestAssistSansModele(unittest.TestCase):
+    def test_sans_modele_rien_n_est_invente(self):
+        a = assist.Assist(lambda: "/chemin/inexistant", log=lambda *_: None)
+        self.assertFalse(a.model_present())
+        self.assertFalse(a.load())
+        self.assertEqual(a.rediger(dem("Rédige un prompt pour créer une image d'un train."), {}), (None, "modèle absent"))
+        self.assertEqual(a.rediger(dem("Traduis ça en anglais"), {}), (None, "rien de copié à retravailler"))
+        self.assertIsNone(a.extraire_rappel("rappelle-moi demain à dix heures"))
+        self.assertIsNone(a.compte_rendu([{"speaker": "spk_0", "text": "bonjour"}]))
+        self.assertIsNone(a.compte_rendu([]))
+        a.unload()
 
 
 class TestRappelJson(unittest.TestCase):
@@ -169,22 +188,6 @@ class TestCompteRendu(unittest.TestCase):
         self.assertEqual(assist.libelle_locuteur("SPEAKER_02"), "Locuteur 3")
 
 
-class TestAssistSansModele(unittest.TestCase):
-    def test_sans_modele_tout_retombe_sur_le_brut(self):
-        a = assist.Assist(lambda: "/chemin/inexistant", log=lambda *_: None)
-        self.assertFalse(a.model_present())
-        self.assertFalse(a.load())
-        self.assertEqual(a.transformer("mail", "bonjour", {}), (None, "modèle absent"))
-        self.assertIsNone(a.extraire_rappel("rappelle-moi demain à dix heures"))
-        self.assertIsNone(a.compte_rendu([{"speaker": "spk_0", "text": "bonjour"}]))
-        self.assertIsNone(a.compte_rendu([]))
-        a.unload()   # sans modèle : silencieux
-
-
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestRappelHybride(unittest.TestCase):
     NOW = __import__("datetime").datetime(2026, 9, 16, 9, 30)
 
@@ -206,109 +209,17 @@ class TestRappelHybride(unittest.TestCase):
         self.assertEqual(r["titre"], "Send the invoice")
         self.assertEqual(r["when"].day, 17)
 
+    def test_echeance_hors_du_titre(self):
+        r = assist.resoudre_rappel({"titre": "Call the accountant on Monday at 9", "quand": "on Monday at 9"},
+                                   "remind me to call the accountant on Monday at 9", self.NOW)
+        self.assertEqual(r["titre"], "Call the accountant")
+        r = assist.resoudre_rappel({"titre": "Appeler Paul à 18h", "quand": "à 18h"}, "rappelle-moi d'appeler Paul à 18h", self.NOW)
+        self.assertEqual(r["titre"], "Appeler Paul")
+
     def test_sans_date(self):
         self.assertIsNone(assist.resoudre_rappel({"titre": "X", "quand": "bientôt"}, "pense à X bientôt", self.NOW))
         self.assertIsNone(assist.resoudre_rappel(None, "x", self.NOW))
 
 
-class TestGardeFousIntentions(unittest.TestCase):
-    def test_etiquette_titre_retiree(self):
-        self.assertTrue(assist.nettoyer_sortie("Titre court : Démo\n- a").startswith("Démo"))
-
-    def test_prompt_tolere_assistant_ia(self):
-        ok, _ = assist.sortie_acceptable("prompt", "c'est un prompt : plan de formation IA pour commerciaux industrie démonstrations fichiers",
-                                         "Contexte : formation IA pour des commerciaux dans l'industrie.\nTâche : plan de formation avec démonstrations sur leurs fichiers.\nContraintes : assistant IA.\nFormat attendu : plan.")
-        self.assertTrue(ok)
-        ok, _ = assist.sortie_acceptable("note", "réunion demain", "Note : assistant IA réunion demain")
-        self.assertFalse(ok)
-
-
-class TestNettoyageSansPerte(unittest.TestCase):
-    def test_tete_avalee_refusee(self):
-        ok, info = assist.sortie_acceptable("propre", "euh bonjour marie la réunion est euh confirmée pour mardi à quatorze heures",
-                                            "La réunion est confirmée pour mardi à quatorze heures.")
-        self.assertFalse(ok); self.assertIn("mots perdus", info)
-
-    def test_nettoyage_fidele_accepte(self):
-        ok, _ = assist.sortie_acceptable("propre", "euh bonjour marie la réunion est euh confirmée pour mardi à quatorze heures",
-                                         "Bonjour Marie, la réunion est confirmée pour mardi à 14 heures.")
-        self.assertTrue(ok)
-
-    def test_titre_rappeler_retire(self):
-        r = assist.rappel_depuis_json('{"rappel": true, "titre": "Rappeler le point avec Gaspard", "quand": "vendredi"}')
-        self.assertEqual(r["titre"], "Le point avec Gaspard")
-
-
-class TestCommande(unittest.TestCase):
-    OUI = ["Rédige un prompt pour créer une image d'un train qui est poursuivi par un avion.",
-           "Peux-tu me donner cinq idées de titres pour un post LinkedIn sur la dictée vocale",
-           "Traduis ça en anglais", "Corrige ce mail", "Explique la photosynthèse à un enfant de huit ans",
-           "Write a short email to Paul to confirm Tuesday's meeting", "Give me three names for a dictation app",
-           "Il faudrait que tu me rédiges une bio LinkedIn de trois lignes pour un développeur indépendant"]
-    NON = ["Peux-tu m'envoyer le devis avant jeudi", "Donne le message à Paul.", "Je fais la liste des courses ce soir",
-           "Rédige un compte rendu de la réunion et envoie-le à Paul avant ce soir", "Explique-lui que je serai en retard",
-           "Je vais écrire un mail à Marie ce soir pour lui expliquer", "Merci pour la note", "Je t'envoie le résumé ce soir",
-           "Fais la liste des participants avant la réunion s'il te plaît", "Trouve une salle pour vendredi et réserve-la",
-           "Propose-moi un objet de mail pour une relance commerciale et envoie-le à Marc"]
-
-    def test_rappel(self):
-        for t in self.OUI:
-            self.assertEqual(assist.detect_intent(t)[0], "commande", t)
-
-    def test_precision(self):
-        for t in self.NON:
-            self.assertIsNone(assist.detect_intent(t)[0], t)
-
-    def test_source_presse_papier(self):
-        it, p, _ = assist.detect_intent("Résume ce texte en trois phrases")
-        self.assertEqual((it, p["source"], p["transforme"]), ("commande", "clipboard", True))
-        it, p, _ = assist.detect_intent("Je veux que tu me rédiges un mail, ça c'est pour le contexte, il m'a proposé un rendez-vous")
-        self.assertEqual((it, p["source"]), ("commande", None))
-        it, p, _ = assist.detect_intent("Rédige un résumé de la réunion d'hier")
-        self.assertTrue(p["transforme"])          # un résumé suppose une matière : sans texte copié, rien
-
-    def test_garde_fous_commande(self):
-        c = "Rédige un prompt pour créer une image d'un train qui est poursuivi par un avion."
-        self.assertFalse(assist.commande_acceptable(c, c)[0])
-        self.assertFalse(assist.commande_acceptable(c, "A steam train races across the plains, chased by a fighter jet.")[0])
-        self.assertTrue(assist.commande_acceptable(c, "Un train à vapeur fonce sur des rails à travers une plaine, poursuivi par un avion de chasse volant bas, image cinématographique.")[0])
-        self.assertFalse(assist.commande_acceptable(c, "Une plage au coucher du soleil, palmiers et sable fin.")[0])
-        ok, info = assist.commande_acceptable("Résume ce texte en trois phrases", "Les licornes dansent sur Mars avec des dauphins volants et des robots.", source="La réunion a validé le budget et le périmètre de la version un.")
-        self.assertFalse(ok)
-
-    def test_queue_nom_nu(self):
-        self.assertIsNone(assist.detect_intent("Je te renvoie la version corrigée du contrat, merci pour la note")[0])
-        self.assertEqual(assist.detect_intent("on a validé le périmètre et le budget est confirmé, plus court")[0], "court")
-
-    def test_besoin_nettoyage(self):
-        self.assertFalse(assist.besoin_nettoyage("Rédige un prompt pour créer une image d'un train."))
-        self.assertTrue(assist.besoin_nettoyage("bonjour marie la réunion est confirmée"))
-        self.assertTrue(assist.besoin_nettoyage("Bonjour, la la réunion est confirmée."))
-
-
-class TestRoutageTransformations(unittest.TestCase):
-    def r(self, phrase, source="Bonjour, on peut organiser l'essai la semaine prochaine."):
-        it, p, _ = assist.detect_intent(phrase)
-        self.assertEqual(it, "commande", phrase)
-        return assist.intention_pour_transformation(p, phrase, source)
-
-    def test_routage(self):
-        self.assertEqual(self.r("Corrige ce mail"), "corrige")
-        self.assertEqual(self.r("Traduis ça en anglais"), "en")
-        self.assertEqual(self.r("Traduis ce texte", source="Hello, can we plan the trial next week?"), "fr")
-        self.assertEqual(self.r("Résume ce texte en trois phrases"), "court")
-        self.assertEqual(self.r("Reformule ça de manière plus formelle"), "formel")
-        self.assertEqual(self.r("Reformule ce message"), "propre")
-
-    def test_nettoyer_commande(self):
-        self.assertEqual(assist.nettoyer_commande("Sure, here are three names: A, B, C."), "A, B, C.")
-        self.assertTrue(assist.nettoyer_commande("Voici une liste :\n- a\n- b").startswith("- a"))
-        self.assertEqual(assist.nettoyer_commande("Réponse : paresseux, lent"), "paresseux, lent")
-
-    def test_repetitif(self):
-        self.assertTrue(assist.repetitif("\n".join("- Fromages %d" % i for i in range(8))))
-        self.assertFalse(assist.repetitif("- lait\n- pain\n- oeufs\n- beurre\n- sel\n- poivre"))
-
-    def test_meta_refusee(self):
-        ok, info = assist.commande_acceptable("Corrige ce mail", "Je corrige ce message.")
-        self.assertFalse(ok)
+if __name__ == "__main__":
+    unittest.main()

@@ -452,12 +452,15 @@ def work(label):
     _js("ovWork(%s)" % _json.dumps(str(label or "")))
 
 
-def result(trans_s, inserted, branch=None, text=""):
+def result(trans_s, inserted, branch=None, text="", note=None):
+    """note (v1.4.2) : ce qu'a fait l'intelligence locale (« Mail prêt », « Dictée gardée telle
+    quelle »), affiché à la place de « Texte inséré »."""
     import json as _json
-    _js("ovResult(%.3f,%s,%s,%s)" % (float(trans_s),
-                                     "true" if inserted else "false",
-                                     _json.dumps(branch),
-                                     _json.dumps((text or "")[:240])))
+    _js("ovResult(%.3f,%s,%s,%s,%s)" % (float(trans_s),
+                                        "true" if inserted else "false",
+                                        _json.dumps(branch),
+                                        _json.dumps((text or "")[:240]),
+                                        _json.dumps(note or "")))
 
 
 def too_short():

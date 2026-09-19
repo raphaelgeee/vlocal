@@ -75,8 +75,13 @@ _UA = "Vlocal-Updater (macOS)"
 
 
 def _open(url, timeout):
-    """urlopen avec User-Agent explicite (sinon Cloudflare R2 bloque en 403)."""
+    """urlopen avec User-Agent explicite (sinon Cloudflare R2 bloque en 403), IPv4 d'abord (reseau.py)."""
     import urllib.request
+    try:
+        import reseau
+        reseau.appliquer()
+    except Exception:
+        pass
     return urllib.request.urlopen(
         urllib.request.Request(url, headers={"User-Agent": _UA}), timeout=timeout)
 

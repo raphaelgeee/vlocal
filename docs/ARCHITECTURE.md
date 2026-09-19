@@ -92,31 +92,37 @@ meetings (cosine 0.75 with a margin over the second best).
 
 ## Local intelligence (preview)
 
-`assist.py` wraps a small instruction model (LFM2.5-1.2B, 4-bit, MLX) behind
-three rules: it never runs unless the person turned it on, it never touches
-the raw path (any failure returns the dictated text), and it never decides a
-fact it cannot compute (dates come from `reminders.parse_datetime`).
+Three layers, and the model only in the last one.
 
-- **Intents.** `detect_intent()` recognises a spoken marker at the head
-  ("c'est un mail pour Marie :"), at the tail ("... mets ça en liste", "... en
-  anglais") or a reply marker ("réponds :" with a message on the clipboard),
-  strips it and returns the content. Each intent has one instruction, text
-  first, instruction last. `sortie_acceptable()` rejects an output that copies
-  the instruction, loses the content (word coverage per intent), drifts too far
-  for a cleanup (sequence similarity) or has an implausible length for a
-  translation. Rejected means the raw text is inserted.
-- **Instructions.** `detect_commande()` recognises a request addressed to the
-  model: an action verb at the head (imperative, infinitive after "peux-tu",
-  second person after "il faudrait que tu") plus a named deliverable within the
-  first words (prompt, mail, idées, titres, description...), or a transform
-  verb aimed at the copied text ("traduis ça", "résume ce texte"). Requests
-  that continue with a human-directed action ("et envoie-le à Paul") or that
-  need material we do not have (a report of a meeting, no clipboard) are left
-  alone. Creation requests get their own system prompt with three short
-  examples and a repetition penalty; transforms are routed to the specialised
-  intents and their guards. `commande_acceptable()` rejects a copy of the
-  request, a meta answer ("here is", "je vais"), a looping list, a language
-  switch, an off-topic answer, and, with a source, an answer that drifts from it.
+1. **Recognition** (`intents.py`, no model, under a millisecond). A request is
+   a named deliverable (mail, prompt, message, note, liste, post) or a modifier
+   (a language, "plus court", "plus formel") found at the edge of the
+   dictation: in its first words (declarative "c'est un mail pour Marie :",
+   objective "l'objectif c'est un prompt", imperative "rédige-moi un mail",
+   polite "tu peux me faire un message", conversion "mets ça en liste") or as
+   its last clause, detached by punctuation ("…, mets ça en liste"). Never in
+   the middle of a sentence: "je t'envoie ça en mail demain" is not a request.
+   Two modes come out of it: FORMAT (the dictation is the text) and COMPOSE (the
+   dictation describes what to write). A definite article ("fais la liste des
+   participants") or a human-directed follow-up ("… et envoie-le à Paul") means
+   a task for a person. When the frontmost app is an AI assistant, a terminal
+   or a code editor (`contexte_assistant`, bundle id and window title captured
+   at the start of the dictation), COMPOSE requests are for that app and are
+   ignored; announced formats still apply.
+2. **Formatting** (`mise_en_forme.py`, no model). FORMAT requests for an email,
+   a message, a note, a list or a post are built from the dictated words:
+   oral hesitations removed, sentences split at their connectors, bullets,
+   greeting and closing chosen by "tu" or "vous", signature appended.
+3. **Writing** (`assist.py`, model). Prompts, COMPOSE requests, translations,
+   shorter or more formal versions, replies to copied text. One instruction
+   per deliverable and mode, one short example given as a real exchange,
+   output length capped per deliverable, time budget sized to it and doubled
+   in Low Power Mode. `accepte_demande()` rejects a copy of the request, an
+   instruction leak, a meta answer ("voici", "je vais"), a looping list, a
+   language or register switch, missing key words or proper names of the
+   request, and, in FORMAT mode, lost content. Knowledge requests (a shopping
+   list for a raclette, "explique…") are not sent to the model at all.
+
 - **Reminders.** A second pass only when `reminders.is_reminder()` said no and
   a cheap cue ("rappelle", "oublie", "remind"...) is present: the model returns
   `{titre, quand}` as JSON, `resoudre_rappel()` computes the date with the
@@ -127,12 +133,15 @@ fact it cannot compute (dates come from `reminders.parse_datetime`).
   names a speaker gives or is called by). Chunks are merged and rendered by
   Python, not by the model. First names are offered as suggestions in the UI
   and applied through the usual `rename_speaker`.
-- **Lifecycle.** The model lives in the optional section of the R2 manifest
-  (`model_store.download_optional`), downloaded on demand into the model cache,
-  loaded on first use (about a second), unloaded after ten minutes idle by the
-  same watchdog that unloads Whisper. The settings card is shown only where the
-  preview flag is set (`com.vlocal.identity preview_assist = 1`, or
-  `VLOCAL_PREVIEW=assist`).
+- **Lifecycle.** The model (Qwen3-4B-Instruct-2507, 4-bit, 2.3 GB) lives in the
+  optional section of the R2 manifest (`model_store.download_optional`). It is
+  loaded only when a writing request arrives, or at the start of a dictation
+  if it was used in the last fifteen minutes, never below 3.2 GB of free
+  memory, and unloaded after ten minutes idle by the watchdog that unloads
+  Whisper. The settings card is shown only where the preview flag is set
+  (`com.vlocal.identity preview_assist = 1`, or `VLOCAL_PREVIEW=assist`).
+  `Vlocal --assist-selftest` is a build gate: the packaged app must import
+  mlx-lm without torch and, if the model is cached, write a prompt.
 
 ## Storage and settings
 

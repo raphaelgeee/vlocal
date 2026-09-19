@@ -92,7 +92,7 @@ checksum-verified, and everything the model does afterwards happens on your Mac.
 | Voice activity | Silero VAD (through faster-whisper) and an RMS gate shared by the live-tail. |
 | Speaker separation | [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) CAM++ 192-d embeddings, spherical k-means, speaker count by spectral gap (silhouette as fallback) with a duration cap, boundary snapping to speech. |
 | Text formatting | Deterministic rules ([processor.py](processor.py)); nothing is rewritten by default. |
-| Local intelligence (preview) | [LFM2.5-1.2B-Instruct](https://huggingface.co/LiquidAI/LFM2.5-1.2B-Instruct) by Liquid AI, 4-bit MLX build, through [mlx-lm](https://github.com/ml-explore/mlx-lm). Off by default, downloaded on demand, used only for a declared intent ("this is an email for..."), reminders the parser missed, and meeting reports. Every output passes guardrails in [assist.py](assist.py) or the raw dictation is kept. LFM Open License. |
+| Local intelligence (preview) | Requests are recognised by rules ([intents.py](intents.py)); formatting your own words is done by code ([mise_en_forme.py](mise_en_forme.py)). Writing (a prompt, a described email, a translation) uses [Qwen3-4B-Instruct-2507](https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507), 4-bit MLX build, through [mlx-lm](https://github.com/ml-explore/mlx-lm), Apache 2.0. Off by default, downloaded on demand, loaded only to write. Every output passes guardrails in [assist.py](assist.py) or the dictation is kept as spoken. |
 | Storage | SQLite in WAL mode ([storage.py](storage.py)). |
 | UI | A single HTML file ([vlocal-interface.html](vlocal-interface.html)) in a pywebview window, a floating dictation overlay, a menu bar item. |
 | Reliability | The microphone is captured in a disposable subprocess that is killed and respawned if it hangs; GPU inference has a proportional timeout and a temporary CPU fallback; a supervisor bounds every step of a dictation. |
@@ -159,7 +159,9 @@ voiceid.py             known voices across meetings
 live_meeting.py        incremental meeting transcription
 recorder.py, meeting_visio.py, visio_recorder.py   meeting audio capture
 processor.py           deterministic text formatting and glossary
-assist.py              local intelligence (preview): intents, prompts, guardrails, meeting reports
+intents.py             recognition of spoken requests ("c'est un mail pour Marie : …"), no model
+mise_en_forme.py       deterministic formatting of dictated text (email, message, note, list, post)
+assist.py              local intelligence (preview): writing with the model, guardrails, meeting reports
 reminders.py           French reminder parser
 storage.py             SQLite persistence
 telemetry.py           declared usage data (see "Data")

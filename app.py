@@ -85,7 +85,8 @@ if "--assist-selftest" in sys.argv:
     _rep["model_present"] = _a.model_present()
     if _rep["model_present"]:
         _t = _st.time()
-        _out, _info = _a.transformer("liste", "acheter du lait, appeler Paul pour le devis, relire le contrat")
+        import intents as _si
+        _out, _info = _a.rediger(_si.detect("Rédige un prompt pour générer une image d'un train poursuivi par un avion."), {})
         _rep.update({"out": _out, "info": _info, "s": round(_st.time() - _t, 2), "error": _a.last_error})
     print(_sj.dumps(_rep, ensure_ascii=False))
     sys.exit(0 if _rep["importable"] and not _rep["torch"] and (not _rep["model_present"] or _rep.get("out")) else 1)
@@ -105,6 +106,14 @@ try:
     import errors as _EV
 except Exception:
     _EV = None
+
+# v1.4.2, IPv4 d'abord pour toutes les connexions (modèles, mise à jour, statistiques) :
+# sur un réseau où IPv6 ne passe pas, chaque connexion attendait l'expiration du délai.
+try:
+    import reseau as _reseau
+    _reseau.appliquer()
+except Exception:
+    pass
 
 # Verrou HORS-LIGNE HuggingFace — posé AVANT tout import applicatif (engine
 # importe faster-whisper, qui embarque huggingface_hub) : sur tout chemin de
@@ -127,7 +136,9 @@ import hotkey_mac
 import reminders
 import obsidian         # v1.0.13 — connecteur Obsidian local (capture des dictées dans un coffre, ADDITIF)
 import telemetry        # v1.1.0 — télémétrie minimale déclarée (installs, usage par jour)
-import assist           # v1.4.0, intelligence locale (LFM2.5 en 4 bits, à la demande) : import léger, mlx_lm chargé plus tard
+import assist           # v1.4.0, intelligence locale (modèle local à la demande) : import léger, mlx_lm chargé plus tard
+import intents          # v1.4.2, reconnaissance des demandes dictées (« c'est un mail… »), sans modèle
+import mise_en_forme    # v1.4.2, mise en forme déterministe (mail, message, liste, note, post), sans modèle
 from supabase_config import edge_url, auth_headers  # v1.1.0 — backend centralisé
 import updater          # v1.0.5 — mise à jour in-app (téléchargement + swap atomique)
 from engine import (SAMPLE_RATE, SMALL_DIR_NAME, TURBO_DIR_NAME, VlocalEngine,
@@ -187,7 +198,7 @@ _window_visible = True   # suivi de visibilité (fenêtre naît affichée)
 WIN_W = 1180            # v3.1 — dashboard plein écran (était 380, carte flottante)
 WIN_H = 780             # v3.1 — (était 720)
 PANEL_W = 840            # (hérité ; set_meeting_panel neutralisé en v3.1)
-APP_VERSION = "1.4.1"   # 16 septembre 2026. Synchrone avec le fichier VERSION (build) ;
+APP_VERSION = "1.4.2"   # 19 septembre 2026. Synchrone avec le fichier VERSION (build) ;
                         # affiché dans l'onglet « Mises à jour ». Historique : CHANGELOG.md.
 # Libellé humain du raccourci global actif (posé par start_global_hotkey,
 # consommé par le message de permission _check_hotkey_perm).
@@ -391,6 +402,14 @@ _UI_LANG = "fr"
 _BT = {
   "Mise en forme…": "Formatting…",
   "Rédaction…": "Writing…",
+  "%s prêt": "%s ready",
+  "%s prête": "%s ready",
+  "Traduction": "Translation",
+  "Plus court": "Shorter",
+  "Plus formel": "More formal",
+  "Rien de copié : dictée gardée": "Nothing copied: dictation kept",
+  "Modèle indisponible : dictée gardée": "Model unavailable: dictation kept",
+  "Dictée gardée telle quelle": "Dictation kept as spoken",
   "Téléchargement interrompu. Vérifiez votre connexion et réessayez.": "Download interrupted. Check your connection and try again.",
   "Activez l'intelligence locale et téléchargez le modèle dans les Réglages.": "Turn on local intelligence and download the model in Settings.",
   "Le compte rendu par l'intelligence locale est désactivé dans les Réglages.": "Meeting reports by local intelligence are turned off in Settings.",
@@ -1666,7 +1685,8 @@ class DictationController:
         # Le texte dicté d'origine est conservé (historique, détection de rappel).
         raw_dicte = raw
         try:
-            if _current_mode() == "DICTEE" and _assist_ready():
+            _assist_last.update({"intent": None, "note": None})
+            if _current_mode() == "DICTEE" and _assist_active():
                 raw = _assist_transform(raw, notify_ui) or raw
         except Exception as _ae:
             print(f"[assist] ignoré ({_ae}) : brut conservé.")
@@ -5525,7 +5545,7 @@ def start_global_hotkey():
                         # locale est active et que la personne l'a gardé ; sinon collage d'un bloc.
                         _tw = False
                         try:
-                            _tw = _assist_settings()["assist_typewriter"] and _assist_ready() \
+                            _tw = bool(_assist_last.get("intent")) and _assist_settings()["assist_typewriter"] \
                                 and len(text) <= 4000
                         except Exception:
                             _tw = False
@@ -5585,7 +5605,7 @@ def start_global_hotkey():
                 else:
                     trans_dur = time.time() - t_rel
                     branch = getattr(_controller.engine, "last_model", None)
-                    overlay.result(trans_dur, inserted, branch, text)   # texte fidèle à l'app
+                    overlay.result(trans_dur, inserted, branch, text, note=_assist_last.get("note"))   # texte fidèle à l'app
                     _schedule_overlay_hide(3.0)
         threading.Thread(target=_finalize, daemon=True).start()
 
@@ -5815,12 +5835,15 @@ _engine_ready = threading.Event()
 _assist = None
 _assist_lock = threading.Lock()
 _assist_dl = {"running": False, "pct": 0.0, "error": ""}
-_ASSIST_KEYS = ("assist_enabled", "assist_intents", "assist_clean", "assist_reminders",
+# v1.4.2 : le nettoyage de chaque dictée par le modèle est supprimé. Il faisait attendre (jusqu'à 3 s)
+# et changeait des mots (« ça n'arrive pas » -> « ce n'arrive pas ») : sans demande, rien ne bouge.
+_ASSIST_KEYS = ("assist_enabled", "assist_intents", "assist_reminders",
                 "assist_meetings", "assist_signature", "assist_typewriter")
-_ASSIST_DEFAULTS = {"assist_enabled": False, "assist_intents": True, "assist_clean": False,
+_ASSIST_DEFAULTS = {"assist_enabled": False, "assist_intents": True,
                     "assist_reminders": True, "assist_meetings": True, "assist_signature": "",
                     "assist_typewriter": True}
-_ASSIST_RAM_MIN_GB = 1.2      # en dessous, on ne charge pas le modèle (~0,7 Go résidents)
+_ASSIST_RAM_MIN_GB = 3.2      # mémoire libre nécessaire pour charger le modèle de rédaction (~2,6 Go résidents)
+_dictee_ctx = {"bundle": "", "titre": ""}   # application au premier plan au début de la dictée
 _assist_ram_warned = [0.0]
 
 
@@ -5859,11 +5882,56 @@ def _assist_settings() -> dict:
     return out
 
 
+def _assist_active() -> bool:
+    """La personne a activé l'intelligence locale, et l'aperçu est ouvert sur ce Mac. Suffit pour
+    la mise en forme sans modèle (mail, liste…), qui ne demande ni téléchargement ni mémoire."""
+    try:
+        return bool(_assist_settings()["assist_enabled"] and _preview_features()["assist"])
+    except Exception:
+        return False
+
+
+def _frontmost_context():
+    """(identifiant, titre de fenêtre) de l'application au premier plan. Sert à savoir si la
+    personne parle à une autre IA (Claude, ChatGPT, un terminal) : ses consignes sont alors pour elle."""
+    bid, titre = "", ""
+    try:
+        from AppKit import NSWorkspace
+        app_ = NSWorkspace.sharedWorkspace().frontmostApplication()
+        bid = str(app_.bundleIdentifier() or "")
+        pid = app_.processIdentifier()
+        try:
+            from ApplicationServices import AXUIElementCreateApplication, AXUIElementCopyAttributeValue
+            ax = AXUIElementCreateApplication(pid)
+            err, win = AXUIElementCopyAttributeValue(ax, "AXFocusedWindow", None)
+            if err == 0 and win is not None:
+                err, t = AXUIElementCopyAttributeValue(win, "AXTitle", None)
+                if err == 0 and t:
+                    titre = str(t)[:200]
+        except Exception:
+            pass
+    except Exception:
+        pass
+    return bid, titre
+
+
+def _note_dictee_ctx():
+    """Mémorise l'application visée au début de la dictée (la pilule ne prend pas le focus)."""
+    try:
+        if _assist_active():
+            b, t = _frontmost_context()
+            _dictee_ctx.update({"bundle": b, "titre": t})
+        else:
+            _dictee_ctx.update({"bundle": "", "titre": ""})
+    except Exception:
+        pass
+
+
 def _assist_ready() -> bool:
     """Activé par la personne, en aperçu sur ce Mac, dépendances présentes, modèle téléchargé,
     et assez de mémoire libre pour le tenir sans mettre le Mac à genoux."""
     try:
-        if not _assist_settings()["assist_enabled"] or not _preview_features()["assist"]:
+        if not _assist_active():
             return False
         a = _get_assist()
         if not (a.importable() and a.model_present()):
@@ -5885,41 +5953,87 @@ def _assist_ready() -> bool:
 
 
 def _assist_prewarm():
-    """Au début d'une dictée : charge le modèle en fond pendant que la personne parle,
-    pour que la fin de dictée ne paie jamais le chargement (1 à 2 s)."""
+    """Au début d'une dictée : note l'application visée et, si la personne est en train d'écrire
+    avec le modèle (utilisé il y a moins de quinze minutes), le recharge pendant qu'elle parle.
+    Hors de ces sessions, rien n'est chargé : la mémoire n'est prise que pour une vraie demande.
+    (Le modèle est utilisé « récemment » s'il a servi dans l'heure.)"""
+    _note_dictee_ctx()
     try:
-        if _assist_ready() and not _get_assist().loaded() and not _get_assist().loading:
-            threading.Thread(target=_get_assist().load, name="assist-prewarm", daemon=True).start()
+        a = _get_assist()
+        recent = a.last_use and (time.time() - a.last_use) < 60 * 60
+        if recent and _assist_ready() and not a.loaded() and not a.loading:
+            threading.Thread(target=a.load, name="assist-prewarm", daemon=True).start()
     except Exception:
         pass
 
 
+_NOMS_PILULE = {"fr": {"mail": "Mail", "message": "Message", "note": "Note", "liste": "Liste", "prompt": "Prompt",
+                       "post": "Publication", "reponse": "Réponse", "commande": "Réponse", "transforme": "Texte"},
+                "en": {"mail": "Email", "message": "Message", "note": "Note", "liste": "List", "prompt": "Prompt",
+                       "post": "Post", "reponse": "Reply", "commande": "Answer", "transforme": "Text"}}
+
+
+def _nom_demande(d) -> str:
+    """Nom court de la demande, pour la pilule (« Mail », « Prompt », « English »)."""
+    noms = _NOMS_PILULE.get(_UI_LANG, _NOMS_PILULE["fr"])
+    if d.get("kind") == "transforme":
+        if d.get("langue") and d.get("langue") != "auto":
+            return {"en": "English", "fr": "Français", "es": "Español", "de": "Deutsch", "it": "Italiano"}.get(d["langue"], noms["transforme"])
+        if d.get("langue") == "auto":
+            return _te("Traduction")
+        if d.get("court"):
+            return _te("Plus court")
+        if d.get("formel"):
+            return _te("Plus formel")
+        return noms["transforme"]
+    return noms.get(d.get("livrable") or d.get("kind"), noms["transforme"])
+
+
+_FEMININS = {"Liste", "Note", "Publication", "Réponse", "Traduction"}
+
+
+def _pret(nom) -> str:
+    if _UI_LANG == "en":
+        return "%s ready" % nom
+    return (_te("%s prête") if nom in _FEMININS else _te("%s prêt")) % nom
+
+
 def _assist_transform(raw: str, notify_ui: bool = True) -> str:
-    """Met en forme une dictée si elle porte une intention déclarée (« c'est un mail
-    pour Marie : … », « … en anglais ») ou, si le nettoyage est activé, la nettoie.
-    Retourne TOUJOURS un texte : le résultat s'il est digne de confiance, sinon le
-    texte dicté (sans le marqueur d'intention, qui n'est pas du contenu)."""
+    """v1.4.2, Une dictée qui porte une demande (« c'est un mail pour Marie : … », « rédige-moi
+    un prompt pour… », « …, mets ça en liste ») est mise en forme ou rédigée ; toute autre dictée
+    est rendue telle quelle, instantanément, sans que le modèle soit réveillé.
+
+    Mise en forme d'un texte dicté : code déterministe (mise_en_forme.py), quelques millisecondes,
+    aucun mot inventé. Rédaction (prompt, mail décrit, traduction…) : modèle local, sous garde-fous
+    (assist.accepte_demande). Retourne TOUJOURS un texte : le résultat s'il est digne de confiance,
+    sinon la dictée telle qu'elle a été dite."""
+    _assist_last.update({"intent": None, "note": None})
     if not raw or not raw.strip():
         return raw
     prefs = _assist_settings()
-    _assist_last["intent"] = None
-    intent, params, contenu = assist.detect_intent(raw, _UI_LANG)
-    if intent and not prefs["assist_intents"]:
-        intent = None
-    if intent is None:
-        if not prefs["assist_clean"]:
-            return raw
-        # Le nettoyage coûte une seconde et ne change presque jamais rien : on ne réveille
-        # le modèle que si le texte porte un défaut visible (tics, doublon, ponctuation absente).
-        if not assist.besoin_nettoyage(raw):
-            return raw
-        intent, contenu, params = "propre", raw, {}
-    if not contenu or not contenu.strip():
+    if not prefs["assist_intents"]:
         return raw
-    ctx = {"signature": prefs["assist_signature"], "dest": (params or {}).get("dest") or "",
-           "lang": _UI_LANG, "params": params or {}, "contexte": ""}
-    # Le texte copié sert de matière : réponse à un message, ou consigne qui vise « ça / ce texte ».
-    if intent == "reponse" or (params or {}).get("source") == "clipboard":
+    dans_ia = intents.contexte_assistant(_dictee_ctx.get("bundle"), _dictee_ctx.get("titre"))
+    t0 = time.time()
+    d = intents.detect(raw, contexte_assistant_actif=dans_ia)
+    if d is None:
+        return raw
+    # Le modèle rédige à partir de ce que la personne dit, jamais de ses propres connaissances :
+    # une liste de courses « pour une raclette » ou « explique la photosynthèse » restent des
+    # questions à poser à une vraie IA, pas à un petit modèle local.
+    if d.get("kind") == "commande" or (d.get("mode") == "compose" and d.get("livrable") in ("liste", "note")):
+        print(f"[assist] {d.get('kind')}/{d.get('livrable')} : demande de connaissances, dictée conservée.")
+        return raw
+    nom = _nom_demande(d)
+    ctx = {"signature": prefs["assist_signature"], "lang": _UI_LANG, "contexte": ""}
+    # 1) Mise en forme sans modèle
+    det = assist.rediger_sans_modele(d, ctx)
+    if det:
+        print(f"[assist] {d.get('livrable')} mis en forme sans modèle en {(time.time() - t0) * 1000:.0f} ms.")
+        _assist_last.update({"intent": d.get("livrable"), "note": _pret(nom)})
+        return det
+    # 2) Rédaction par le modèle
+    if d.get("source") == "presse-papiers":
         try:
             import clipboard as _cb
             src = (_cb.get_clipboard() or "").strip()
@@ -5928,30 +6042,40 @@ def _assist_transform(raw: str, notify_ui: bool = True) -> str:
         except Exception:
             pass
         if not ctx["contexte"]:
-            print(f"[assist] {intent} : rien de copié à retravailler, brut conservé.")
-            return contenu if intent == "commande" and not (params or {}).get("transforme") else raw
+            print(f"[assist] {d.get('kind')} : rien de copié à retravailler, dictée conservée.")
+            _assist_last["note"] = _te("Rien de copié : dictée gardée")
+            return raw
+    if not _assist_ready():
+        print("[assist] modèle indisponible (non téléchargé, désactivé ou mémoire insuffisante) : dictée conservée.")
+        _assist_last["note"] = _te("Modèle indisponible : dictée gardée")
+        return raw
     try:
-        overlay.work(_te("Rédaction…") if intent in ("commande", "reponse") else _te("Mise en forme…"))
+        overlay.work(nom + "…")
     except Exception:
         pass
-    t0 = time.time()
+
+    def _prog(n_mots):
+        try:
+            overlay.work("%s · %d %s" % (nom, n_mots, "mots" if _UI_LANG != "en" else "words"))
+        except Exception:
+            pass
+    ctx["progression"] = _prog
     try:
-        out, info = _get_assist().transformer(intent, contenu, ctx)
+        out, info = _get_assist().rediger(d, ctx)
     except Exception as e:
         out, info = None, str(e)[:120]
     if out:
-        print(f"[assist] {intent} en {time.time() - t0:.1f} s ({info}).")
-        _assist_last["intent"] = intent
+        print(f"[assist] {d.get('kind')}/{d.get('livrable')} ({d.get('mode')}) rédigé en {time.time() - t0:.1f} s ({info}).")
+        _assist_last.update({"intent": d.get("livrable") or d.get("kind"), "note": _pret(nom)})
         return out
-    print(f"[assist] {intent} : brut conservé ({info}).")
+    print(f"[assist] {d.get('kind')}/{d.get('livrable')} : dictée conservée ({info}).")
+    _assist_last["note"] = _te("Dictée gardée telle quelle")
     if _EV:
-        _EV.log(_EV.E.ASSIST_FALLBACK, level="warning", intent=intent, reason=str(info)[:80])
-    # Intention déclarée mais modèle muet : on rend le contenu SANS le marqueur,
-    # plus utile que « c'est un mail pour Marie : » inséré tel quel.
-    return contenu if intent != "propre" else raw
+        _EV.log(_EV.E.ASSIST_FALLBACK, level="warning", intent=str(d.get("livrable") or d.get("kind")), reason=str(info)[:80])
+    return raw
 
 
-_assist_last = {"intent": None}    # intention de la dernière dictée transformée (effet d'écriture)
+_assist_last = {"intent": None, "note": None}    # dernière demande traitée : effet d'écriture et libellé de la pilule
 
 
 _ASSIST_REMINDER_CUE = re.compile(r"(?i)\b(rappel|rappelle|rappeler|oublie|oublier|pense à|penser à|pensez à|"

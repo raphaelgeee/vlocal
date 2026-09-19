@@ -238,20 +238,20 @@ html[data-theme="light"] .cfoot{color:rgba(20,22,30,.55)}
   function setLvl(v){ body.style.setProperty('--lvl', clamp(v).toFixed(3)); }
   window.ovLevel=function(v){ setLvl(v); };
   // v1.4.0, étape intermédiaire nommée (mise en forme par le modèle local)
-  window.ovWork=function(label){ var wl=document.querySelector('.worklabel'); if(wl) wl.textContent=label||tt('work'); };
+  window.ovWork=function(label){ var wl=document.querySelector('.worklabel'); if(wl){ wl.textContent=label||tt('work'); wl.dataset.custom=label?'1':''; } };
   window.ovTranscribing=function(rec_s){
     setState('transcribing'); setLvl(.18);
-    var wl=document.querySelector('.worklabel'); if(wl) wl.textContent=tt('work');
+    var wl=document.querySelector('.worklabel'); if(wl){ wl.textContent=tt('work'); wl.dataset.custom=''; }
     var ms=80; rtimer.textContent='0,08 s';
     _iv=setInterval(function(){ ms+=50; rtimer.textContent=fmtS(ms/1000);
       // rassure si c'est anormalement long (avant le watchdog) : pas figé, juste plus long.
-      if(wl && ms>8000){ wl.textContent=tt('wait'); }
+      if(wl && ms>8000 && !wl.dataset.custom){ wl.textContent=tt('wait'); }
     },50);
   };
-  window.ovResult=function(trans_s, inserted, branch, text){
+  window.ovResult=function(trans_s, inserted, branch, text, note){
     setState('result'); setLvl(.14);
     ctext.textContent = text || '';
-    cfoot.textContent = (inserted ? tt('inserted') : tt('copied')) + ' · ' + fmtS(Number(trans_s)||0);
+    cfoot.textContent = (note ? note : (inserted ? tt('inserted') : tt('copied'))) + ' · ' + fmtS(Number(trans_s)||0);
   };
   window.ovTooShort=function(){
     setState('tooshort'); setLvl(.12);

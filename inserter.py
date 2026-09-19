@@ -112,6 +112,8 @@ def insert_at_cursor_progressive(text: str, original=None, delay_s: float = 0.02
         return False
     saved = original if original is not None else clipboard.get_clipboard()
     morceaux = _morceaux(text)
+    # v1.4.2 : l'effet ne coûte jamais plus d'environ 0,6 s, quelle que soit la longueur
+    pause = min(delay_s, max(0.0, 0.6 / max(1, len(morceaux)) - 0.02))
     for i, m in enumerate(morceaux):
         if not clipboard.set_clipboard(m):
             clipboard.set_clipboard("".join(morceaux[i:]))
@@ -120,7 +122,7 @@ def insert_at_cursor_progressive(text: str, original=None, delay_s: float = 0.02
         if not _paste_keystroke():
             clipboard.set_clipboard("".join(morceaux[i:]))
             return False
-        time.sleep(delay_s)
+        time.sleep(pause)
     time.sleep(0.05)
     clipboard.set_clipboard(text)
     if saved:

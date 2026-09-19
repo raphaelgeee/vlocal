@@ -3,6 +3,41 @@
 Dates are publication dates on the update channel. Earlier internal versions
 (3.x, June 2026) are not listed.
 
+## 1.4.2, 19 September 2026
+
+- **Local intelligence, rebuilt around what was said.** Requests are recognised
+  by a dedicated detector (`intents.py`) that covers the ways people actually
+  ask: "c'est un mail pour Marie :", "ceci est un prompt", "l'objectif c'est un
+  mail", "fais-moi / rédige-moi / établis un prompt", "tu peux me faire un
+  message pour…", "…, mets ça en liste", "…, sous forme de post", in French and
+  English. 1,251 phrasings recognised out of 1,251 in the bench, under a
+  millisecond each. A dictation without a request goes through untouched and
+  the model is not woken.
+- **Formatting your own words needs no model.** An email, a message, a note, a
+  list or a LinkedIn post made from what you dictated is built by code
+  (`mise_en_forme.py`): greeting, paragraphs, bullets, closing chosen by "tu"
+  or "vous", signature. A few milliseconds, and no word that you did not say,
+  apart from the greeting and the closing.
+- **The model only writes.** A prompt, an email described rather than dictated,
+  a translation, a shorter or more formal version, a reply to a copied message.
+  It never answers from its own knowledge: "fais-moi une liste de courses pour
+  une raclette" or "explique la photosynthèse" stay as dictated. The writing
+  model is now Qwen3-4B-Instruct (Apache 2.0, 2.3 GB): on 22 real dictations
+  the previous 1.2B model invented ("a police car chases a plane" for a train),
+  this one stayed faithful on 21. Every result is checked: not a copy of the
+  request, same language, same "tu" or "vous", the key words and proper names
+  of the request present, no invented circumstance; otherwise the dictation is
+  inserted as spoken.
+- **Instructions meant for another AI are left alone.** In Claude, ChatGPT, a
+  terminal or a code editor, "rédige-moi un mail pour…" is for that AI; only an
+  announced format ("c'est un prompt : …") applies there. On the author's 1,737
+  real dictations: zero trigger in those apps.
+- **Cleanup of every dictation is removed.** It made you wait up to 3 seconds
+  and changed words ("ça n'arrive pas" became "ce n'arrive pas").
+- **The pill says what happened**: "Mail…", "Prompt · 42 mots" while writing,
+  then "Mail prêt" or "Dictée gardée telle quelle". Waiting times are sized to
+  the answer and doubled in Low Power Mode, where the GPU runs at half speed.
+
 ## 1.4.1, 16 September 2026
 
 - **Local intelligence: instructions, not just frames.** "Rédige un prompt pour

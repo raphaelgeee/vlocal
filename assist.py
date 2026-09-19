@@ -1,18 +1,21 @@
 """assist.py, l'intelligence locale de Vlocal (aperçu).
 
-Un petit modèle de langage (LFM2.5-1.2B de Liquid AI, MLX, 4 bits, moins d'un
-gigaoctet) tourne sur le Mac pour mettre une dictée en forme QUAND la personne
-le demande (« c'est un mail pour Marie », « mets ça en liste », « en anglais »),
-extraire un rappel d'une phrase en français ou en anglais, et rédiger le compte
-rendu d'une réunion. Les règles, dans l'ordre :
+Un modèle de langage local (Qwen3-4B-Instruct, MLX, 4 bits, 2,3 Go, licence
+Apache 2.0) tourne sur le Mac pour ÉCRIRE quand la personne le demande : un
+prompt, un courriel décrit (« rédige-moi un mail pour décaler la réunion »), une
+traduction, un texte raccourci ou rendu formel, une réponse à un message copié.
+Il extrait aussi un rappel d'une phrase et rédige le compte rendu d'une réunion.
 
-1. Ce qui n'est pas demandé reste au mot près. Le nettoyage léger est une option
-   séparée, et son résultat est refusé s'il s'éloigne trop du texte dicté.
-2. Jamais sans borne : chaque appel a un délai maximal ; passé ce délai, ou à
-   la moindre erreur, la dictée brute est insérée comme aujourd'hui.
-3. Chargé à la demande, déchargé après inactivité : rien en mémoire tant que la
-   fonction n'est pas utilisée.
-4. Rien ne quitte le Mac. Le modèle est téléchargé une fois depuis R2, vérifié
+La reconnaissance des demandes est dans intents.py (sans modèle), la simple mise
+en forme d'un texte dicté dans mise_en_forme.py (sans modèle). Les règles :
+
+1. Sans demande, la dictée reste au mot près et le modèle n'est pas réveillé.
+2. Le modèle écrit à partir de ce que la personne dit, jamais de ses propres
+   connaissances ; chaque résultat passe des garde-fous (accepte_demande), sinon
+   la dictée est insérée telle qu'elle a été dite.
+3. Jamais sans borne : chaque appel a un délai maximal (budget_redaction).
+4. Chargé à la demande, déchargé après inactivité.
+5. Rien ne quitte le Mac. Le modèle est téléchargé une fois depuis R2, vérifié
    par empreinte, comme les modèles de transcription.
 
 Ce module ne dépend d'aucun autre module de l'app : app.py le branche.
@@ -24,274 +27,28 @@ import re
 import threading
 import time
 
-MODEL_NAME = "lfm2.5-1.2b-instruct-mlx-4bit"     # clé du manifeste R2 (section « optional »)
-MODEL_LABEL = "LFM2.5-1.2B"
-IDLE_UNLOAD_S = 10 * 60                          # déchargé après dix minutes sans usage
-TIMEOUT_INTENT_S = 8.0                           # mise en forme demandée
-TIMEOUT_CLEAN_S = 3.0                            # nettoyage léger : au-delà, brut
-TIMEOUT_REMINDER_S = 4.0
-TIMEOUT_COMMANDE_S = 12.0                        # une consigne exécutée (rédaction libre)
+# v1.4.2 : Qwen3-4B-Instruct-2507. Banc de rédaction sur 22 dictées réelles : le LFM2.5-1.2B
+# inventait (« une voiture de police poursuit un avion » pour un train), le LFM2-2.6B perdait
+# des détails d'un long prompt et inventait des circonstances ; le Qwen3-4B est resté fidèle
+# sur 21 cas sur 22. Plus lent, mais la mise en forme ne passe plus par le modèle.
+MODEL_NAME = "qwen3-4b-instruct-2507-mlx-4bit"    # clé du manifeste R2 (section « optional »)
+MODEL_LABEL = "Qwen3-4B"
+def _idle_unload_s():
+    """Dix minutes sans usage, trente sur un Mac de 16 Go ou plus : le recharger coûte plusieurs
+    secondes (8,6 s mesurées en économie d'énergie) et la mémoire y est moins rare."""
+    try:
+        import os as _os
+        return 30 * 60 if _os.sysconf("SC_PAGE_SIZE") * _os.sysconf("SC_PHYS_PAGES") >= 15.5 * 2 ** 30 else 10 * 60
+    except Exception:
+        return 10 * 60
+
+
+IDLE_UNLOAD_S = _idle_unload_s()
 TIMEOUT_MEETING_S = 120.0
 
 # --------------------------------------------------------------------------- #
-# Intentions déclarées à la voix
+# Consignes : rappels et comptes rendus
 # --------------------------------------------------------------------------- #
-
-# nom dicté -> intention. Les variantes orthographiques que Whisper produit sont là.
-_NOMS = {
-    "mail": "mail", "e-mail": "mail", "email": "mail", "e mail": "mail", "courriel": "mail", "mél": "mail",
-    "note": "note", "notes": "note",
-    "liste": "liste", "liste à puces": "liste", "to-do": "liste", "todo": "liste", "to do": "liste",
-    "prompt": "prompt", "prompte": "prompt", "prompt ia": "prompt",
-    "message": "message", "texto": "message", "sms": "message", "message court": "message",
-    "post": "post", "post linkedin": "post", "publication": "post", "publication linkedin": "post",
-    "anglais": "en", "english": "en",
-    "français": "fr", "francais": "fr", "french": "fr",
-    "version courte": "court", "plus court": "court", "résumé": "court", "resume": "court",
-    "formel": "formel", "ton formel": "formel", "version formelle": "formel", "soutenu": "formel",
-    # anglais
-    "list": "liste", "bullet list": "liste", "bullet points": "liste", "prompt for ai": "prompt",
-    "text": "message", "text message": "message", "shorter": "court", "summary": "court", "formal": "formel",
-    "formal tone": "formel", "linkedin post": "post",
-}
-# Marqueurs de queue qui se suffisent à eux-mêmes (« …, plus court. »)
-_NOMS_QUEUE_LIBRES = {"plus court", "version courte", "version formelle", "ton formel", "shorter", "formal tone", "bullet points", "to-do", "todo", "to do", "liste à puces"}
-_NOMS_ALT = "|".join(sorted((re.escape(k) for k in _NOMS), key=len, reverse=True))
-
-# « c'est un mail pour Marie : … » / « this is an email to Paul: … » / « en anglais : … »
-_TETE = re.compile(
-    r"^\s*(?:alors|bon|ok|okay|donc)?[,\s]*"
-    r"(?:(?:c'est|c est|ceci est|voici|voilà|voila|ça sera|ce sera|this is|it's|it is|here is|make this|"
-    r"fais[- ]moi|fais|rédige[- ]moi|rédige|redige|écris[- ]moi|écris|ecris|prépare[- ]moi|prépare|tu me fais|tu me rédiges|tu rédiges|"
-    r"je veux|je voudrais|j'aimerais|il me faut|mets[- ]moi ça en|mets ça en|mets[- ]moi en|"
-    r"write me|write|draft me|draft|make me|give me|i want|i need|i'd like|turn this into|put this in)\s+(?:un|une|le|la|an?|the)?\s*)?"
-    r"(?:(?:en|in|version|as)\s+)?"
-    r"(?P<nom>" + _NOMS_ALT + r")"
-    r"(?:\s+(?:pour|à|a|to|for)\s+(?P<dest>[^:,.\n]{1,40}?))?"
-    r"\s*[:,]\s+(?P<contenu>.+)$", re.I | re.S)
-# « … voilà, mets ça en mail. » / « … make it a list » / « … en anglais. »
-_QUEUE = re.compile(
-    r"^(?P<contenu>.+?)"
-    r"[\s,.;:!]+(?:et\s+)?(?:voilà|voila|bon|donc|ok)?[,\s]*"
-    r"(?:(?P<verbe>(?:mets|met|mets-moi|mets moi|met moi|transforme|passe|fais|formate|mets-le|mets le|tu me mets|tu mets|tu le mets|make|turn|put|format)"
-    r"\s*(?:ça|sa|le|la|moi|moi ça|tout ça|le tout|tout|it|this|that|this into|it into)?\s*(?:en|dans|into|in|as|to)?\s*(?:un|une|an?|the)?\s*)"
-    r"|(?P<prep>en\s+|in\s+|as\s+(?:an?\s+)?|version\s+|ton\s+))?(?P<nom>" + _NOMS_ALT + r")"
-    r"(?:\s+(?:pour|à|a|to|for)\s+(?P<dest>[^:,.\n]{1,40}?))?"
-    r"\s*[.!,]*\s*$", re.I | re.S)
-# « réponds-lui que … » : la réponse s'appuie sur le texte copié
-_REPONSE = re.compile(
-    r"^\s*(?:alors|bon|ok)?[,\s]*(?:réponds|repond|répond|réponds-lui|réponds lui|réponds-leur|réponds leur|reply|answer)(?:\s*(?:-|\s)(?:lui|leur|him|her|them))?"
-    r"\s*(?:que|qu'|:|,|that)?\s*(?P<contenu>.+)$", re.I | re.S)
-
-
-# Une CONSIGNE adressée au modèle : un verbe d'action en tête (impératif ou demande
-# polie) ET un livrable nommé dans les premiers mots. « Rédige un prompt pour créer une
-# image d'un train poursuivi par un avion » -> le modèle rédige le prompt. Sans
-# livrable nommé (« peux-tu m'envoyer le devis »), c'est du texte dicté, pas une consigne.
-_CMD_VERBES = (r"rédige|redige|écris|ecris|génère|genere|crée|cree|propose|donne|trouve|fais|prépare|prepare|liste|traduis|résume|resume|"
-               r"reformule|corrige|améliore|ameliore|explique|décris|decris|invente|imagine|suggère|suggere|formule|développe|developpe|"
-               r"complète|complete|raccourcis|synthétise|synthetise|structure|produis|construis|dresse|élabore|elabore|"
-               r"rédiges|rediges|écrives|ecrives|génères|generes|crées|crees|proposes|donnes|trouves|fasses|prépares|prepares|listes|traduises|"
-               r"résumes|resumes|reformules|corriges|améliores|ameliores|expliques|décrives|decrives|inventes|suggères|suggeres|formules|"
-               r"développes|developpes|complètes|completes|synthétises|synthetises|structures|produises|construises|dresses|élabores|elabores|"
-               r"rédiger|rediger|écrire|ecrire|générer|generer|créer|creer|proposer|donner|trouver|faire|préparer|preparer|lister|traduire|"
-               r"résumer|resumer|reformuler|corriger|améliorer|ameliorer|expliquer|décrire|decrire|inventer|imaginer|suggérer|suggerer|"
-               r"formuler|développer|developper|compléter|completer|raccourcir|synthétiser|synthetiser|structurer|produire|construire|dresser|élaborer|elaborer|"
-               r"write|draft|generate|create|give|find|make|prepare|list|translate|summarize|summarise|rewrite|fix|improve|explain|"
-               r"describe|invent|imagine|suggest|come up with|develop|complete|shorten|structure|produce|build|compose")
-_CMD_POLI = (r"(?:peux[- ]tu|pourrais[- ]tu|tu peux|est[- ]ce que tu (?:peux|pourrais)|j'aimerais que tu|je veux que tu|je voudrais que tu|"
-             r"il faudrait que tu|tu (?:me|vas)|s'il te plaît|stp|"
-             r"can you|could you|would you|please|i want you to|i need you to|i'd like you to)\s+(?:me\s+|m'|moi\s+)?")
-_CMD_LIVRABLES = (r"prompts?|e-?mails?|mails?|courriels?|messages?|textos?|sms|textes?|réponses?|reponses?|résumés?|resumes?|synthèses?|syntheses?|"
-                  r"descriptions?|listes?|idées?|idees?|titres?|noms?|slogans?|accroches?|plans?|paragraphes?|phrases?|introductions?|intros?|"
-                  r"conclusions?|bios?|biographies?|posts?|publications?|tweets?|légendes?|legendes?|traductions?|versions?|brouillons?|notes?|"
-                  r"exemples?|questions?|arguments?|synonymes?|définitions?|definitions?|explications?|poèmes?|poemes?|histoires?|discours|"
-                  r"scripts?|comptes? rendus?|ordres? du jour|objets? de mail|formules?|reformulations?|recettes?|programmes?|planning|"
-                  r"tableaux?|comparatifs?|pitch|argumentaires?|fiches?|checklists?|to-?do|variantes?|"
-                  r"emails?|replies|reply|summary|summaries|list|lists|ideas?|titles?|names?|taglines?|hooks?|plans?|paragraphs?|sentences?|"
-                  r"introduction|conclusion|bio|post|caption|captions|translation|version|draft|drafts|note|notes|examples?|questions?|"
-                  r"arguments?|synonyms?|definitions?|explanation|poem|story|speech|script|report|agenda|subject line|checklist|pitch|table")
-_COMMANDE = re.compile(
-    r"^\s*(?:alors|bon|ok|okay|donc|hey|dis[- ]moi|dis)?[,\s]*"
-    r"(?:" + _CMD_POLI + r")?"
-    r"(?P<verbe>(?:" + _CMD_VERBES + r"))(?:[- ](?:moi|nous|me|le|la|les|lui|leur|y|en))?\s+"
-    r"(?P<avant>(?:\w+[' ]){0,4}?)"                  # « un », « moi un », « cinq », « une bonne »
-    r"(?P<objet>(?:" + _CMD_LIVRABLES + r"))\b"
-    r"(?P<reste>.*)$", re.I | re.S)
-# La consigne porte sur un texte déjà copié : « résume ça », « traduis ce texte », « corrige ce mail »
-_CMD_SOURCE = re.compile(r"(?i)\b(ça|ca|cela|ce texte|ce mail|ce message|ce paragraphe|cet e-?mail|ce qui est copié|le texte copié|le message copié|"
-                         r"le presse-papiers?|ci-dessus|this|it|that|the copied text|the clipboard|this text|this email|this message)\b")
-# Verbes qui TRANSFORMENT un texte : sans texte inline ni presse-papier, pas de source, on ne fait rien.
-_CMD_TRANSFORME = re.compile(r"(?i)^(traduis|résume|resume|reformule|corrige|améliore|ameliore|raccourcis|synthétise|synthetise|structure|complète|complete|"
-                             r"translate|summarize|summarise|rewrite|fix|improve|shorten|complete)$")
-
-
-_COMMANDE_SRC = re.compile(
-    r"^\s*(?:alors|bon|ok|okay|donc)?[,\s]*(?:" + _CMD_POLI + r")?"
-    r"(?P<verbe>" + _CMD_TRANSFORME.pattern.strip("^$(?i:)").lstrip("(").rstrip(")") + r"|traduire|résumer|resumer|reformuler|corriger|améliorer|ameliorer|raccourcir|synthétiser|synthetiser|structurer|compléter|completer)"
-    r"(?:[- ](?:moi|me))?\s+(?P<src>ça|ca|cela|ce texte|ce mail|ce message|ce paragraphe|cet e-?mail|le texte copié|le message copié|le presse-papiers?|"
-    r"this|it|that|this text|this email|this message|the copied text)\b(?P<reste>.*)$", re.I | re.S)
-# explication d'un sujet : pas de livrable nommé mais un verbe qui n'a de sens que pour le modèle
-_COMMANDE_EXPLIQUE = re.compile(
-    r"^\s*(?:alors|bon|ok|okay|donc)?[,\s]*(?:" + _CMD_POLI + r")?"
-    r"(?P<verbe>explique|expliquer|décris|decris|décrire|decrire|définis|definis|définir|definir|explain|describe|define)(?:[- ](?:moi|me))?\s+"
-    r"(?!(?:lui|leur|à|a|au|aux|que|qu'|him|her|them|to)\b)(?P<reste>\S+(?:\s+\S+){2,}.*)$", re.I | re.S)
-# Livrables qui supposent une matière première (on ne les fabrique pas à partir de rien)
-_OBJETS_AVEC_SOURCE = re.compile(r"(?i)^(comptes? rendus?|résumés?|resumes?|synthèses?|syntheses?|traductions?|reformulations?|corrections?|summary|summaries|translation|report)$")
-# Suite qui s'adresse à un humain : « … et envoie-le à Paul », « … puis préviens Julien »
-_SUITE_HUMAINE = re.compile(r"(?i)\b(et|puis|ensuite)\s+(envoie|envoies|transmets|appelle|préviens|previens|passe|dis|rappelle|apporte|mets|range|send|call|tell|forward)\b")
-
-
-def detect_commande(text):
-    """(params, texte) si la dictée est une consigne pour le modèle, sinon None.
-    params : objet (livrable), verbe, source ('clipboard' si la consigne vise un texte copié),
-    transforme (le verbe attend un texte à retravailler)."""
-    t = (text or "").strip()
-    if len(t.split()) < 3 or len(t) > 1200:
-        return None
-    m = _COMMANDE.match(t) if len(t.split()) >= 4 else None
-    if not m:
-        ms = _COMMANDE_SRC.match(t)
-        if ms:
-            return {"objet": None, "verbe": ms.group("verbe").lower(), "source": "clipboard", "transforme": True}, t
-        me = _COMMANDE_EXPLIQUE.match(t)
-        if me and not _SUITE_HUMAINE.search(me.group("reste")):
-            return {"objet": None, "verbe": me.group("verbe").lower(), "source": None, "transforme": False}, t
-        return None
-    verbe = m.group("verbe").lower()
-    objet = m.group("objet").lower()
-    reste = m.group("reste") or ""
-    if _SUITE_HUMAINE.search(reste):
-        return None
-    # « donne le message à Paul », « fais la liste des courses demain » : un impératif adressé à
-    # un HUMAIN a souvent un destinataire ; on ne le prend pas pour une consigne au modèle.
-    if re.match(r"(?i)^\s*(à|a|au|aux|pour)\s+[A-ZÀ-Ý][\w'-]+\s*[.!]?\s*$", reste) and verbe in ("donne", "fais", "give", "make", "envoie"):
-        return None
-    # La source (texte copié) n'est retenue que si le démonstratif suit de près le verbe ou le
-    # livrable (« résume ce texte en trois phrases »), pas un « ça » perdu plus loin.
-    source = "clipboard" if _CMD_SOURCE.match(" ".join(reste.split()[:4])) else None
-    if verbe in ("fais", "make", "donne", "give", "trouve", "find", "faire", "donner", "trouver") and not re.search(
-            r"(?i)\b(un|une|des|deux|trois|quatre|cinq|six|dix|quelques|plusieurs|\d+|me|moi|a|an|some|two|three|four|five|ten|few|several)\b", m.group("avant") or ""):
-        # « fais liste courses » / « donne message Paul » : trop court pour être une demande claire
-        return None
-    transforme = bool(_CMD_TRANSFORME.match(verbe)) or bool(_OBJETS_AVEC_SOURCE.match(objet))
-    return {"objet": objet, "verbe": verbe, "source": source or ("clipboard" if transforme else None),
-            "transforme": transforme}, t
-
-
-def intention_pour_transformation(params, consigne, source):
-    """Une consigne de transformation sur un texte copié devient l'intention spécialisée
-    correspondante, appliquée à la source : « corrige ce mail » -> propre, « résume ça » -> court,
-    « traduis ça en anglais » -> en, « reformule ça de manière formelle » -> formel."""
-    verbe = (params.get("verbe") or "").lower()
-    objet = (params.get("objet") or "").lower()
-    c = (consigne or "").lower()
-    if re.match(r"^(traduis|traduire|translate)", verbe) or re.match(r"^(traductions?|translation)$", objet):
-        if re.search(r"\b(anglais|english)\b", c):
-            return "en"
-        if re.search(r"\b(français|francais|french)\b", c):
-            return "fr"
-        return "fr" if langue_probable(source) == "en" else "en"
-    if re.match(r"^(résume|resume|résumer|resumer|synthétise|synthetise|synthétiser|synthetiser|raccourcis|raccourcir|summarize|summarise|shorten)", verbe) \
-            or re.match(r"^(résumés?|resumes?|synthèses?|syntheses?|summary|summaries)$", objet):
-        return "court"
-    if re.search(r"\b(formel|formelle|soutenu|professionnel|professionnelle|formal|professional)\b", c):
-        return "formel"
-    if re.search(r"\b(liste|puces|list|bullet)\b", c):
-        return "liste"
-    if re.match(r"^(structure|structurer)", verbe) or re.search(r"\b(note)\b", c):
-        return "note"
-    if re.match(r"^(corrige|corriger|fix)", verbe) or re.match(r"^(corrections?)$", objet):
-        return "corrige"
-    # reformule, améliore, complète : on garde le propos et les mots (garde-fous du nettoyage)
-    return "propre"
-
-
-def detect_intent(text, lang="fr"):
-    """Retourne (intention, paramètres, contenu sans le marqueur) ou (None, {}, text).
-
-    Une intention n'est reconnue qu'au bord de la dictée, jamais au milieu, et
-    seulement s'il reste du contenu à mettre en forme."""
-    t = (text or "").strip()
-    if not t:
-        return None, {}, text
-    m = _REPONSE.match(t)
-    if m and len(m.group("contenu").split()) >= 2:
-        return "reponse", {}, m.group("contenu").strip()
-    m = _TETE.match(t)
-    if m and len(m.group("contenu").split()) >= 2:
-        nom = _NOMS[m.group("nom").lower()]
-        params = {"dest": (m.group("dest") or "").strip()} if m.group("dest") else {}
-        return nom, params, m.group("contenu").strip()
-    m = _QUEUE.match(t)
-    # Un nom nu en fin de phrase (« … la note », « … un objet de mail pour X ») n'est pas une
-    # demande : il faut un verbe de mise en forme, une préposition, ou un marqueur qui se suffit.
-    if m and len(m.group("contenu").split()) >= 3 and (m.group("verbe") or m.group("prep")
-                                                       or m.group("nom").lower() in _NOMS_QUEUE_LIBRES):
-        nom = _NOMS[m.group("nom").lower()]
-        params = {"dest": (m.group("dest") or "").strip()} if m.group("dest") else {}
-        return nom, params, m.group("contenu").strip().rstrip(",;:")
-    c = detect_commande(t)
-    if c:
-        return "commande", c[0], c[1]
-    return None, {}, text
-
-
-# Le nettoyage par le modèle coûte une seconde et ne change presque jamais rien :
-# Whisper ponctue déjà, processor retire les tics. On ne réveille le modèle que si
-# le texte porte un défaut visible.
-_DOUBLON = re.compile(r"(?i)\b(\w{2,})\s+\1\b")
-_HESITATION = re.compile(r"(?i)\b(euh+|heu+|hum+|hmm+|bah|ben|hein)\b")
-
-
-def besoin_nettoyage(texte):
-    """True si un nettoyage a une chance d'apporter quelque chose."""
-    t = (texte or "").strip()
-    if not t:
-        return False
-    if _HESITATION.search(t) or _DOUBLON.search(t):
-        return True
-    mots = t.split()
-    if t[0].islower() and len(mots) >= 3:
-        return True
-    if len(mots) >= 12 and not re.search(r"[.!?…]", t):
-        return True
-    if len(mots) >= 30 and len(re.findall(r"[.!?…,;:]", t)) < len(mots) / 25:
-        return True
-    return False
-
-
-# --------------------------------------------------------------------------- #
-# Consignes
-# --------------------------------------------------------------------------- #
-
-REGLE_COMMUNE = ("Tu mets en forme le texte dicté par la personne. Tu gardes son sens et ses informations, "
-                 "tu n'ajoutes rien. Tu réponds par le texte final seulement.")
-
-# La consigne vient APRÈS le texte : un modèle de cette taille recopie les
-# interdits s'ils sont énoncés avant, et les traite comme du contenu.
-CONSIGNES = {
-    "corrige": "Corrige uniquement l'orthographe, la grammaire, les accords et la ponctuation de ce texte. Mêmes mots, même ordre, même sens ; ne reformule rien, n'ajoute rien.",
-    "propre": "Réécris ce texte à l'identique, en corrigeant seulement la ponctuation, les majuscules, les hésitations (euh, hum) et les répétitions involontaires. Les nombres, dates et heures en chiffres. Même ordre, mêmes mots.",
-    "mail": "Réécris ce texte sous forme de courriel{dest} : une ligne d'ouverture, le contenu en paragraphes courts, une formule de politesse{signature}. Garde les mots, les informations et le tutoiement ou vouvoiement du texte.",
-    "note": "Réécris ce texte sous forme de note : un titre court sur la première ligne, puis une puce par idée, avec les mots du texte.",
-    "liste": "Réécris ce texte sous forme de liste à puces : une action ou une idée par puce, avec les mots du texte. Rien d'autre que la liste.",
-    "prompt": "Le texte ci-dessus est une demande que la personne veut adresser à une IA. Réécris cette demande en prompt structuré : « Contexte : », « Tâche : », « Contraintes : », « Format attendu : », chaque partie remplie avec ce que dit la demande, rien d'autre.",
-    "message": "Réécris ce texte sous forme de message court{dest} : une ou deux phrases par idée, direct, sans longue formule de politesse. Garde les mots du texte.",
-    "post": "Réécris ce texte comme une publication LinkedIn prête à publier, sans étiquette ni explication : première phrase courte, puis des paragraphes d'une à deux phrases séparés par une ligne vide. Garde les mots, les chiffres et les faits du texte, n'en ajoute pas.",
-    "en": "Traduis ce texte en anglais naturel et professionnel. Réponds uniquement par la traduction.",
-    "fr": "Traduis ce texte en français naturel et professionnel. Réponds uniquement par la traduction.",
-    "court": "Raccourcis ce texte de moitié en gardant toutes les informations concrètes : noms, dates, chiffres, décisions.",
-    "formel": "Réécris ce texte dans un registre formel et soutenu, avec exactement les mêmes informations.",
-    "commande": "",   # traité à part : la demande EST le message, voir messages_pour
-    "reponse": "La personne répond au message reçu ci-dessus. Rédige sa réponse à partir de son texte, dans la langue du message reçu, avec une ouverture et une formule de politesse courtes{signature}. Réponds uniquement par la réponse.",
-}
-
-ETIQUETTES = {"fr": {"propre": "Nettoyage", "mail": "Mail", "note": "Note", "liste": "Liste", "prompt": "Prompt", "message": "Message",
-                     "post": "Post", "en": "Anglais", "fr": "Français", "court": "Plus court", "formel": "Formel", "reponse": "Réponse"},
-              "en": {"propre": "Cleanup", "mail": "Email", "note": "Note", "liste": "List", "prompt": "Prompt", "message": "Message",
-                     "post": "Post", "en": "English", "fr": "French", "court": "Shorter", "formel": "Formal", "reponse": "Reply"}}
-
 # Le modèle ne calcule JAMAIS une date : le banc l'a montré incapable (« demain
 # à dix heures » donnait aujourd'hui). Il dit seulement si c'est un rappel, quoi,
 # et QUAND tel que dit ; le parseur déterministe de reminders.py fait le calcul.
@@ -312,50 +69,6 @@ CR_CHUNK_REGLE = ("Tu lis un extrait de transcription de réunion ; chaque ligne
 CR_CHUNK_CHARS = 9000    # environ 2 500 tokens : la taille où l'extraction reste fidèle
 
 
-REGLE_COMMANDE = ("Tu es un assistant d'écriture qui tourne sur l'ordinateur de la personne. Elle te dicte une demande : "
-                  "tu y réponds directement, par le résultat demandé et rien d'autre : pas d'introduction, pas de commentaire, "
-                  "pas de rappel de la demande, pas de question, pas de « voici ». Tu réponds dans la langue de la demande, "
-                  "de façon concrète et précise, sans te répéter. Si un texte source est fourni, tu travailles uniquement "
-                  "à partir de lui, sans inventer de fait, de nom ni de chiffre.\n"
-                  "Exemples.\n"
-                  "Demande : Donne-moi trois synonymes de lent.\nRéponse : paresseux, traînant, poussif\n"
-                  "Demande : Écris un mail à Paul pour reporter le point de mardi à jeudi.\nRéponse : Bonjour Paul,\n\n"
-                  "Je dois reporter notre point de mardi. Est-ce que jeudi, à la même heure, te conviendrait ?\n\nMerci et bonne journée,\n"
-                  "Demande : Rédige un prompt pour créer une image d'un chat qui lit un journal.\nRéponse : Un chat roux assis dans un "
-                  "fauteuil en cuir, lunettes sur le nez, lisant un journal déplié, lumière chaude du matin, style photo réaliste, 50 mm.")
-
-
-def messages_pour(intent, contenu, ctx=None):
-    """Construit (system, user) pour une intention. ctx : signature, dest, contexte, lang, params.
-    Le texte vient d'abord, la consigne ensuite. Pour une commande, la demande EST le message."""
-    ctx = ctx or {}
-    if intent == "commande":
-        user = ""
-        src = (ctx.get("contexte") or "").strip()
-        if src:
-            user += "Texte source :\n" + src[:6000] + "\n\n"
-        user += contenu.strip()
-        lp = langue_probable(contenu)
-        if lp == "en":
-            user += "\n\n(Answer in English.)"
-        elif lp == "fr":
-            user += "\n\n(Réponds en français.)"
-        return REGLE_COMMANDE, user
-    consigne = CONSIGNES[intent]
-    dest = ctx.get("dest") or ""
-    signature = (ctx.get("signature") or "").strip()
-    consigne = consigne.replace("{dest}", (" pour " + dest) if dest else "")
-    consigne = consigne.replace("{signature}", (" et la signature « " + signature + " »") if signature else "")
-    lang = ctx.get("lang") or "fr"
-    if intent not in ("en", "fr") and lang == "en":
-        consigne += " The text is in English: answer in English."
-    user = ""
-    if intent == "reponse":
-        user += "Message reçu :\n" + (ctx.get("contexte") or "").strip()[:4000] + "\n\n"
-    user += "Texte dicté :\n" + contenu.strip() + "\n\nConsigne : " + consigne
-    return REGLE_COMMUNE, user
-
-
 # --------------------------------------------------------------------------- #
 # Garde-fous sur le résultat
 # --------------------------------------------------------------------------- #
@@ -370,18 +83,6 @@ def similarite(a, b):
 
 
 _PREAMBULES = re.compile(r"^\s*(voici|here is|here's|bien sûr|certainly|sure)[^\n]*\n", re.I)
-# Traces d'une consigne recopiée comme si c'était du contenu : le défaut typique
-# d'un petit modèle. Aucune de ces expressions n'a sa place dans un texte utile.
-_FUITES = re.compile(r"(?i)(texte dicté|la dictée|cette dictée|this dictation|dictation has been|reformul|"
-                     r"n'ajout|ne pas ajouter|n'invent|ne pas inventer|sans commentaire|guillemets|langue du texte|"
-                     r"assistant ia|format attendu :|cher\(e\)|interlocuteur\(e\)|objet : réponse à votre|maintains the original|"
-                     r"garder le sens|modifier le sens|changer le sens|conserver (?:son|le) sens|sens initial|première (?:ligne|phrase) (?:courte|accroch)|"
-                     r"texte source|résultat demandé|consigne)")
-# Pour un prompt, « assistant IA » et « Format attendu : » sont le résultat demandé, pas une fuite.
-_FUITES_PROMPT = re.compile(_FUITES.pattern.replace("assistant ia|format attendu :|", ""))
-# Seuil de couverture (part des mots pleins retrouvés) par intention : une publication
-# ou un courriel reformulent davantage qu'une liste.
-_COUVERTURE_MIN = {"post": 0.45, "mail": 0.55, "reponse": 0.0}
 # Le modèle recopie parfois l'étiquette de la consigne devant le titre.
 _ETIQUETTES_TITRE = re.compile(r"(?im)^\s*(titre( court)?|title|sujet|objet)\s*:\s*")
 _STOP = set("le la les un une des de du d l et ou à a au aux en dans sur pour par avec sans que qui quoi dont où ce cet cette ces "
@@ -417,7 +118,8 @@ def nettoyer_sortie(out):
     return s
 
 
-_MOTS_EN = set("the and with for that this from your you are will can would should about into their there".split())
+_MOTS_EN = set("the and with for that this from your you are will can would should about into their there to is a of in on at my me "
+                "i we our it be have has thanks thank hello hi please write email meeting".split())
 _MOTS_FR = set("le la les des une et pour que qui dans avec sur pas est sont vous nous votre cette".split())
 
 
@@ -461,114 +163,6 @@ def repetitif(out):
         k = re.sub(r"\W+$", "", l.split()[0]) if l.split() else ""
         tetes[k] = tetes.get(k, 0) + 1
     return max(tetes.values()) / len(lignes) > 0.4 or len(lignes) > 40
-
-
-def commande_acceptable(consigne, out, source=None, params=None):
-    """Une consigne exécutée : résultat différent de la consigne, dans sa langue, sur son
-    sujet (la moitié des mots pleins de la demande s'y retrouvent, hors verbe et livrable),
-    borné en longueur ; avec un texte source, au moins un tiers des mots pleins du résultat
-    viennent de la source ou de la demande (anti-invention)."""
-    ls = len(out)
-    if ls > 3000:
-        return False, "trop long"
-    if similarite(consigne, out) > 0.85:
-        return False, "consigne recopiée"
-    if _META.match(out) or re.search(r"(?i)\b(je vais (?:t'|vous )?aider|n'hésitez pas|n'hésite pas|si tu veux|if you (?:want|need))\b", out[:200]):
-        return False, "réponse méta"
-    if repetitif(out):
-        return False, "répétitif"
-    if len(mots_pleins(out)) < 1:
-        return False, "vide"
-    params = params or {}
-    lc, lo = langue_probable(consigne), langue_probable(out)
-    traduction = bool(re.search(r"(?i)\b(anglais|english|français|french|traduis|translate|traduction|translation|in english|en anglais|en français)\b", consigne))
-    if lc and lo and lc != lo and not traduction:
-        return False, "langue différente (%s -> %s)" % (lc, lo)
-    # Sujet : la demande nomme des choses (train, avion) que le résultat doit reprendre.
-    # Sans objet pour une transformation d'un texte source, le sujet est la source elle-même.
-    if not (source and params.get("transforme")):
-        m = _COMMANDE.match(consigne.strip())
-        sujet = (m.group("reste") or "") if m else consigne
-        mots_sujet = [w for w in mots_pleins(sujet) if not re.match(r"(?i)^(" + _CMD_LIVRABLES + r")$", w)]
-        if len(mots_sujet) >= 2:
-            ms = set(mots_pleins(out))
-            n = sum(1 for w in mots_sujet if w in ms or any(x.startswith(w[:5]) for x in ms))
-            if n == 0 or n / len(mots_sujet) < 0.25:
-                return False, "hors sujet (couverture %.2f)" % (n / len(mots_sujet))
-    if source and not traduction:
-        base = set(mots_pleins(source)) | set(mots_pleins(consigne))
-        mo = mots_pleins(out)
-        if mo:
-            part = sum(1 for w in mo if w in base or any(x.startswith(w[:5]) for x in base)) / len(mo)
-            if part < 0.34:
-                return False, "s'éloigne de la source (%.2f)" % part
-        verbe = (params.get("verbe") or "").lower()
-        if re.match(r"(?i)^(corrige|corriger|reformule|reformuler|améliore|ameliore|améliorer|ameliorer|structure|structurer|complète|complete|compléter|fix|rewrite|improve)", verbe):
-            # une correction ou une reformulation garde le propos : les mots pleins de la source
-            # se retrouvent, la longueur reste comparable
-            cv = couverture(source, out)
-            if cv < 0.6 or len(out) < len(source) * 0.6 or len(out) > len(source) * 1.8 + 60:
-                return False, "transformation infidèle (couverture %.2f)" % cv
-        if re.match(r"(?i)^(résume|resume|résumer|resumer|synthétise|synthetise|raccourcis|raccourcir|summarize|summarise|shorten)", verbe) or \
-                re.match(r"(?i)^(résumés?|resumes?|synthèses?|syntheses?|summary)$", (params.get("objet") or "")):
-            if len(out) >= len(source):
-                return False, "pas plus court que la source"
-            mo = mots_pleins(out); ms = set(mots_pleins(source))
-            if mo and sum(1 for w in mo if w in ms or any(x.startswith(w[:5]) for x in ms)) / len(mo) < 0.5:
-                return False, "résumé qui s'éloigne de la source"
-    if source and traduction:
-        ls_, lo_ = len(source), len(out)
-        if lo_ < ls_ * 0.45 or lo_ > ls_ * 2.2 + 40:
-            return False, "longueur incohérente pour une traduction"
-    return True, "ok"
-
-
-def sortie_acceptable(intent, original, out, ctx_source=None, ctx_params=None):
-    """Le résultat est-il digne d'être inséré à la place du brut ?
-
-    Nettoyage : proche du texte (au moins 72 % des mots retrouvés dans l'ordre),
-    pas plus long de 30 %, pas vide. Autres intentions : non vide, pas dix fois
-    plus long, et le modèle n'a pas répondu à côté (pas de « je ne peux pas »)."""
-    s = nettoyer_sortie(out)
-    if not s:
-        return False, "vide"
-    lo, ls = len(original or ""), len(s)
-    if re.search(r"(?i)^(je ne peux pas|i can(?:'|no)t|as an ai|en tant qu'ia)", s):
-        return False, "refus"
-    detecteur = _FUITES_PROMPT if intent == "prompt" else _FUITES
-    fuite = detecteur.search(s)
-    if fuite and not detecteur.search(original or ""):
-        return False, "consigne recopiée (« %s »)" % fuite.group(0)
-    if intent in ("propre", "corrige"):
-        sim = similarite(original, s)
-        if sim < (0.72 if intent == "propre" else 0.8):
-            return False, "trop modifié (%.2f)" % sim
-        if ls > lo * 1.3 + 20:
-            return False, "rallongé"
-        # Un nettoyage ne perd aucun mot plein : « Bonjour Marie, » avalé en tête
-        # passait la similarité (0.82) tout en supprimant du contenu.
-        cv = couverture(original, s)
-        if cv < 0.9:
-            return False, "mots perdus (couverture %.2f)" % cv
-        return True, "ok %.2f" % sim
-    if intent in ("en", "fr"):
-        # autre langue : on ne peut pas compter les mots, mais une traduction fait à peu près la même longueur
-        if ls < lo * 0.45 or ls > lo * 2.2 + 40:
-            return False, "longueur incohérente pour une traduction"
-        return True, "ok"
-    if intent == "commande":
-        return commande_acceptable(original, s, ctx_source, ctx_params)
-    if intent == "court":
-        if ls > lo:
-            return False, "pas plus court"
-        cv = couverture(original, s)
-        return (cv >= 0.35, "couverture %.2f" % cv)
-    if ls > lo * 6 + 400:
-        return False, "trop long"
-    cv = couverture(original, s)
-    if cv < _COUVERTURE_MIN.get(intent, 0.6):
-        return False, "contenu perdu (couverture %.2f)" % cv
-    return True, "ok, couverture %.2f" % cv
 
 
 def rappel_depuis_json(out):
@@ -647,6 +241,10 @@ def resoudre_rappel(extrait, texte, now):
                     titre = ""
             titre = re.sub(r"(?i)^(don'?t forget to|remind me to|remember to|please)\s+", "", titre)
             titre = re.sub(r"(?i)\s*\b(demain|ce soir|aujourd'hui|tomorrow|tonight|today)\b.*$", "", titre).strip(" ,.") or titre
+            # l'échéance n'a rien à faire dans le titre (« Call the accountant on Monday at 9 »)
+            titre = re.sub(r"(?i)\s+(?:(?:on|at|by|before|next|le|à|a|avant|vers|dès|dans)\s+)+"
+                           r"(?:lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche|monday|tuesday|wednesday|thursday|friday|saturday|sunday|"
+                           r"\d{1,2}(?:[h:]\d{0,2})?|midi|minuit|noon)\b.*$", "", titre).strip(" ,.") or titre
             if not titre:
                 return None
             return {"titre": titre[0].upper() + titre[1:], "when": r[0], "label": r[1], "confidence": r[2]}
@@ -654,9 +252,333 @@ def resoudre_rappel(extrait, texte, now):
 
 
 # --------------------------------------------------------------------------- #
+# v1.4.2 : RÉDACTION À PARTIR D'UNE DEMANDE RECONNUE (intents.detect)
+#
+# Deux modes. FORMAT : la dictée est le texte, on le met en forme en gardant ses
+# mots et toutes ses informations. COMPOSE : la dictée décrit ce qu'il faut
+# écrire, on le rédige sans rien inventer. Les exemples sont donnés au modèle
+# comme de vrais échanges : c'est ce qui tient un petit modèle au format demandé.
+# --------------------------------------------------------------------------- #
+REGLE_REDACTION = (
+    "Tu es l'assistant d'écriture de la personne. Elle te dicte à voix haute et tu produis exactement ce qu'elle "
+    "demande, prêt à être collé : aucune introduction, aucun commentaire, aucune phrase du type « voici », pas de "
+    "guillemets autour du résultat. Tu écris dans la langue de la dictée, sauf si une autre langue est demandée. Tu "
+    "gardes son tutoiement ou son vouvoiement. Tu n'inventes aucun fait, aucun nom, aucun chiffre, aucune date, aucun "
+    "lien qui ne soit pas dans la dictée, et aucune circonstance : pas d'échange précédent, de demande ou d'intérêt que la "
+    "personne n'a pas mentionné.")
+
+NOMS_LIVRABLES = {"mail": "courriel", "prompt": "prompt", "message": "message", "note": "note", "liste": "liste",
+                  "post": "publication LinkedIn", "reponse": "réponse"}
+LANGUES_NOMS = {"en": "anglais", "fr": "français", "es": "espagnol", "de": "allemand", "it": "italien"}
+
+_CONSIGNE_FORMAT = {
+    "mail": "Mets ce texte en forme de courriel{dest} : une salutation{salut}, le contenu en paragraphes courts avec ses mots et toutes ses "
+            "informations, sans les hésitations de l'oral, puis une formule de politesse courte. N'ajoute aucune information.",
+    "message": "Mets ce texte en forme de message court{dest}, direct, avec ses mots et toutes ses informations, sans formule longue.",
+    "note": "Mets ce texte en forme de note : un titre de quelques mots sur la première ligne, puis une puce « - » par idée, avec ses mots. "
+            "N'ajoute rien.",
+    "liste": "Mets ce texte en liste à puces : une puce « - » par élément, avec ses mots. Rien d'autre que la liste.",
+    "prompt": "Transforme ce texte en prompt pour une IA, écrit à la deuxième personne (« Tu… », « Rédige… »). Reprends tous les éléments "
+              "demandés, dans l'ordre, sans en retirer ni en ajouter : le contexte, ce qu'il faut produire, puis les contraintes et le "
+              "format attendu seulement s'ils sont dictés. N'invente aucune contrainte ni aucun format.",
+    "post": "Mets ce texte en forme de publication LinkedIn : une première phrase courte qui accroche, puis des paragraphes d'une ou deux "
+            "phrases séparés par une ligne vide, avec ses mots et ses chiffres. Pas de hashtag, rien d'inventé.",
+}
+_CONSIGNE_COMPOSE = {
+    "mail": "Rédige le courriel décrit par la demande{dest} : une salutation{salut}, un corps court et concret, une formule de politesse courte. "
+            "Uniquement ce que dit la demande ; si une information manque (date, prix, lien), ne l'invente pas.",
+    "message": "Rédige le message décrit par la demande{dest} : court, direct, naturel. Uniquement ce que dit la demande.",
+    "note": "Rédige la note décrite par la demande : un titre de quelques mots, puis une puce « - » par idée. Uniquement ce que dit la demande.",
+    "liste": "Rédige la liste décrite par la demande : une puce « - » par élément, concrète. Rien d'autre que la liste.",
+    "prompt": "Rédige le prompt décrit par la demande, prêt à coller dans une IA. Pour une image : une description visuelle précise en une ou "
+              "deux phrases (sujet, action, décor, lumière, cadrage, style). Pour un texte : à la deuxième personne, le rôle, la tâche, les "
+              "contraintes et le format attendu. Ne réponds pas toi-même à la tâche : écris seulement le prompt.",
+    "post": "Rédige la publication LinkedIn décrite par la demande : une première phrase qui accroche, des paragraphes courts séparés par "
+            "une ligne vide. Pas de hashtag, aucun chiffre inventé.",
+    "reponse": "Rédige la réponse au message reçu, à partir de ce que dit la personne : dans la langue du message reçu, une salutation, "
+               "sa réponse, une formule de politesse courte. N'ajoute aucune information.",
+    "commande": "Réponds à la demande par le résultat demandé, et seulement lui.",
+}
+
+# Longueur maximale par livrable rédigé (jetons) : court, c'est aussi plus rapide
+_MAX_COMPOSE = {"message": 160, "mail": 360, "prompt": 360, "liste": 300, "note": 320, "post": 450, "reponse": 400, "commande": 500}
+
+# Exemples (vrais échanges) : un par livrable et par mode. Courts : ils coûtent du temps de lecture.
+_EX = {
+    ("mail", "format"): ("Texte dicté :\nbah merci pour ton retour euh sur le devis, c'est bon pour nous, par contre on aimerait décaler la livraison "
+                         "à la semaine du douze, tu me dis si c'est possible\n\nDemande : Mets ce texte en forme de courriel pour Thomas : une "
+                         "salutation avec son prénom, le contenu en paragraphes courts avec ses mots et toutes ses informations, sans les "
+                         "hésitations de l'oral, puis une formule de politesse courte. N'ajoute aucune information.",
+                         "Bonjour Thomas,\n\nMerci pour ton retour sur le devis, c'est bon pour nous.\n\nPar contre, on aimerait décaler la "
+                         "livraison à la semaine du 12. Tu me dis si c'est possible ?\n\nBonne journée,"),
+    ("mail", "compose"): ("Demande : écris un mail à Sophie pour reporter notre point de mardi à jeudi même heure\n\nConsigne : Rédige le "
+                          "courriel décrit par la demande pour Sophie : une salutation avec son prénom, un corps court et concret, une formule "
+                          "de politesse courte. Uniquement ce que dit la demande ; si une information manque (date, prix, lien), ne l'invente pas.",
+                          "Bonjour Sophie,\n\nJe dois reporter notre point de mardi. Est-ce que jeudi, à la même heure, te conviendrait ?\n\n"
+                          "Merci et bonne journée,"),
+    ("prompt", "format"): ("Texte dicté :\nalors je veux que tu me fasses un résumé des retours clients du mois, tu vois, classés par thème, avec "
+                           "les trois problèmes qui reviennent le plus, et à la fin un tableau avec le thème et le nombre de retours, pas de "
+                           "blabla\n\nDemande : Transforme ce texte en prompt pour une IA, écrit à la deuxième personne (« Tu… », « Rédige… »). "
+                           "Reprends tous les éléments demandés, dans l'ordre, sans en retirer ni en ajouter : le contexte, ce qu'il faut "
+                           "produire, puis les contraintes et le format attendu seulement s'ils sont dictés. N'invente aucune contrainte ni aucun format.",
+                           "Tu vas analyser les retours clients du mois.\n\nTâche : rédige un résumé de ces retours, classés par thème, en "
+                           "faisant ressortir les trois problèmes qui reviennent le plus.\n\nContraintes : va à l'essentiel, sans blabla.\n\n"
+                           "Format attendu : termine par un tableau avec deux colonnes, le thème et le nombre de retours."),
+    ("prompt", "compose"): ("Demande : fais-moi un prompt pour générer une image d'un chat qui lit le journal\n\nConsigne : Rédige le prompt "
+                            "décrit par la demande, prêt à coller dans une IA. Pour une image : une description visuelle précise en une ou deux "
+                            "phrases (sujet, action, décor, lumière, cadrage, style). Pour un texte : à la deuxième personne, le rôle, la tâche, "
+                            "les contraintes et le format attendu. Ne réponds pas toi-même à la tâche : écris seulement le prompt.",
+                            "Un chat roux assis dans un fauteuil en cuir, lunettes sur le nez, lisant un journal déplié, lumière chaude du matin "
+                            "par la fenêtre, plan moyen, style photo réaliste, 50 mm."),
+    ("liste", "format"): ("Texte dicté :\nfaut que je rappelle le garage, que je paie la cantine et euh que je réserve le restau pour samedi\n\n"
+                          "Demande : Mets ce texte en liste à puces : une puce « - » par élément, avec ses mots. Rien d'autre que la liste.",
+                          "- Rappeler le garage\n- Payer la cantine\n- Réserver le restaurant pour samedi"),
+    ("message", "format"): ("Texte dicté :\nbon je vais avoir un quart d'heure de retard le métro est bloqué commencez sans moi\n\nDemande : Mets ce "
+                            "texte en forme de message court, direct, avec ses mots et toutes ses informations, sans formule longue.",
+                            "J'aurai un quart d'heure de retard, le métro est bloqué. Commencez sans moi."),
+    ("note", "format"): ("Texte dicté :\nappel avec Karim, il valide le budget, il veut la maquette pour le quinze et il faut prévoir une démo "
+                         "pour son directeur\n\nDemande : Mets ce texte en forme de note : un titre de quelques mots sur la première ligne, puis "
+                         "une puce « - » par idée, avec ses mots. N'ajoute rien.",
+                         "Appel avec Karim\n- Il valide le budget\n- Il veut la maquette pour le 15\n- Prévoir une démo pour son directeur"),
+    ("commande", "compose"): ("Demande : donne-moi trois synonymes de lent\n\nConsigne : Réponds à la demande par le résultat demandé, et seulement lui.",
+                              "paresseux, traînant, poussif"),
+}
+
+
+def _placeholders(consigne, d, ctx):
+    dest = (d.get("dest") or "").strip()
+    return (consigne.replace("{dest}", (" pour " + dest) if dest else "")
+            .replace("{salut}", " avec son prénom" if dest and dest[:1].isupper() else ""))
+
+
+def consigne_demande(d, ctx=None):
+    """(system, user, exemples, max_tokens) pour une demande reconnue."""
+    ctx = ctx or {}
+    kind, liv, mode = d.get("kind"), d.get("livrable"), d.get("mode")
+    contenu = (d.get("contenu") or "").strip()
+    source = (ctx.get("contexte") or "").strip()
+    exemples = []
+    if kind == "transforme":
+        parts = []
+        if d.get("langue") and d.get("langue") != "auto":
+            parts.append("Traduis ce texte en %s, naturellement." % LANGUES_NOMS.get(d["langue"], d["langue"]))
+        elif d.get("langue") == "auto":
+            parts.append("Traduis ce texte en %s, naturellement." % ("français" if langue_probable(source or contenu) == "en" else "anglais"))
+        if d.get("court"):
+            parts.append("Raccourcis-le de moitié en gardant toutes les informations concrètes : noms, dates, chiffres, décisions.")
+        if d.get("formel"):
+            parts.append("Réécris-le dans un registre formel et professionnel, avec exactement les mêmes informations.")
+        if d.get("reformule"):
+            parts.append("Reformule-le plus clairement, avec exactement les mêmes informations.")
+        texte = source if d.get("source") == "presse-papiers" else contenu
+        user = "Texte :\n" + texte[:6000] + "\n\nDemande : " + " ".join(parts or ["Mets ce texte au propre."])
+        return REGLE_REDACTION, user, [], min(1400, max(120, int(len(texte.split()) * 2.2) + 80))
+    if kind == "commande":
+        user = "Demande : " + contenu + "\n\nConsigne : " + _CONSIGNE_COMPOSE["commande"]
+        return REGLE_REDACTION, user, [_EX[("commande", "compose")]], _MAX_COMPOSE["commande"]
+    if kind == "reponse":
+        user = ("Message reçu :\n" + source[:5000] + "\n\nCe que la personne veut répondre : " + contenu
+                + "\n\nConsigne : " + _CONSIGNE_COMPOSE["reponse"])
+        return REGLE_REDACTION, user, [], _MAX_COMPOSE["reponse"]
+    if mode == "format":
+        consigne = _placeholders(_CONSIGNE_FORMAT.get(liv, _CONSIGNE_FORMAT["note"]), d, ctx)
+        user = "Texte dicté :\n" + contenu + "\n\nDemande : " + consigne
+        n = len(contenu.split())
+        max_tokens = min(1600, max(120, int(n * (2.6 if liv in ("prompt", "post", "mail") else 2.0)) + 120))
+    else:
+        consigne = _placeholders(_CONSIGNE_COMPOSE.get(liv, _CONSIGNE_COMPOSE["commande"]), d, ctx)
+        user = "Demande : " + contenu + "\n\nConsigne : " + consigne
+        max_tokens = _MAX_COMPOSE.get(liv, 500)
+    if d.get("langue") and d.get("langue") != "auto":
+        user += " Écris le résultat en %s." % LANGUES_NOMS.get(d["langue"], d["langue"])
+    elif langue_probable(contenu) == "en":
+        user += " The request is in English: write the result in English."
+    if d.get("court"):
+        user += " Fais court."
+    if d.get("formel"):
+        user += " Registre formel, vouvoiement."
+    ex = _EX.get((liv, mode))
+    if ex:
+        exemples.append(ex)
+    return REGLE_REDACTION, user, exemples, max_tokens
+
+
+_SEUILS_FORMAT = {"mail": 0.6, "message": 0.6, "note": 0.6, "liste": 0.6, "prompt": 0.55, "post": 0.5}
+_FUITES_REDAC = re.compile(r"(?i)(texte dicté|la dictée|cette dictée|this dictation|ce texte dicté|consigne|la demande|demande :|texte :|"
+                           r"n'ajoute aucune|avec ses mots|sans les hésitations|prêt à coller|ligne vide|deuxième personne|je vais (?:t'|vous )?aider|"
+                           r"en tant qu'(?:ia|assistant)|as an ai)")
+
+
+def noms_propres(texte):
+    """Mots à majuscule hors début de phrase (prénoms, marques, sigles) : Marie, Miria, LinkedIn, LTC."""
+    out = []
+    for m in re.finditer(r"\b([A-ZÀ-Ý][a-zà-ÿ]+(?:-[A-ZÀ-Ý][a-zà-ÿ]+)*|[A-Z]{2,}[a-z]?)\b", texte or ""):
+        avant = (texte or "")[:m.start()].rstrip()
+        if not avant or avant[-1] in ".!?:«\"":
+            continue
+        if m.group(1) not in out:
+            out.append(m.group(1))
+    return out
+
+
+def _mots_sujet(texte):
+    import intents as _it
+    return [w for w in mots_pleins(texte) if not _it.livrable_de(w) and not re.match(
+        r"(?i)^(redige|rédige|rediger|rédiger|ecris|écris|ecrire|écrire|fais|faire|prepare|prépare|genere|génère|cree|crée|propose|donne|"
+        r"peux|pourrais|veux|voudrais|aimerais|souhaite|souhaiterais|besoin|faut|objectif|write|draft|make|create|could|would|please|"
+        r"petit|petite|court|courte|rapide|juste|vraiment|gros|direct|directement)$", w)]
+
+
+def accepte_demande(d, out, ctx=None):
+    """(ok, info) : le résultat est-il digne d'être inséré à la place de la dictée ?"""
+    ctx = ctx or {}
+    s = nettoyer_commande(nettoyer_sortie(out or ""))
+    if not s or len(mots_pleins(s)) < 1:
+        return False, "vide", s
+    kind, liv, mode = d.get("kind"), d.get("livrable"), d.get("mode")
+    contenu = d.get("contenu") or ""
+    source = (ctx.get("contexte") or "").strip()
+    ref = source if d.get("source") == "presse-papiers" else contenu
+    if re.search(r"(?i)^(je ne peux pas|i can(?:'|no)t|désolé|sorry|as an ai|en tant qu'ia)", s):
+        return False, "refus", s
+    fuite = _FUITES_REDAC.search(s)
+    if fuite and not _FUITES_REDAC.search(ref):
+        return False, "consigne recopiée (« %s »)" % fuite.group(0), s
+    if _META.match(s):
+        return False, "réponse méta", s
+    if repetitif(s):
+        return False, "répétitif", s
+    if len(s) > 4000:
+        return False, "trop long", s
+    traduit = d.get("langue") and d.get("langue") not in ("auto",) and langue_probable(ref) not in (None, d.get("langue"))
+    traduit = traduit or d.get("langue") == "auto"
+    if not traduit:
+        lr, lo = langue_probable(ref), langue_probable(s)
+        if lr and lo and lr != lo:
+            return False, "langue différente (%s -> %s)" % (lr, lo), s
+    # le tutoiement ou le vouvoiement dicté est gardé (sauf demande de registre formel)
+    import mise_en_forme as _mf
+    if not traduit and not d.get("formel") and kind != "reponse":
+        r_in, r_out = _mf.registre(ref), _mf.registre(s)
+        if r_in and r_out and r_in != r_out:
+            return False, "registre changé (%s -> %s)" % (r_in, r_out), s
+    if kind == "transforme":
+        if traduit:
+            if len(s) < len(ref) * 0.45 or len(s) > len(ref) * 2.2 + 40:
+                return False, "longueur incohérente pour une traduction", s
+            return True, "ok", s
+        cv = couverture(ref, s)
+        if d.get("court"):
+            if len(s) >= len(ref):
+                return False, "pas plus court", s
+            return (cv >= 0.3, "couverture %.2f" % cv, s)
+        return (cv >= 0.45, "couverture %.2f" % cv, s)
+    if mode == "format":
+        if liv == "prompt" and not traduit:
+            s = elaguer_ajouts(ref, s)
+        if traduit:
+            if len(s) < len(ref) * 0.4 or len(s) > len(ref) * 3 + 300:
+                return False, "longueur incohérente", s
+            return True, "ok (traduit)", s
+        cv = couverture(ref, s)
+        seuil = _SEUILS_FORMAT.get(liv, 0.6) * (0.6 if d.get("court") else 1.0)
+        if cv < seuil:
+            return False, "contenu perdu (couverture %.2f)" % cv, s
+        if len(s) > len(ref) * 3 + 300:
+            return False, "rallongé", s
+        return True, "ok, couverture %.2f" % cv, s
+    # compose / commande / réponse : la réponse doit parler du sujet demandé, sans le recopier
+    if similarite(contenu, s) > 0.8:
+        return False, "demande recopiée", s
+    sujet = _mots_sujet(contenu)
+    if kind != "reponse" and len(sujet) >= 2:
+        ms = set(mots_pleins(s))
+        n = sum(1 for w in sujet if w in ms or any(x.startswith(w[:5]) for x in ms))
+        # une liste ou une note peut ne pas répéter le mot de la demande (« courses ») ; un prompt, un mail doivent tenir le sujet
+        seuil = 0.34 if liv in ("liste", "note", "post") or kind == "commande" else 0.5
+        if n == 0 or n / len(sujet) < seuil:
+            return False, "hors sujet (%d/%d mots de la demande)" % (n, len(sujet)), s
+        # les noms propres de la demande (Marie, Miria, LinkedIn) doivent se retrouver dans le résultat
+        for np_ in noms_propres(contenu):
+            # l'IA à qui le prompt est destiné n'a pas à être nommée dans le prompt
+            if re.match(r"(?i)^(claude|chatgpt|gpt|gemini|mistral|perplexity|copilot|midjourney|dall-e|ia|ai|llm)$", np_):
+                continue
+            if np_.lower() not in s.lower():
+                return False, "nom propre perdu (%s)" % np_, s
+    return True, "ok", s
+
+
+def economie_energie():
+    """True si macOS est en mode économie d'énergie (la puce graphique y tourne environ deux fois moins vite)."""
+    try:
+        from Foundation import NSProcessInfo
+        return bool(NSProcessInfo.processInfo().isLowPowerModeEnabled())
+    except Exception:
+        return False
+
+
+def budget_redaction(max_tokens):
+    """Délai accordé au modèle : de quoi écrire max_tokens à 25 jetons/s, plus la lecture, doublé en
+    économie d'énergie ; jamais plus de 45 s (au-delà, la dictée est rendue telle quelle)."""
+    b = 3.0 + max_tokens / 25.0
+    if economie_energie():
+        b *= 2.0
+    return min(45.0, b)
+
+
+def rediger_sans_modele(d, ctx=None):
+    """Mise en forme déterministe (mise_en_forme.py) quand la demande s'y prête : un livrable
+    en mode FORMAT, sans traduction ni réécriture demandée. None sinon."""
+    import mise_en_forme as _mf
+    if d.get("kind") != "livrable" or d.get("mode") != "format":
+        return None
+    if d.get("langue") or d.get("court") or d.get("formel"):
+        return None
+    return _mf.mettre_en_forme(d.get("livrable"), d.get("contenu") or "", d.get("dest") or "", (ctx or {}).get("signature") or "")
+
+
+_ETIQ_PROMPT = re.compile(r"(?im)^\s*(contexte|tâche|tache|contraintes?|format attendu|format|rôle|role|objectif|context|task|constraints?|"
+                          r"expected format|output format|goal)\s*:\s*")
+
+
+def elaguer_ajouts(ref, texte, seuil=0.35):
+    """Retire d'un texte mis en forme les paragraphes que la dictée ne contient pas (au-delà du premier) :
+    un « Contraintes : garder un langage simple » que personne n'a dicté est une invention."""
+    paras = [p for p in re.split(r"\n\s*\n", texte or "") if p.strip()]
+    if len(paras) <= 1:
+        return texte
+    base = set(mots_pleins(ref))
+    garde = [paras[0]]
+    for p in paras[1:]:
+        mots = [w for w in mots_pleins(_ETIQ_PROMPT.sub("", p)) if w not in ("dois", "doit", "vas", "va")]
+        if not mots:
+            continue
+        part = sum(1 for w in mots if w in base or any(x.startswith(w[:5]) for x in base)) / len(mots)
+        if part >= seuil:
+            garde.append(p)
+    return "\n\n".join(garde)
+
+
+def signer(texte, d, ctx):
+    """Signature ajoutée de façon déterministe à un courriel ou une réponse, si elle n'y est pas."""
+    sig = ((ctx or {}).get("signature") or "").strip()
+    if d.get("livrable") in ("mail", "reponse"):
+        # le destinataire placé en signature (« Cordialement, Nabil ») est une erreur de modèle : retiré
+        lignes = texte.rstrip().split("\n")
+        der = lignes[-1].strip() if lignes else ""
+        if der and re.match(r"^[A-ZÀ-Ý][\w'-]+(?: [A-ZÀ-Ý][\w'-]+)?$", der) and der.lower() != sig.lower() \
+                and der.lower() in "\n".join(lignes[:3]).lower():
+            texte = "\n".join(lignes[:-1]).rstrip()
+    if not sig or d.get("livrable") not in ("mail", "reponse"):
+        return texte
+    if sig.lower() in texte[-120:].lower():
+        return texte
+    return texte.rstrip() + "\n" + sig
+
+
+# --------------------------------------------------------------------------- #
 # Le modèle : chargement paresseux, borne de temps, déchargement
 # --------------------------------------------------------------------------- #
-
 class Assist:
     """Un modèle, un verrou, un délai. Toute erreur devient None : l'appelant
     garde le brut."""
@@ -731,7 +653,7 @@ class Assist:
             self.unload()
 
     # ---- génération bornée ----------------------------------------------
-    def generate(self, system, user, max_tokens=600, timeout_s=8.0, repetition_penalty=None):
+    def generate(self, system, user, max_tokens=600, timeout_s=8.0, repetition_penalty=None, exemples=None, progression=None):
         """Texte généré, ou None si délai dépassé / erreur. Greedy (température 0)."""
         if not self.load():
             return None
@@ -740,19 +662,33 @@ class Assist:
         def _run():
             try:
                 with self._lock:
-                    from mlx_lm import generate as _gen
                     from mlx_lm.sample_utils import make_sampler
                     tok = self._tok
-                    prompt = tok.apply_chat_template(
-                        [{"role": "system", "content": system}, {"role": "user", "content": user}],
-                        tokenize=False, add_generation_prompt=True)
+                    msgs = [{"role": "system", "content": system}]
+                    for q, r in (exemples or []):
+                        msgs += [{"role": "user", "content": q}, {"role": "assistant", "content": r}]
+                    msgs.append({"role": "user", "content": user})
+                    prompt = tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
                     t = time.time()
                     kw = {}
                     if repetition_penalty:
                         from mlx_lm.sample_utils import make_logits_processors
                         kw["logits_processors"] = make_logits_processors(repetition_penalty=repetition_penalty, repetition_context_size=64)
-                    out = _gen(self._model, tok, prompt=prompt, max_tokens=max_tokens,
-                               sampler=make_sampler(temp=0.0), verbose=False, **kw)
+                    # Toujours en flux : une génération dont le délai a expiré s'arrête vraiment
+                    # (sinon elle garderait le verrou et ferait attendre la demande suivante).
+                    from mlx_lm import stream_generate as _sgen
+                    out, dernier = "", 0.0
+                    for r in _sgen(self._model, tok, prompt=prompt, max_tokens=max_tokens,
+                                   sampler=make_sampler(temp=0.0), **kw):
+                        out += r.text
+                        if progression is not None and time.time() - dernier > 0.25:
+                            dernier = time.time()
+                            try:
+                                progression(len(out.split()))
+                            except Exception:
+                                pass
+                        if result.get("stop"):
+                            break
                     result["out"] = out
                     result["dt"] = time.time() - t
                     self.last_use = time.time()
@@ -763,6 +699,7 @@ class Assist:
         th.start()
         th.join(timeout_s)
         if th.is_alive():
+            result["stop"] = True
             self.last_error = "délai dépassé (%.0f s)" % timeout_s
             self._log("[assist] génération trop longue (> %.0f s) : brut conservé." % timeout_s)
             return None
@@ -773,53 +710,32 @@ class Assist:
         self.last_latency_s = result.get("dt")
         return result.get("out")
 
-    # ---- usages -----------------------------------------------------------
-    def transformer(self, intent, contenu, ctx=None, timeout_s=None):
-        """Met en forme selon l'intention. (texte, info) ; texte None => garder le brut."""
-        if intent not in CONSIGNES:
-            return None, "intention inconnue"
-        system, user = messages_pour(intent, contenu, ctx)
-        budget = timeout_s or (TIMEOUT_CLEAN_S if intent == "propre" else TIMEOUT_INTENT_S)
-        n_mots = len(contenu.split())
-        max_tokens = min(1200, max(80, int(n_mots * 3.0) + 60))
-        if intent == "commande":
-            params = (ctx or {}).get("params") or {}
-            source = ((ctx or {}).get("contexte") or "").strip()
-            if params.get("transforme"):
-                if not source:
-                    return None, "consigne de transformation sans texte source"
-                cible = intention_pour_transformation(params, contenu, source)
-                if cible == "corrige":
-                    # Mesuré sur le vrai modèle : la correction orthographique change le sens
-                    # une fois sur deux (« on peut » -> « sur peu »). Tant que ce n'est pas
-                    # fiable, une demande de correction laisse le texte tel quel.
-                    return None, "correction désactivée sur ce modèle (change le sens)"
-                out, info = self.transformer(cible, source, dict(ctx or {}, params={}, contexte=""), timeout_s)
-                return out, "%s -> %s : %s" % ("commande", cible, info)
-            max_tokens = 700
-            budget = timeout_s or TIMEOUT_COMMANDE_S
+
+    def rediger(self, d, ctx=None, timeout_s=None):
+        """Rédaction pour une demande reconnue par intents.detect. (texte, info) ; texte None => garder la dictée."""
+        ctx = ctx or {}
+        # Mettre en forme ce qui a été dicté n'a pas besoin d'un modèle : instantané, sans invention possible.
+        det = rediger_sans_modele(d, ctx)
+        if det:
+            return det, "mise en forme directe"
+        if d.get("source") == "presse-papiers" and not (ctx.get("contexte") or "").strip():
+            return None, "rien de copié à retravailler"
+        system, user, exemples, max_tokens = consigne_demande(d, ctx)
+        budget = timeout_s or budget_redaction(max_tokens)
         out = self.generate(system, user, max_tokens=max_tokens, timeout_s=budget,
-                            repetition_penalty=1.15 if intent == "commande" else None)
+                            repetition_penalty=1.1 if d.get("mode") == "compose" else None, exemples=exemples,
+                            progression=ctx.get("progression"))
         if out is None:
             return None, self.last_error or "sans réponse"
-        if intent == "commande":
-            out = nettoyer_commande(out)
-        ok, info = sortie_acceptable(intent, contenu, out, (ctx or {}).get("contexte"), (ctx or {}).get("params"))
+        ok, info, texte = accepte_demande(d, out, ctx)
         if not ok:
-            self._log("[assist] résultat refusé (%s) : brut conservé." % info)
+            self._log("[assist] résultat refusé (%s) : dictée conservée." % info)
             return None, info
-        texte = nettoyer_sortie(out)
-        if intent == "commande":
-            signature = ((ctx or {}).get("signature") or "").strip()
-            objet = (((ctx or {}).get("params") or {}).get("objet") or "").lower()
-            if signature and re.match(r"(?i)^(e-?mails?|mails?|courriels?|réponses?|reponses?|replies|reply)$", objet) \
-                    and signature.lower() not in texte[-80:].lower():
-                texte = texte.rstrip() + "\n\n" + signature
-        return texte, info
+        return signer(texte, d, ctx), info
 
     def extraire_rappel(self, texte):
         """{titre, quand} ou None. La date se calcule ensuite avec reminders.parse_datetime(quand)."""
-        out = self.generate(RAPPEL_REGLE, texte, max_tokens=100, timeout_s=TIMEOUT_REMINDER_S)
+        out = self.generate(RAPPEL_REGLE, texte, max_tokens=100, timeout_s=budget_redaction(100))
         return rappel_depuis_json(out) if out else None
 
     def compte_rendu(self, blocks, names=None, progress=None):
