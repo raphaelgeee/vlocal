@@ -39,7 +39,7 @@ API de pilotage (no-op si overlay indisponible) :
   result(trans_s, inserted, branch, text), too_short(), too_short_tap(),
   locked(label), error(msg), mic_needed(), info(title, sub), fade_out(),
   reset(), show(), hide(), set_theme(t), set_lang(l), set_hotkey_label(l),
-  set_anchor_provider(fn) (sans effet, voir sa docstring)
+  set_meeting(active)
 
 La position se calcule par pill_frame(), fonction pure testée sans AppKit.
 """
@@ -120,12 +120,6 @@ def glass_frame(geom, panel=(PANEL_W, PANEL_H), bottom=PILL_BOTTOM, margin=GLASS
     h = max(0.0, min(float(geom["h"]), ph - bottom - margin))
     r = max(0.0, min(float(geom["r"]), h / 2.0))
     return ((pw - w) / 2.0, bottom, w, h, r)
-
-
-def set_anchor_provider(fn):
-    """Sans effet : la pilule ne s'ancre plus sous l'icône de la barre des menus.
-    Gardée parce que app.py l'appelle encore ; à retirer avec cet appel."""
-    del fn
 
 
 def _html_path():
@@ -473,6 +467,11 @@ if _IS_MAC:
                 self.panel.orderFrontRegardless()
             _on_main(_r)
 
+        def conceal(self):
+            """Panneau transparent (alpha 0) sans orderOut : le ré-affichage
+            reste instantané, et les clics le traversent déjà."""
+            _on_main(lambda: self.panel.setAlphaValue_(0.0))
+
         def place(self):
             """Pose le panneau en bas de l'écran de la souris (une fois par appui)."""
             def _run():
@@ -528,15 +527,37 @@ def show():
 def hide():
     """Fin de dictée, abandon, figeage, entrée en réunion : tout message ou onde
     disparaît et la pilule revient au repos. Le panneau reste visible pour la
-    pilule de repos ; le replié est immédiat (aucune transition à interrompre)."""
+    pilule de repos, sauf pendant une réunion (set_meeting) ; le replié est
+    immédiat (aucune transition à interrompre)."""
     if _overlay is not None:
         _js("ovReset()")
+        if _meeting:
+            _overlay.conceal()
+        else:
+            _overlay.show()
+
+
+def set_meeting(active):
+    """Réunion en cours ou terminée. Pendant une réunion, la pilule de repos
+    disparaît : elle ne sert qu'à la dictée et resterait à l'écran pendant une
+    visio partagée. Une dictée lancée pendant la réunion l'affiche le temps de
+    la dictée (recording() appelle show()), puis hide() la masque de nouveau.
+    Appelée par l'API des réunions au démarrage et à l'arrêt de l'enregistrement."""
+    global _meeting
+    _meeting = bool(active)
+    if _overlay is None:
+        return
+    if _meeting:
+        _js("ovReset()")
+        _overlay.conceal()
+    else:
         _overlay.show()
 
 
 _hotkey_label = None  # libellé du raccourci actif, ex. "Ctrl + Cmd"
 _theme = None         # thème courant (dark/light), rejoué si l'overlay n'existe pas encore
 _lang = None          # langue courante (fr/en), idem
+_meeting = False      # réunion en cours : la pilule de repos est masquée
 
 
 def set_hotkey_label(label):

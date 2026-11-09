@@ -347,7 +347,6 @@ def _create_menubar_on_main():
     #  - Fermer la fenêtre = la MASQUER (agent + raccourci maintenus en vie).
     #  - Menu V : « Dicter » / « Ouvrir Vlocal » / « Réglages » / « Quitter ».
     #  - Quitter = menu V ou Cmd+Q (applicationShouldTerminate_ -> vrai quit).
-    #  - La bulle de dictée s'ANCRE sous l'icône V (le bec pointe enfin dessus).
     _check_lifecycle_delegate()
     if appstate.menubar is not None:
         return
@@ -371,11 +370,7 @@ def _create_menubar_on_main():
             "toggle_task": _on_toggle_task,
         }, labels=_menubar_labels())
         _refresh_menubar()                       # peuple « Rappels récents »
-        try:
-            overlay.set_anchor_provider(appstate.menubar.icon_frame)
-            print("[menubar] icône V installée + overlay ancré sous l'icône.")
-        except Exception as _ae:
-            print(f"[menubar] ancre overlay indispo ({_ae}).")
+        print("[menubar] icône V installée.")
     except Exception as e:
         print(f"[menubar] icône indisponible ({e}) — repli sans icône menu-bar.")
 

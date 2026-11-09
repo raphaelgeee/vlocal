@@ -199,6 +199,7 @@ class MeetingsApi:
                         _lt.sleep(0.1)
                 threading.Thread(target=_reunion_level_loop, args=(rec,),
                                  name="vlocal-reunion-level", daemon=True).start()
+                overlay.set_meeting(True)   # pilule de repos masquée pendant la réunion
                 return {"ok": True, "wav_path": wav_path, "id": mid}
             except Exception as e:
                 # Échec micro/disque : on REND l'état (sinon bloqué en
@@ -228,6 +229,7 @@ class MeetingsApi:
             # On baisse le drapeau TOUT DE SUITE : un 2e appel concurrent verra
             # recording=False et sortira proprement.
             _meeting_state["recording"] = False
+            overlay.set_meeting(False)   # la pilule de repos revient
             try:
                 wav_path, duree = rec.stop()
             except Exception as e:
