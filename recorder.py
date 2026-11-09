@@ -225,7 +225,7 @@ class MeetingRecorder:
                 wav.setsampwidth(2)            # 16 bits
                 wav.setframerate(self.sample_rate)
             except Exception as e:
-                raise RuntimeError(f"Impossible de créer le fichier audio : {e}")
+                raise RuntimeError(f"Impossible de créer le fichier audio : {e}") from e
 
             # À partir d'ici, si quoi que ce soit échoue AVANT que le thread
             # d'écriture ne prenne possession de `wav` (et donc le ferme dans son
@@ -331,7 +331,7 @@ class MeetingRecorder:
                 except Exception:
                     pass
                 self._stream = None
-                raise RuntimeError(f"Micro indisponible : {e}")
+                raise RuntimeError(f"Micro indisponible : {e}") from e
 
             self._recording = True
             self._t0 = time.perf_counter()

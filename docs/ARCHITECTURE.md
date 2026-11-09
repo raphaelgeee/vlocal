@@ -8,11 +8,12 @@ decisions behind it. Module by module details are in the docstrings.
 
 `app.py` starts pywebview, which owns the Cocoa run loop. Everything that needs
 the main thread (menu bar item, global shortcut monitors, overlay panel) is
-attached to that `NSApplication` from the `webview.start` callback. Nothing else
-runs on the main thread: pywebview API methods return immediately, long work
-goes to daemon threads, and JavaScript is pushed to the window with `_ui()`,
-which never waits for a result (a synchronous `evaluate_js` on the Cocoa
-backend blocks the caller until the page answers, which caused freezes).
+attached to that `NSApplication` from the `webview.start` callback
+(`startup.after_start`). Nothing else runs on the main thread: pywebview API
+methods return immediately, long work goes to daemon threads, and JavaScript is
+pushed to the window with `ui_bridge._ui()`, which never waits for a result (a
+synchronous `evaluate_js` on the Cocoa backend blocks the caller until the page
+answers, which caused freezes).
 
 Two subprocesses are launched from `Contents/Helpers/VlocalWorker` (a symlink to
 the main binary, so PyInstaller ships one executable and macOS gives them no
@@ -26,10 +27,51 @@ Dock icon):
   the same isolation reason and to keep the ONNX runtime out of the main
   process memory when idle.
 
+## Module map
+
+`app.py` only assembles: worker shims (`--mic-worker`, `--emb-worker`, before
+any heavy import), the offline lock for Hugging Face, then `main()`, a sequence
+of named startup steps ending in `webview.start(after_start)`. Dependencies go
+one way, from `app.py` down; no module imports `app.py`, and there is no import
+cycle (`tests/test_modules_app.py`).
+
+| Module | Responsibility |
+| --- | --- |
+| `app.py` | entry point and startup sequence (`main`) |
+| `startup.py` | `after_start` (pywebview callback): engine load, shortcut, overlay, menu bar icon, freeze watchdog, show requests, Dock reopen, update watch, quit cleanup, update confirmation and rollback notice |
+| `window_mac.py` | dashboard window: creation, close-as-hide, native style and drag strip, Dock policy, WebKit cache purge after an update |
+| `lifecycle.py` | the single lifecycle delegate (reopen, real quit), quit, single instance, main-thread freeze watchdog, self relaunch, wake from sleep, App Nap activities, consented auto diagnostic |
+| `appstate.py` | shared process state (window, store, controller, menu bar, telemetry, API, language, model paths), read as `appstate.x` at use time |
+| `applog.py` | logging setup (see Logs) |
+| `settings.py` | Application Support paths, `settings.json` with an mtime cache, mode, glossary file, environment flags |
+| `texts.py` | French messages and their English translations (`_te`) |
+| `ui_bridge.py` | Python to UI: `_ui`, `_toast`, `_api_safe`, overlay hide timer, list and menu refresh, Settings modal |
+| `engine_runtime.py` | model paths and choice, CPU threads, background engine load, memory policy ticks, reload after a model download, `--selftest` |
+| `dictation.py` | `DictationController`, finalize watchdog and heartbeat, dictation supervisor, text polishing, clipboard |
+| `hotkeys.py` | global shortcut wired to the controller, hot re-arm |
+| `reminder_flow.py` | spoken reminders (creation, timers, re-arm at launch) and post-dictation capture to Obsidian |
+| `meetings.py` | meeting state and lock, end-of-meeting pipeline (transcription, diarization, voice recognition, block attribution) |
+| `api.py` | `Api`, the pywebview `js_api`, composed of `api_dictation`, `api_files`, `api_meetings`, `api_settings`, `api_system` (one base class per domain; the exposed method list is frozen by `tests/test_api_exposee.py`) |
+
+Engine, capture and storage modules (`engine.py`, `mlx_engine.py`,
+`micworker.py`, `livetail.py`, `diarizer.py`, `recorder.py`, `storage.py`...)
+are unchanged and documented below.
+
+## Logs
+
+`applog.setup()` is called once by `main()`. In the packaged app, each module
+logs to `~/Library/Logs/Vlocal/vlocal.log` (rotating, 1 MB x 5, level INFO,
+`VLOCAL_LOG_LEVEL` to change it); stdout and stderr go to `console.log` in the
+same folder (native messages, modules still using `print`), truncated at each
+launch. In development, logs go to the console. Tests never configure logging,
+so nothing is written to disk. Failures ignored on purpose (best-effort system
+calls) are logged at DEBUG with their traceback: no broad `except` in the app
+modules is silent (`tests/test_modules_app.py`).
+
 ## Dictation pipeline
 
 1. The global shortcut (`hotkey_mac.py`, NSEvent monitors) or the UI calls
-   `start()` on the dictation controller in `app.py`. Capture starts in the mic
+   `start()` on the dictation controller in `dictation.py`. Capture starts in the mic
    worker; the overlay shows the level.
 2. While the user speaks, `livetail.py` watches the buffer. Past 29 s of audio it
    looks for a real silence (0.4 s under the engine's RMS threshold) after a
@@ -47,7 +89,7 @@ Dock icon):
    scheduler is notified.
 
 Every step is bounded. `engine.dictation_gpu_timeout(audio_s)` gives the GPU
-inference budget (22 s plus 0.5 s per second of audio); `app._finalize_budget_s`
+inference budget (22 s plus 0.5 s per second of audio); `dictation._finalize_budget_s`
 adds 3 s for the finalization watchdog; a supervisor thread measures inactivity
 (heartbeats), not total duration, so a slow but progressing transcription is
 never cut.
@@ -92,7 +134,7 @@ meetings (cosine 0.75 with a margin over the second best).
 SQLite (WAL) in `~/Library/Application Support/Vlocal/vlocal.db`: reminders,
 dictations (if history is enabled), meetings with their word timings and
 speaker blocks, glossary, daily usage counters. Settings are a JSON file in the
-same folder, read through `_load_settings()` with an mtime cache.
+same folder, read through `settings._load_settings()` with an mtime cache.
 
 ## Interface
 
@@ -105,8 +147,13 @@ dictation, hosted in a non-activating `NSPanel` (`overlay.py`).
 ## Updates
 
 `updater.py` downloads the DMG announced by the `get-latest-version` edge
-function, verifies the Developer ID signature and the notarization ticket,
-stages a copy and swaps it atomically on relaunch. `model_store.py` downloads
+function (checked against its published SHA-256), verifies the Developer ID
+signature, the notarization ticket and the expected version, stages a copy and
+swaps it atomically on relaunch. At launch, `startup.settle_pending_update`
+lets `updater.cleanup_leftovers` decide: a new version that never confirmed its
+start triggers an automatic rollback (the app exits so the installer can put
+the previous version back), and a version that was rolled back is never
+offered again. `updater.confirm_startup` runs once the main window has loaded. `model_store.py` downloads
 the speech models from the same bucket on first launch.
 
 ## Historical note

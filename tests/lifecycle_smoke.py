@@ -64,9 +64,12 @@ def enfant(sortie):
     permissions.open_settings = lambda *a, **k: None
 
     import app
-    app._load_engine_async = lambda *a, **k: None       # le moteur n'a rien à faire ici
+    import appstate
+    import hotkeys
+    import startup
+    startup._load_engine_async = lambda *a, **k: None       # le moteur n'a rien à faire ici
 
-    _vrai_start = app.start_global_hotkey
+    _vrai_start = startup.start_global_hotkey
 
     def _start_observe():
         try:
@@ -76,7 +79,7 @@ def enfant(sortie):
         except Exception as e:
             note("raccourci", f"EXCEPTION {type(e).__name__}: {e}")
             raise
-    app.start_global_hotkey = _start_observe
+    startup.start_global_hotkey = _start_observe
 
     def sur_main(fn, delai=2.5):
         from Foundation import NSOperationQueue
@@ -97,7 +100,7 @@ def enfant(sortie):
         from AppKit import NSApplication
         import webview.platforms.cocoa as C
         nsapp = NSApplication.sharedApplication()
-        inst = C.BrowserView.instances.get(getattr(app._window, "uid", "master"))
+        inst = C.BrowserView.instances.get(getattr(appstate.window, "uid", "master"))
         if inst is None:
             note("verdict", "fenêtre introuvable")
             os._exit(4)
@@ -106,7 +109,7 @@ def enfant(sortie):
         vivant, b = sur_main(lambda: {
             "delegue_sait_rouvrir": bool(nsapp.delegate() is not None and nsapp.delegate()
                 .respondsToSelector_("applicationShouldHandleReopen:hasVisibleWindows:")),
-            "icone_barre_des_menus": app._menubar is not None,
+            "icone_barre_des_menus": appstate.menubar is not None,
             "fenetre_visible": bool(win.isVisible()),
         })
         note("demarrage", b.get("v") if vivant else "boucle d'événements morte")
@@ -129,18 +132,18 @@ def enfant(sortie):
 
         # v1.3.3 — changer le mode dans les Réglages doit prendre effet tout de
         # suite : ancien raccourci arrêté, nouveau démarré avec le bon mode.
-        ancien = app._hotkey_state
+        ancien = hotkeys._hotkey_state
         try:
-            app._api_instance.save_settings({"hotkey_mode": "tap"})
+            appstate.api.save_settings({"hotkey_mode": "tap"})
             time.sleep(2.5)
-            nouveau = app._hotkey_state
+            nouveau = hotkeys._hotkey_state
             note("rearme_a_chaud", {
                 "ancien_arrete": bool(ancien is not None and ancien.get("stopped")),
                 "nouveau_distinct": bool(nouveau is not None and nouveau is not ancien),
                 "mode": (nouveau or {}).get("mode"),
                 "moniteurs": len((nouveau or {}).get("monitors") or []),
             })
-            app._api_instance.save_settings({"hotkey_mode": "hold"})
+            appstate.api.save_settings({"hotkey_mode": "hold"})
             time.sleep(1.5)
         except Exception as e:
             note("rearme_a_chaud", "EXCEPTION " + repr(e))

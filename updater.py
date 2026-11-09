@@ -311,9 +311,9 @@ class _UpdateLock:
         self._f = open(os.path.join(UPDATES, "update.lock"), "a")
         try:
             fcntl.flock(self._f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
+        except OSError as exc:
             self._f.close()
-            raise self._busy("verrou update.lock tenu")
+            raise self._busy("verrou update.lock tenu") from exc
         if _installer_alive():
             self._f.close()
             raise self._busy("installateur en cours")
@@ -369,7 +369,7 @@ def download(url, expected_len, version, on_progress=None, sha256=None):
                     on_progress(min(n / total, 1.0), "Téléchargement")
             model_store.fetch_resumable(url, dst, size=total, sha256=sha256, on_bytes=_bytes)
         except model_store.DownloadError as e:
-            raise _fail(_DL_CODES.get(e.code, "failed"), e.detail or e.code)
+            raise _fail(_DL_CODES.get(e.code, "failed"), e.detail or e.code) from e
         if on_progress:
             on_progress(1.0, "Téléchargement terminé")
         return dst
@@ -441,7 +441,7 @@ def _check_bundle(app, expected_version, current_version):
     try:
         archs = macho_archs(exe)
     except OSError as e:
-        raise _fail("bad_bundle", "exécutable illisible : %s" % e)
+        raise _fail("bad_bundle", "exécutable illisible : %s" % e) from e
     if "arm64" not in archs:
         raise _fail("wrong_arch", "architectures %s" % sorted(archs))
     return version
@@ -520,7 +520,7 @@ def _ensure_install_space(app_bytes, target):
             model_store.ensure_free_space(UPDATES, app_bytes)
             model_store.ensure_free_space(os.path.dirname(target), app_bytes)
     except model_store.DownloadError as e:
-        raise _fail("no_space", e.detail)
+        raise _fail("no_space", e.detail) from e
 
 
 def _rmtree(path):
@@ -551,7 +551,7 @@ def _attach(dmg_path):
         if code == 0:
             _log("sortie de hdiutil illisible (%s) : démontage de sécurité" % e)
             _detach_orphans()
-            raise _fail("mount_failed", "plist hdiutil illisible")
+            raise _fail("mount_failed", "plist hdiutil illisible") from e
     if code != 0:
         _detach(mount, devs)
         raise _fail("mount_failed", err.strip()[-300:])
@@ -641,7 +641,7 @@ def verify_and_stage(dmg_path, on_stage=None, expected_version=None, current_ver
         except UpdateError:
             raise
         except Exception as e:  # noqa: BLE001
-            raise _fail("stage_failed", "%s: %s" % (type(e).__name__, e))
+            raise _fail("stage_failed", "%s: %s" % (type(e).__name__, e)) from e
         finally:
             _detach(mount, devs)
         try:
@@ -663,7 +663,7 @@ def verify_and_stage(dmg_path, on_stage=None, expected_version=None, current_ver
                 _log("copie défectueuse non supprimée : %s" % rm_err)
             if isinstance(e, UpdateError):
                 raise
-            raise _fail("stage_failed", "%s: %s" % (type(e).__name__, e))
+            raise _fail("stage_failed", "%s: %s" % (type(e).__name__, e)) from e
         _log("version %s vérifiée et prête : %s" % (version, staged))
         return staged
 
@@ -946,7 +946,7 @@ def apply_update(staged_path, app_pid, to_version=None, from_version=None):
             _spawn_installer("install", app_pid, staged_path, target)
         except OSError as e:
             _clear_pending()
-            raise _fail("launch_failed", e)
+            raise _fail("launch_failed", e) from e
     _log("installateur lancé : %s -> %s" % (to_version, target))
     return True
 

@@ -9,6 +9,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import app_sources  # noqa: E402
 import storage  # noqa: E402
 import telemetry  # noqa: E402
 
@@ -231,7 +232,7 @@ class SchedulerTests(unittest.TestCase):
             return {"engine": "mlx"}
         for valeur in (None, False):
             settings = {"install_id": telemetry.new_install_id(), "telemetry_enabled": valeur}
-            t = telemetry.Telemetry(lambda: settings, lambda p: None, lambda: self.store,
+            t = telemetry.Telemetry(lambda s=settings: s, lambda p: None, lambda: self.store,
                                     "1.4.4", "15.5", get_profile=profil)
             self.assertFalse(t.sync_now())
         self.assertEqual(appels, [])
@@ -333,11 +334,10 @@ class EngineFieldTests(unittest.TestCase):
     def test_app_profile_reads_the_engine_instance(self):
         """Garde-fou : app.py ne passe plus par mlx_engine.available() pour le
         profil, et lit last_backend() sur l'instance moteur."""
-        with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                               "app.py"), encoding="utf-8") as f:
-            src = f.read()
-        corps = src[src.index("def _telemetry_profile"):]
-        corps = corps[:corps.index("\ndef ", 1)]
+        import ast
+        src = app_sources.texte_complet()
+        fichier, noeud = app_sources.definitions()["_telemetry_profile"]
+        corps = ast.get_source_segment(app_sources.texte(fichier), noeud)
         self.assertIn(".engine.last_backend()", corps)
         self.assertNotIn("available()", corps)
         self.assertNotIn("def _machine_profile", src)

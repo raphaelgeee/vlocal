@@ -67,10 +67,12 @@ data), the app sends once a day:
 | Mac model (for example "Apple M2 Pro"), interface language, chosen shortcut, engine in use (GPU or CPU) | know which hardware Vlocal actually runs on, and why it is slow for some people |
 | timestamp of your last dictation | know whether an installation is still in use |
 | per day: dictations, words, speech duration, estimated time saved, meetings and meeting words | measure real use |
-| per day, the number of technical incidents per code (`mic_device_fail`, `gpu_fallback_cpu`...) | see that an installation is struggling, and offer help |
+| per day, the number of technical incidents per code, with their technical cause when known (`mic_device_fail:start`, `gpu_fallback_cpu`...) | see that an installation is struggling, understand why, and offer help |
 
-Nothing else. Incidents travel as **counters**: the stable code and the count,
-never the event context (which may contain a device name). The Mac model is a
+Nothing else. Incidents travel as **counters**: the stable code, the technical
+cause (a step from the closed list `errors.WHERE_CODES`, for example `start`
+for opening the microphone) and the count, never the rest of the event context
+(which may contain a device name). The Mac model is a
 commercial model name, not a serial number.
 The exact payload is built in [telemetry.py](telemetry.py)
 (`build_rows`) and covered by [tests/test_telemetry.py](tests/test_telemetry.py),

@@ -10,6 +10,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import app_sources  # noqa: E402
 import hotkey_mac  # noqa: E402
 
 T = {"flags": 12, "down": 10, "up": 11}          # NSEventType réels
@@ -81,7 +82,7 @@ class FnHotkeyTests(unittest.TestCase):
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         html = open(os.path.join(root, "vlocal-interface.html"), encoding="utf-8").read()
         menu = set(re.findall(r"\{v:'([a-z_]+)'\}", html))
-        app = open(os.path.join(root, "app.py"), encoding="utf-8").read()
+        app = app_sources.texte_complet()
         block = app[app.index("    HOTKEYS = {"):]
         backend = set(re.findall(r'^\s+"([a-z_]+)":\s+\(\{', block[:block.index("}\n")], re.M))
         self.assertTrue(menu, "menu introuvable")

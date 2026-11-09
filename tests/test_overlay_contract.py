@@ -13,6 +13,7 @@ import unittest
 RACINE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, RACINE)
 import overlay  # noqa: E402
+import app_sources  # noqa: E402
 
 # Contrat publié aux autres lots : noms figés.
 CONTRAT_JS = ("ovRecording", "ovLevel", "ovTranscribing", "ovResult", "ovTooShort",
@@ -53,7 +54,7 @@ class TestContratOverlay(unittest.TestCase):
         self.assertIn("ovLocked", fonctions_appelees(self.py) - fonctions_exposees(amputee))
 
     def test_api_python_appelee_par_app(self):
-        app = _lire("app.py")
+        app = app_sources.texte_complet()
         noms = set(re.findall(r"\boverlay\.([a-z_]+)\(", app))
         self.assertTrue(noms)
         manquants = sorted(n for n in noms if not callable(getattr(overlay, n, None)))

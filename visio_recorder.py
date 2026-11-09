@@ -401,7 +401,7 @@ class VisioRecorder:
                 wav.setsampwidth(2)
                 wav.setframerate(self.sample_rate)
             except Exception as e:
-                raise RuntimeError(f"Impossible de créer le fichier audio : {e}")
+                raise RuntimeError(f"Impossible de créer le fichier audio : {e}") from e
 
             try:
                 self._writer_stop.clear()
@@ -499,7 +499,7 @@ class VisioRecorder:
                 except Exception:
                     pass
                 self._stream = None
-                raise RuntimeError(f"Micro indisponible : {e}")
+                raise RuntimeError(f"Micro indisponible : {e}") from e
 
             self._recording = True
             self._t0 = time.perf_counter()

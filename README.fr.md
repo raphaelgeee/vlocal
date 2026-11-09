@@ -69,11 +69,12 @@ Données partagées), l'app envoie une fois par jour :
 | modèle de Mac (par exemple « Apple M2 Pro »), langue de l'interface, raccourci choisi, moteur utilisé (carte graphique ou processeur) | savoir sur quel matériel Vlocal tourne vraiment, et pourquoi il est lent chez certains |
 | horodatage de votre dernière dictée | savoir si une installation sert encore |
 | par jour : dictées, mots, durée de parole, temps gagné estimé, réunions et mots de réunion | mesurer l'usage réel |
-| par jour, le nombre d'incidents techniques par code (`mic_device_fail`, `gpu_fallback_cpu`...) | voir qu'une installation va mal, et proposer de l'aide |
+| par jour, le nombre d'incidents techniques par code, avec leur cause technique quand elle est connue (`mic_device_fail:start`, `gpu_fallback_cpu`...) | voir qu'une installation va mal, comprendre pourquoi, et proposer de l'aide |
 
-Rien d'autre. Les incidents voyagent en **compteurs** : le code stable et le
-nombre, jamais le contexte de l'événement (qui peut contenir un nom de
-périphérique). Le modèle de Mac est un modèle commercial, pas un numéro de
+Rien d'autre. Les incidents voyagent en **compteurs** : le code stable, la
+cause technique (une étape prise dans la liste fermée `errors.WHERE_CODES`,
+par exemple `start` pour l'ouverture du micro) et le nombre, jamais le reste du
+contexte de l'événement (qui peut contenir un nom de périphérique). Le modèle de Mac est un modèle commercial, pas un numéro de
 série. Le contenu exact de l'envoi est construit dans
 [telemetry.py](telemetry.py) (`build_rows`) et verrouillé par
 [tests/test_telemetry.py](tests/test_telemetry.py), qui échoue si un champ est

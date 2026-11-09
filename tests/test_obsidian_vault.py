@@ -62,7 +62,7 @@ class VoiceVaultTests(unittest.TestCase):
 
     def test_reminder_appended(self):
         obsidian.create_voice_vault(self.vault)
-        for i in range(2):
+        for _ in range(2):
             r = obsidian.capture_reminder("Appeler Max", "demain 9h", self.vault, now_ts=1_800_000_000)
             self.assertTrue(r["ok"])
         txt = open(os.path.join(self.vault, "Rappels", "Rappels.md"), encoding="utf-8").read()

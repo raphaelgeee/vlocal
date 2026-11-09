@@ -10,6 +10,8 @@ import os
 import re
 import unittest
 
+import app_sources
+
 RACINE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -97,10 +99,10 @@ class TestModeClairOverlay(unittest.TestCase):
 
 class TestPlomberieApp(unittest.TestCase):
     def test_app_pousse_le_theme_et_la_mise_a_jour(self):
-        src = _lire("app.py")
+        src = app_sources.texte_complet()
         self.assertIn("overlay.set_theme(", src)
         self.assertIn('"theme" in', src)
-        self.assertIn("update_version=_update_latest", src)
+        self.assertIn("update_version=appstate.update_latest", src)
         self.assertIn('"update": "Mise à jour {0} disponible..."', src)
         self.assertIn("def _update_watch", src)
 

@@ -86,6 +86,14 @@ hiddenimports = [
     # Modules cœur listés explicitement (sûreté : certains ne sont importés que
     # dynamiquement ou depuis des sous-process --mic-worker / --emb-worker).
     "engine", "processor", "storage", "recorder", "live_meeting", "reminders",
+    # Lot propreté : modules issus du découpage d'app.py. Tous importés
+    # statiquement par app.py (l'analyse les trouve) ; listés quand même pour
+    # que leur embarquement ne dépende pas d'un import déplacé un jour dans une
+    # fonction. tests/test_modules_app.py vérifie que chacun s'importe seul.
+    "applog", "appstate", "texts", "settings", "ui_bridge", "lifecycle",
+    "reminder_flow", "dictation", "meetings", "engine_runtime", "hotkeys",
+    "api", "api_dictation", "api_files", "api_meetings", "api_settings",
+    "api_system", "window_mac", "startup", "menubar",
 ]
 
 

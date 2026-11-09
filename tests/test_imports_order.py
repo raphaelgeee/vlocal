@@ -30,7 +30,7 @@ def imports_utilises_trop_tot(chemin):
             continue
         imports, usages = {}, []
 
-        def visiter(noeud):
+        def visiter(noeud, imports, usages):
             for enfant in ast.iter_child_nodes(noeud):
                 # Une fonction, une lambda ou une classe imbriquée a sa propre portée.
                 if isinstance(enfant, (ast.FunctionDef, ast.AsyncFunctionDef,
@@ -42,9 +42,9 @@ def imports_utilises_trop_tot(chemin):
                         imports.setdefault(nom, enfant.lineno)
                 if isinstance(enfant, ast.Name) and isinstance(enfant.ctx, ast.Load):
                     usages.append((enfant.id, enfant.lineno))
-                visiter(enfant)
+                visiter(enfant, imports, usages)
 
-        visiter(fn)
+        visiter(fn, imports, usages)
         for nom, ligne in usages:
             if nom in imports and ligne < imports[nom]:
                 fautes.append((ligne, nom, fn.name, imports[nom]))

@@ -504,15 +504,15 @@ class MicWorker:
         except Exception as first:
             try:
                 native = self._native_rate(idx)
-            except Exception:
-                raise first
+            except Exception as exc:
+                raise first from exc
             if not native or native == sr:
                 raise first
             rs = StreamResampler(native, sr)
             try:
                 return self._make_stream(idx, native, rs.process_bytes), native
-            except Exception:
-                raise first
+            except Exception as exc:
+                raise first from exc
 
     def _make_stream(self, idx, rate: int, transform):
         out = self.out
@@ -778,7 +778,7 @@ class RemoteMic:
         try:
             proc = self._spawn_fn()
         except Exception as e:
-            raise WorkerUnavailable(f"spawn micro-worker: {e}")
+            raise WorkerUnavailable(f"spawn micro-worker: {e}") from e
         self._proc = proc
         self._spawn_t = time.monotonic()
         threading.Thread(target=self._reader, args=(proc, ready),
@@ -966,7 +966,7 @@ class RemoteMic:
             p.stdin.write((json.dumps(obj) + "\n").encode("utf-8"))
             p.stdin.flush()
         except (OSError, ValueError) as e:
-            raise WorkerUnavailable(f"pipe micro-worker: {e}")
+            raise WorkerUnavailable(f"pipe micro-worker: {e}") from e
 
     def _arm(self, *names) -> None:
         """Arme les événements AVANT d'envoyer la commande (sinon une réponse

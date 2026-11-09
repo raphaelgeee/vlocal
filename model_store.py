@@ -243,9 +243,9 @@ def _one_pass(url, tmp, size, on_bytes):
     except urllib.error.HTTPError as e:
         if e.code == 416 and have:
             _remove(tmp)        # reprise refusée : la tentative suivante repart de zéro
-            raise DownloadError("network", "HTTP 416 sur reprise à %d o" % have)
+            raise DownloadError("network", "HTTP 416 sur reprise à %d o" % have) from e
         if 400 <= e.code < 500 and e.code not in (408, 429):
-            raise DownloadError("http", "HTTP %d" % e.code)
+            raise DownloadError("http", "HTTP %d" % e.code) from e
         raise
     with resp:
         status = getattr(resp, "status", None) or resp.getcode()
@@ -268,7 +268,7 @@ def _one_pass(url, tmp, size, on_bytes):
                     out.write(chunk)
                 except OSError as e:
                     if e.errno == errno.ENOSPC:
-                        raise DownloadError("no_space", "disque plein pendant l'écriture")
+                        raise DownloadError("no_space", "disque plein pendant l'écriture") from e
                     raise
                 done += len(chunk)
                 if size is not None and done > size:
@@ -357,7 +357,7 @@ def _manifest_files(man):
             raise ValueError("aucun fichier")
         return man["base_url"].rstrip("/"), out
     except (KeyError, TypeError, AttributeError, ValueError) as e:
-        raise DownloadError("manifest", e)
+        raise DownloadError("manifest", e) from e
 
 
 def download_models(progress=None, manifest=None):
@@ -412,9 +412,9 @@ def download_models(progress=None, manifest=None):
             if st["verified"].pop(path, None) is not None:
                 _write_state(CACHE, st)
 
-            def _on_bytes(n, _base=done):
+            def _on_bytes(n, _base=done, _label=label):
                 if progress:
-                    progress(_base + n, total, label)
+                    progress(_base + n, total, _label)
             try:
                 fetch_resumable("%s/%s" % (base, path), dst, size=size, sha256=sha,
                                 on_bytes=_on_bytes)

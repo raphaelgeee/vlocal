@@ -1,0 +1,22 @@
+# Configuration des outils de développement (aucune dépendance du produit).
+#
+# Analyse statique : uvx ruff check   (n'installe rien dans le projet)
+# Règles bloquantes : E9 (erreurs de syntaxe), F (pyflakes : noms indéfinis,
+# imports inutiles...), B (bugbear : pièges courants). Le code n'est pas
+# reformaté : seules ces règles sont vérifiées.
+#
+# Suivi en avertissement, non bloquant : les exceptions larges (BLE). L'app en
+# garde volontairement autour des appels système best-effort, chacune
+# journalisée (voir tests/test_modules_app.py) :
+#   uvx ruff check --select BLE --exit-zero --statistics
+
+[tool.ruff]
+target-version = "py312"
+extend-exclude = ["venv", "build", "dist", "models", "eval", "tests/rd"]
+
+[tool.ruff.lint]
+select = ["E9", "F", "B"]
+# zip(strict=...) : les séquences zippées ont la même longueur par construction
+# (segments et leurs empreintes, mots et leurs horodatages) ; strict=True
+# changerait le comportement en cas d'écart (exception au lieu de troncature).
+ignore = ["B905"]

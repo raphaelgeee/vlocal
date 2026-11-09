@@ -138,21 +138,6 @@ class MenuBar:
         self.refresh(tasks=[])
 
     # ------------------------------------------------------------------ #
-    def icon_frame(self):
-        """Frame ÉCRAN (x, y, w, h) de l'icône dans la barre des menus, ou None.
-
-        Plus utilisée : la pilule de dictée se place en bas de l'écran de la
-        souris (overlay.py). Gardée tant que app.py la passe encore à
-        overlay.set_anchor_provider ; à retirer avec cet appel."""
-        try:
-            win = self._item.button().window()
-            f = win.frame()
-            return (float(f.origin.x), float(f.origin.y),
-                    float(f.size.width), float(f.size.height))
-        except Exception:
-            return None
-
-    # ------------------------------------------------------------------ #
     def refresh(self, tasks=None, labels=None, update_version=None):
         """Reconstruit le menu (5 derniers rappels non faits).
 
