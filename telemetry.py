@@ -7,13 +7,14 @@ Ce que l'app envoie, et rien d'autre (voir aussi README, section « Données »)
     (modifiables dans Réglages, peuvent rester vides) ;
   - la version de Vlocal et la version de macOS ;
   - le modèle de Mac, la langue de l'interface, le raccourci choisi et le
-    moteur utilisé (carte graphique ou processeur) ;
+    moteur de la dernière dictée (carte graphique ou processeur) ;
   - l'horodatage de la dernière dictée ;
   - par jour : nombre de dictées, de mots, durée de parole, temps gagné,
     réunions et mots de réunion ;
   - par jour, le nombre d'incidents techniques par code (micro indisponible,
-    repli processeur...), sans aucun détail : de quoi voir si une installation
-    va mal et proposer de l'aide.
+    repli processeur...), avec au plus l'étape technique en cause
+    (« mic_device_fail:start »), jamais le contexte de l'événement : de quoi
+    voir si une installation va mal et proposer de l'aide.
 
 Jamais : texte dicté, audio, noms de fichiers, contenu de réunions, nom de
 machine, adresse IP côté client (Supabase voit l'IP de la requête comme tout
@@ -27,12 +28,15 @@ fait des upserts idempotents : rejouer un envoi ne compte jamais deux fois. Tout
 réessaie au prochain cycle, sans jamais gêner l'utilisateur.
 
 Désactivable à tout moment (Réglages > Données partagées, ou
-telemetry_enabled=false dans settings.json). Rien n'est envoyé tant que
-l'utilisateur n'a pas fait son choix à l'installation.
+telemetry_enabled=false dans settings.json). Rien n'est envoyé, ni même
+calculé, tant que l'utilisateur n'a pas fait son choix à l'installation.
+La télémétrie ne fait que LIRE l'état du moteur : elle ne déclenche jamais la
+sonde du GPU (v1.4.4).
 """
 import json
 import os
 import re
+import subprocess
 import threading
 import time
 import uuid
@@ -137,13 +141,99 @@ def is_enabled(settings: dict) -> bool:
     return settings.get("telemetry_enabled") is True and bool(settings.get("install_id"))
 
 
+def engine_label(last_backend: str, gpu_status: tuple) -> str:
+    """Valeur du champ `engine` : "mlx", "cpu" ou "" (inconnu).
+
+    Le moteur de la DERNIÈRE dictée (VlocalEngine.last_backend) fait foi. Sans
+    dictée aboutie depuis le lancement, on lit le verdict GPU déjà rendu
+    (mlx_engine.status) : "ok" -> "mlx" ; "suspended", "retry", "unsupported",
+    "disabled" -> "cpu" (les dictées partent aujourd'hui sur le processeur) ;
+    "unknown" -> "" : jamais sondé, et le serveur garde alors la dernière
+    valeur connue de l'installation.
+    La console et le serveur n'attendent que "mlx" ou "cpu"."""
+    if last_backend in ("mlx", "cpu"):
+        return last_backend
+    state = gpu_status[0] if gpu_status else "unknown"
+    if state == "ok":
+        return "mlx"
+    if state in ("suspended", "retry", "unsupported", "disabled"):
+        return "cpu"
+    return ""
+
+
+def _engine_in_use(last_backend: str) -> str:
+    """Lit (sans sonder) le moteur utilisé. v1.4.4 : avant, la télémétrie
+    appelait mlx_engine.available(), qui LANCE la sonde du GPU ; 60 s après le
+    démarrage, modèle pas encore téléchargé, elle figeait le GPU à « absent »
+    pour toute la session. Import paresseux : ce module reste importable sans
+    le moteur (bancs d'essai)."""
+    try:
+        import mlx_engine
+        return engine_label(last_backend, mlx_engine.status())
+    except Exception as e:
+        print(f"[telemetry] moteur non déterminé : {e}")
+        return ""
+
+
+def _mac_model() -> str:
+    """« Apple M5 (Mac17,2) » : la puce d'abord, c'est elle qui explique la vitesse."""
+    try:
+        out = subprocess.run(["/usr/sbin/sysctl", "-n", "machdep.cpu.brand_string", "hw.model"],
+                             capture_output=True, text=True, timeout=3).stdout.split("\n")
+    except Exception as e:
+        print(f"[telemetry] modèle de Mac non lu : {e}")
+        return ""
+    chip = (out[0] if out else "").strip()
+    model = (out[1] if len(out) > 1 else "").strip()
+    return (f"{chip} ({model})" if chip and model else chip or model)[:64]
+
+
+def machine_profile(ui_lang: str, hotkey: str, last_backend: str) -> dict:
+    """v1.3.0 — Profil TECHNIQUE de l'installation, sans rien de personnel :
+    modèle de Mac, langue de l'interface, raccourci choisi, moteur réellement
+    utilisé. C'est ce qui rend les chiffres interprétables (« les lenteurs
+    viennent des machines en repli processeur », « personne n'utilise Fn »)
+    et c'est ce qu'il faut pour aider quelqu'un qui écrit au support.
+    `last_backend` : VlocalEngine.last_backend() de l'instance de l'app.
+    Calculé à la demande, seulement après le consentement (sync_once)."""
+    return {"mac_model": _mac_model(), "ui_lang": str(ui_lang or "")[:8],
+            "hotkey": str(hotkey or "")[:24], "engine": _engine_in_use(last_backend)}
+
+
 EVENTS_LOG = os.path.expanduser("~/Library/Application Support/Vlocal/events.jsonl")
+
+# Le serveur (vlocal_report_usage) ne garde d'un code que [a-zA-Z0-9_.:-], 40
+# caractères au plus. L'étape d'un incident n'est transmise que si c'est un
+# identifiant écrit dans le code (« start », « stream_dead ») : jamais un texte libre.
+_CODE_MAX = 40
+_WHERE_RE = re.compile(r"^[a-z0-9_]{1,32}$")
+
+
+def incident_code(event: dict) -> str:
+    """Code transmis pour un événement du journal local (errors.py).
+
+    v1.4.4 — encodage compatible avec le schéma existant (table `incidents` :
+    install_id, day, code, count), sans changement côté serveur : quand
+    l'événement porte une étape `where`, elle est suffixée au code,
+    « code:where » (ex. « mic_device_fail:start », « mic_recovered:builtin »).
+    La console affiche ces codes tels quels ; le total d'un code se retrouve
+    en sommant ses variantes. Rien d'autre du contexte ne part. "" si l'événement
+    n'a pas de code."""
+    code = str(event.get("code") or "").strip()
+    if not code:
+        return ""
+    ctx = event.get("ctx")
+    where = ctx.get("where") if isinstance(ctx, dict) else None
+    if isinstance(where, str) and _WHERE_RE.match(where):
+        code = f"{code}:{where}"
+    return code[:_CODE_MAX]
 
 
 def read_incidents(since_day: str, path: str = None) -> list:
-    """Agrège le journal local d'incidents (errors.py) par jour et par code.
-    Ne transmet QUE des compteurs : jamais le contexte d'un événement, qui peut
-    contenir un nom de périphérique ou un message. Ne lève jamais."""
+    """Agrège le journal local d'incidents (errors.py) par jour et par code
+    (incident_code). Ne transmet QUE des compteurs : jamais le contexte d'un
+    événement, qui peut contenir un nom de périphérique ou un message, hormis
+    l'étape technique codée dans `code`. Ne lève jamais."""
     out = {}
     try:
         with open(path or EVENTS_LOG, "r", encoding="utf-8") as f:
@@ -152,8 +242,10 @@ def read_incidents(since_day: str, path: str = None) -> list:
                     d = json.loads(line)
                 except Exception:
                     continue
+                if not isinstance(d, dict):
+                    continue
                 day = (d.get("ts") or "")[:10]
-                code = (d.get("code") or "").strip()[:40]
+                code = incident_code(d)
                 if not code or not day or day < since_day:
                     continue
                 out[(day, code)] = out.get((day, code), 0) + 1
@@ -232,10 +324,18 @@ def _send(install: dict, usage: list, incidents: list = None) -> None:
 
 
 def sync_once(settings: dict, store, app_version: str, os_version: str,
-              send=_send, profile: dict = None) -> bool:
-    """Un envoi complet. Renvoie True si tout est parti. Ne lève jamais."""
+              send=_send, get_profile=None) -> bool:
+    """Un envoi complet. Renvoie True si tout est parti. Ne lève jamais.
+    Le profil machine (get_profile) n'est calculé qu'APRÈS le consentement ; un
+    profil en échec n'empêche pas l'envoi, les colonnes restent alors vides."""
     if not is_enabled(settings):
         return False
+    profile = {}
+    if get_profile is not None:
+        try:
+            profile = get_profile() or {}
+        except Exception as e:
+            print(f"[telemetry] profil machine indisponible : {e}")
     try:
         install, usage, incidents = build_rows(settings, store, app_version,
                                                os_version, profile=profile)
@@ -278,11 +378,8 @@ class Telemetry:
         self._wake.set()
 
     def sync_now(self) -> bool:
-        try:
-            prof = self._profile()
-        except Exception:
-            prof = {}
-        ok = sync_once(self._load(), self._store(), self._version, self._os, profile=prof)
+        ok = sync_once(self._load(), self._store(), self._version, self._os,
+                       get_profile=self._profile)
         if ok:
             self.last_sync = time.time()
             try:

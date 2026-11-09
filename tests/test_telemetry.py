@@ -3,7 +3,9 @@ import os
 import sys
 import tempfile
 import time
+import types
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -201,7 +203,7 @@ class SchedulerTests(unittest.TestCase):
                                 get_profile=lambda: {"mac_model": "Apple M5", "ui_lang": "en",
                                                      "hotkey": "right_opt", "engine": "cpu"})
         original = telemetry.sync_once
-        telemetry.sync_once = lambda *a, **k: vu.update(k.get("profile") or {}) or True
+        telemetry.sync_once = lambda *a, **k: vu.update(k["get_profile"]()) or True
         try:
             self.assertTrue(t.sync_now())
         finally:
@@ -213,14 +215,206 @@ class SchedulerTests(unittest.TestCase):
         settings = {"install_id": telemetry.new_install_id(), "telemetry_enabled": True}
         def explose():
             raise RuntimeError("sysctl indisponible")
-        t = telemetry.Telemetry(lambda: settings, lambda p: None, lambda: self.store,
-                                "1.3.0", "15.5", get_profile=explose)
-        original = telemetry.sync_once
-        telemetry.sync_once = lambda *a, **k: True
-        try:
+        envoyes = []
+        self.assertTrue(telemetry.sync_once(settings, self.store, "1.3.0", "15.5",
+                                            send=lambda i, u, inc: envoyes.append(i),
+                                            get_profile=explose))
+        self.assertEqual(envoyes[0]["engine"], "")
+        self.assertEqual(envoyes[0]["mac_model"], "")
+
+    def test_nothing_is_computed_before_consent(self):
+        """v1.4.4 — ni profil machine ni lecture du moteur tant que l'utilisateur
+        n'a pas dit oui : le profil n'est demandé qu'après le consentement."""
+        appels = []
+        def profil():
+            appels.append(1)
+            return {"engine": "mlx"}
+        for valeur in (None, False):
+            settings = {"install_id": telemetry.new_install_id(), "telemetry_enabled": valeur}
+            t = telemetry.Telemetry(lambda: settings, lambda p: None, lambda: self.store,
+                                    "1.4.4", "15.5", get_profile=profil)
+            self.assertFalse(t.sync_now())
+        self.assertEqual(appels, [])
+        settings = {"install_id": telemetry.new_install_id(), "telemetry_enabled": True}
+        envoyes = []
+        self.assertTrue(telemetry.sync_once(settings, self.store, "1.4.4", "15.5",
+                                            send=lambda i, u, inc: envoyes.append(i),
+                                            get_profile=profil))
+        self.assertEqual(appels, [1])
+        self.assertEqual(envoyes[0]["engine"], "mlx")
+
+
+def _faux_moteurs(backend, statut):
+    """Instance moteur et module mlx_engine simulés selon le contrat livré par le
+    lot GPU : last_backend() est une MÉTHODE de VlocalEngine, status() une
+    fonction de mlx_engine. La sonde available() échoue si elle est appelée :
+    la télémétrie ne doit que lire."""
+    eng = types.SimpleNamespace(last_backend=mock.Mock(return_value=backend))
+    mlx = types.ModuleType("mlx_engine")
+    mlx.status = mock.Mock(return_value=statut)
+    mlx.available = mock.Mock(side_effect=AssertionError("sonde GPU lancée par la télémétrie"))
+    return eng, mlx
+
+
+def _profil_comme_app(eng):
+    """Même appel que app._telemetry_profile."""
+    return telemetry.machine_profile("fr", "fn", eng.last_backend())
+
+
+class EngineFieldTests(unittest.TestCase):
+    """v1.4.4 — champ `engine` : moteur réel de la dernière dictée, jamais la sonde."""
+
+    def _profil(self, backend, statut):
+        eng, mlx = _faux_moteurs(backend, statut)
+        with mock.patch.dict(sys.modules, {"mlx_engine": mlx}), \
+                mock.patch.object(telemetry, "_mac_model", return_value="Apple M5 (Mac17,2)"):
+            prof = _profil_comme_app(eng)
+        mlx.available.assert_not_called()
+        return prof, eng, mlx
+
+    def test_profile_never_probes_the_gpu(self):
+        for backend in ("mlx", "cpu", ""):
+            for etat in ("ok", "suspended", "retry", "unsupported", "disabled", "unknown"):
+                prof, eng, mlx = self._profil(backend, (etat, "raison"))
+                eng.last_backend.assert_called_once_with()
+                mlx.status.assert_called_once_with()
+                self.assertIn(prof["engine"], ("mlx", "cpu", ""))
+        self.assertEqual(prof, {"mac_model": "Apple M5 (Mac17,2)", "ui_lang": "fr",
+                                "hotkey": "fn", "engine": ""})
+
+    def test_engine_is_the_last_dictation_backend(self):
+        for backend in ("mlx", "cpu"):
+            for etat in ("ok", "suspended", "retry", "unknown"):
+                prof, _, _ = self._profil(backend, (etat, ""))
+                self.assertEqual(prof["engine"], backend)
+
+    def test_without_dictation_the_gpu_verdict_is_read(self):
+        attendu = {"ok": "mlx", "suspended": "cpu", "retry": "cpu", "unsupported": "cpu",
+                   "disabled": "cpu", "unknown": ""}
+        for etat, valeur in attendu.items():
+            self.assertEqual(telemetry.engine_label("", (etat, "")), valeur, etat)
+            prof, _, _ = self._profil("", (etat, ""))
+            self.assertEqual(prof["engine"], valeur, etat)
+
+    def test_engine_values_stay_in_the_server_vocabulary(self):
+        for backend in ("mlx", "cpu", "", "metal", None):
+            for etat in ("ok", "suspended", "retry", "unsupported", "disabled", "unknown", "x"):
+                self.assertIn(telemetry.engine_label(backend, (etat, "")), ("mlx", "cpu", ""))
+
+    def test_gpu_state_unreadable_leaves_the_field_empty(self):
+        _, mlx = _faux_moteurs("", ("ok", ""))
+        mlx.status.side_effect = RuntimeError("état illisible")
+        with mock.patch.dict(sys.modules, {"mlx_engine": mlx}), \
+                mock.patch.object(telemetry, "_mac_model", return_value=""):
+            self.assertEqual(telemetry.machine_profile("en", "", "")["engine"], "")
+        mlx.available.assert_not_called()
+
+    def test_full_sync_never_probes_the_gpu(self):
+        """De bout en bout : le planificateur, branché comme dans app.py, envoie
+        le moteur de la dernière dictée sans jamais lancer la sonde."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        store = storage.Store(os.path.join(tmp.name, "t.db"))
+        settings = {"install_id": telemetry.new_install_id(), "telemetry_enabled": True}
+        eng, mlx = _faux_moteurs("cpu", ("ok", ""))
+        envoyes = []
+        def envoi(i, u, inc):
+            envoyes.append(i)
+        # Seul l'envoi réseau est remplacé ; sync_once et le planificateur sont les vrais.
+        with mock.patch.dict(sys.modules, {"mlx_engine": mlx}), \
+                mock.patch.object(telemetry, "sync_once",
+                                  lambda *a, **k: _vrai_sync_once(*a, send=envoi, **k)):
+            t = telemetry.Telemetry(lambda: settings, lambda p: None, lambda: store,
+                                    "1.4.4", "15.5", get_profile=lambda: _profil_comme_app(eng))
             self.assertTrue(t.sync_now())
-        finally:
-            telemetry.sync_once = original
+        mlx.available.assert_not_called()
+        self.assertEqual(envoyes[0]["engine"], "cpu")
+
+    def test_app_profile_reads_the_engine_instance(self):
+        """Garde-fou : app.py ne passe plus par mlx_engine.available() pour le
+        profil, et lit last_backend() sur l'instance moteur."""
+        with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                               "app.py"), encoding="utf-8") as f:
+            src = f.read()
+        corps = src[src.index("def _telemetry_profile"):]
+        corps = corps[:corps.index("\ndef ", 1)]
+        self.assertIn(".engine.last_backend()", corps)
+        self.assertNotIn("available()", corps)
+        self.assertNotIn("def _machine_profile", src)
+
+
+_vrai_sync_once = telemetry.sync_once
+
+
+class IncidentCodeTests(unittest.TestCase):
+    """v1.4.4 — l'étape d'un incident voyage dans le code (« code:where »),
+    seul format compatible avec la table `incidents` (install_id, day, code,
+    count) et le nettoyage serveur ([a-zA-Z0-9_.:-], 40 caractères)."""
+
+    SERVEUR_OK = __import__("re").compile(r"^[a-zA-Z0-9_.:-]{1,40}$")
+
+    def test_where_is_suffixed(self):
+        self.assertEqual(telemetry.incident_code(
+            {"code": "mic_device_fail", "ctx": {"where": "start", "err": "PortAudio -9986"}}),
+            "mic_device_fail:start")
+        self.assertEqual(telemetry.incident_code({"code": "silence", "ctx": {"rms": 0.01}}),
+                         "silence")
+        self.assertEqual(telemetry.incident_code({"code": "gpu_timeout"}), "gpu_timeout")
+        self.assertEqual(telemetry.incident_code({"ctx": {"where": "start"}}), "")
+
+    def test_free_text_never_travels(self):
+        for where in ("MacBook de Raphael", "AirPods Pro", "../etc", "x" * 40, "Start", 3):
+            code = telemetry.incident_code({"code": "mic_recovered", "ctx": {"where": where}})
+            self.assertEqual(code, "mic_recovered")
+
+    def test_every_known_step_fits_the_server(self):
+        etapes = {"mic_device_fail": ("start", "start_retry", "fallback_builtin",
+                                      "fallback_exhausted", "stream_dead", "start_lock_stuck"),
+                  "mic_recovered": ("hard_reset", "builtin", "device"),
+                  "diar_fallback": ("rediar_exception", "rediar_empty")}
+        for code, wheres in etapes.items():
+            for w in wheres:
+                c = telemetry.incident_code({"code": code, "ctx": {"where": w}})
+                self.assertEqual(c, f"{code}:{w}")
+                self.assertRegex(c, self.SERVEUR_OK)
+
+    def test_read_incidents_payload_keeps_the_cause(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        log = os.path.join(tmp.name, "events.jsonl")
+        today = time.strftime("%Y-%m-%d")
+        lignes = [
+            {"code": "mic_device_fail", "ctx": {"where": "fallback_exhausted",
+                                                "err": "AirPods de Raphael", "steps": "start,start_retry"}},
+            {"code": "mic_device_fail", "ctx": {"where": "stream_dead"}},
+            {"code": "mic_device_fail", "ctx": {"where": "stream_dead"}},
+            {"code": "mic_recovered", "level": "info", "ctx": {"where": "device", "device": "Micro USB"}},
+            {"code": "transcribe_fail", "ctx": {"reason": "fail"}},
+            ["pas", "un", "objet"],
+        ]
+        with open(log, "w", encoding="utf-8") as f:
+            for d in lignes:
+                if isinstance(d, dict):
+                    d = dict(d, ts=today + "T09:00:00")
+                f.write(__import__("json").dumps(d) + "\n")
+        rows = telemetry.read_incidents(today, path=log)
+        self.assertEqual(rows, [
+            {"day": today, "code": "mic_device_fail:fallback_exhausted", "count": 1},
+            {"day": today, "code": "mic_device_fail:stream_dead", "count": 2},
+            {"day": today, "code": "mic_recovered:device", "count": 1},
+            {"day": today, "code": "transcribe_fail", "count": 1},
+        ])
+        for r in rows:
+            self.assertEqual(set(r), ALLOWED_INCIDENT_KEYS)
+            self.assertRegex(r["code"], self.SERVEUR_OK)
+        for prive in ("AirPods", "Micro USB", "start_retry"):
+            self.assertNotIn(prive, repr(rows))
+        # La charge utile réellement envoyée reprend ces lignes telles quelles.
+        settings = {"install_id": telemetry.new_install_id(), "telemetry_enabled": True}
+        store = storage.Store(os.path.join(tmp.name, "t.db"))
+        with mock.patch.object(telemetry, "EVENTS_LOG", log):
+            _, _, incidents = telemetry.build_rows(settings, store, "1.4.4", "15.5")
+        self.assertEqual(incidents, rows)
 
 
 if __name__ == "__main__":
