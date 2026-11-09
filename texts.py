@@ -86,6 +86,8 @@ _BT = {
     "Use the Dictate button. Send a diagnostic from Settings: the problem will be reported to us.",
   "Le moteur se charge, réessayez dans un instant.": "The engine is loading, try again in a moment.",
   "Un instant": "One moment",
+  "Encore une minute": "One more minute",
+  "La dictée mains libres s'arrêtera dans une minute.": "Hands-free dictation will stop in one minute.",
   "Connexion du micro": "Connecting the microphone",
   "Un instant, le micro se met en route.": "One moment, the microphone is starting up.",
   "Transcription précédente en cours.": "Previous transcription in progress.",
