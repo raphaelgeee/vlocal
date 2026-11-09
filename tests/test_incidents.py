@@ -9,7 +9,6 @@
 Les définitions visées sont extraites des sources de l'app telles quelles (ast) et exécutées dans un
 espace de noms de doublures. C'est bien le code livré qui est testé.
 """
-import ast
 import os
 import sys
 import tempfile

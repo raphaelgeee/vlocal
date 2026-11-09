@@ -1065,7 +1065,7 @@ class VlocalEngine:
                         # échec FRANC remonté à l'escalade app-level (respawn +
                         # micro intégré), comme le levait le chemin historique.
                         _abandon()
-                        raise RuntimeError(str(e))
+                        raise RuntimeError(str(e)) from e
                     except _micworker.WorkerUnavailable as e:
                         # Worker mort ou FIGÉ (déjà tué par RemoteMic) : un respawn
                         # = process neuf = état CoreAudio neuf -> 2e chance quasi

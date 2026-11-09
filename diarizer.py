@@ -379,7 +379,6 @@ def _labels_to_segments(times, lab, grid=0.5, merge_gap=0.75):
     """Empreintes fenêtrées (qui se chevauchent) -> frise temporelle : vote
     majoritaire par case de `grid` s, puis fusion des cases contiguës de même
     voix. Robuste (lisse les fenêtres isolées)."""
-    import numpy as np
     if not len(times):
         return []
     end = float(times[-1][1])
@@ -922,7 +921,6 @@ class Diarizer:
         segments = sortie détaillée (avec words). Renvoie la frise
         [{speaker,start,end}] (comblée) et peuple _last_windows pour assign_words.
         Renvoie [] si pas assez de régions (l'appelant retombe sur l'ancien chemin)."""
-        import numpy as np
         self._last_voices = {}; self._last_windows = None
         self._last_C = None; self._last_E = None
         try:
@@ -1117,7 +1115,7 @@ class Diarizer:
         # 3) Garde de continuité : pas de changement de locuteur sans respiration,
         #    sauf si le vote est franc (vrai enchaînement ou chevauchement net).
         spk_of_unit = []
-        for i, (best, share, u0, u1) in enumerate(votes):
+        for i, (best, share, u0, _u1) in enumerate(votes):
             if i > 0:
                 prev_spk = spk_of_unit[-1]
                 gap = u0 - votes[i - 1][3]
@@ -1880,7 +1878,6 @@ def _extract_spans_subproc(wav_path, sr, spans, batch=_SUBPROC_BATCH,
                     lots plus petits)."""
     import json as _json
     import subprocess as _sp
-    import sys
     import tempfile
 
     import numpy as np

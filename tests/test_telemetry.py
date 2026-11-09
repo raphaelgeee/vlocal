@@ -232,7 +232,7 @@ class SchedulerTests(unittest.TestCase):
             return {"engine": "mlx"}
         for valeur in (None, False):
             settings = {"install_id": telemetry.new_install_id(), "telemetry_enabled": valeur}
-            t = telemetry.Telemetry(lambda: settings, lambda p: None, lambda: self.store,
+            t = telemetry.Telemetry(lambda s=settings: s, lambda p: None, lambda: self.store,
                                     "1.4.4", "15.5", get_profile=profil)
             self.assertFalse(t.sync_now())
         self.assertEqual(appels, [])

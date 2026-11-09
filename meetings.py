@@ -128,7 +128,7 @@ def _recognize_voices(voices_map, log=False):
                     cands.append((float(sc), spk, v["id"], v["name"]))
             cands.sort(reverse=True, key=lambda t: t[0])
             used_v = set()
-            for sc, spk, vid, name in cands:
+            for _sc, spk, vid, name in cands:
                 if spk in auto_names or vid in used_v:
                     continue
                 auto_names[spk] = name
