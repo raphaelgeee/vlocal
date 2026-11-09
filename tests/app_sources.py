@@ -23,6 +23,7 @@ FICHIERS = (
     "meetings.py",
     "engine_runtime.py",
     "hotkeys.py",
+    "api_system.py",
     "app.py",
 )
 
