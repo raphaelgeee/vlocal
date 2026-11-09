@@ -166,7 +166,7 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name="Vlocal.app",
-    icon="build/AppIcon.icns",
+    icon="build/AppIcon.icns",   # écrit par tools/make_icon.py (ICNS_PATH)
     bundle_identifier="com.vlocal.app",
     info_plist={
         "CFBundleName": "Vlocal",

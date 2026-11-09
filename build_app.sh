@@ -98,7 +98,7 @@ echo "==> 1sexies  Cycle de vie de la VRAIE app : raccourci, fermer, rouvrir, qu
 $PY tests/lifecycle_smoke.py \
   || { echo "  >>> cycle de vie KO (raccourci, rouvrir ou quitter), build STOPPÉ."; exit 1; }
 
-echo "==> 2/6  Icône (V sur charbon)"
+echo "==> 2/6  Icône (bulle sur bleu nuit) -> build/AppIcon.icns"
 $PY tools/make_icon.py
 
 echo "==> 3/6  Empaquetage PyInstaller (peut prendre 1-3 min)"
