@@ -8,7 +8,10 @@ import json
 import os
 import threading
 
+import applog
 import appstate
+
+log = applog.get("settings")
 
 
 # v2 — DEUX modes seulement : DICTÉE (rappels auto-détectés) et RÉUNION.
@@ -38,7 +41,7 @@ def _current_mode() -> str:
             if m in _VALID_MODES:
                 return m
     except Exception:
-        pass
+        log.debug("open : échec ignoré", exc_info=True)
     return "DICTEE"
 
 
@@ -51,7 +54,7 @@ def _set_mode(mode: str) -> str:
         with open(_MODE_FILE, "w") as f:
             f.write(mode)
     except Exception:
-        pass
+        log.debug("os.makedirs : échec ignoré", exc_info=True)
     return mode
 
 
@@ -68,6 +71,7 @@ def _load_settings() -> dict:
     try:
         mtime = os.path.getmtime(_SETTINGS_FILE)
     except Exception:
+        log.debug("path.getmtime : échec ignoré", exc_info=True)
         mtime = None
     with _SETTINGS_LOCK:
         if _SETTINGS_CACHE["data"] is not None and _SETTINGS_CACHE["mtime"] == mtime:
@@ -77,6 +81,7 @@ def _load_settings() -> dict:
             data = json.load(f)
             data = data if isinstance(data, dict) else {}
     except Exception:
+        log.debug("open : échec ignoré", exc_info=True)
         data = {}
     # v3.2.1 — Migration vitesse : le dashboard exposait des valeurs (smart/fast/
     # accurate) que le moteur IGNORAIT (il n'accepte que auto/rapide/fidele) ->
@@ -97,6 +102,7 @@ def _diarization_enabled() -> bool:
     try:
         return bool(_load_settings().get("diarization_enabled", True))
     except Exception:
+        log.debug("bool : échec ignoré", exc_info=True)
         return True
 
 
@@ -108,6 +114,7 @@ def _voice_memory_enabled() -> bool:
     try:
         return bool(_load_settings().get("voice_memory_enabled", True))
     except Exception:
+        log.debug("bool : échec ignoré", exc_info=True)
         return True
 
 
@@ -115,7 +122,7 @@ def _save_settings(patch: dict) -> dict:
     try:
         os.makedirs(_APP_SUPPORT, exist_ok=True)
     except Exception:
-        pass
+        log.debug("os.makedirs : échec ignoré", exc_info=True)
     # v20 — read-modify-write SOUS verrou (appels JS->Python concurrents) +
     # invalidation du cache (le mtime relu après écriture revalide).
     with _SETTINGS_LOCK:
@@ -127,7 +134,7 @@ def _save_settings(patch: dict) -> dict:
         with open(_SETTINGS_FILE, "w", encoding="utf-8") as f:
             json.dump(current, f, indent=2, ensure_ascii=False)
     except Exception:
-        pass
+        log.debug("open : échec ignoré", exc_info=True)
     with _SETTINGS_LOCK:
         _SETTINGS_CACHE["data"] = None
     return current
@@ -143,6 +150,7 @@ def _load_glossary_text() -> str:
         with open(_GLOSSARY_FILE, "r", encoding="utf-8") as f:
             return f.read()
     except Exception:
+        log.debug("open : échec ignoré", exc_info=True)
         return ""
 
 
@@ -157,9 +165,10 @@ def _save_glossary_text(text: str) -> bool:
             from engine import invalidate_glossary_cache
             invalidate_glossary_cache()
         except Exception:
-            pass
+            log.debug("import engine : échec ignoré", exc_info=True)
         return True
     except Exception:
+        log.debug("os.makedirs : échec ignoré", exc_info=True)
         return False
 
 
@@ -170,4 +179,5 @@ def _onboarding_done() -> bool:
     try:
         return bool(_load_settings().get("onboarded"))
     except Exception:
+        log.debug("bool : échec ignoré", exc_info=True)
         return True

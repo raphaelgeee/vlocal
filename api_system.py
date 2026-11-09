@@ -55,6 +55,7 @@ class SystemApi:
             try:
                 out["length"] = int(d.get("length") or 0)
             except Exception:
+                log.debug("int : échec ignoré", exc_info=True)
                 out["length"] = 0
             # Empreinte du DMG publiée avec la version : updater.download la vérifie.
             out["sha256"] = d.get("sha256")
@@ -65,8 +66,10 @@ class SystemApi:
                 pb = [int(x) for x in cur.split(".")]
                 out["update"] = pa > pb and not updater.is_blocked(latest)
             except Exception:
+                log.debug("int : échec ignoré", exc_info=True)
                 out["update"] = (latest != cur) and not updater.is_blocked(latest)
         except Exception:
+            log.debug("_u.Request : échec ignoré", exc_info=True)
             out["offline"] = True
         return out
 
@@ -161,7 +164,7 @@ class SystemApi:
                 import subprocess
                 subprocess.Popen(["open", u])
         except Exception:
-            pass
+            log.debug("(url or '').strip : échec ignoré", exc_info=True)
         return {"ok": True}
 
     # ------------------- v3.1 : onboarding intégré (permissions) -------------
@@ -171,10 +174,12 @@ class SystemApi:
         try:
             acc = bool(permissions.accessibility_ok())
         except Exception:
+            log.debug("bool : échec ignoré", exc_info=True)
             acc = False
         try:
             mic = int(permissions.mic_status())
         except Exception:
+            log.debug("int : échec ignoré", exc_info=True)
             mic = 3
         return {"accessibility": acc, "mic": mic}
 
@@ -196,10 +201,14 @@ class SystemApi:
                         s = _sd.InputStream(samplerate=16000, channels=1,
                                             dtype="float32", blocksize=1600)
                         s.start(); _tt.sleep(0.3)
-                        try: s.stop()
-                        except Exception: pass
-                        try: s.close()
-                        except Exception: pass
+                        try:
+                            s.stop()
+                        except Exception:
+                            log.debug("s.stop : échec ignoré", exc_info=True)
+                        try:
+                            s.close()
+                        except Exception:
+                            log.debug("s.close : échec ignoré", exc_info=True)
                     except Exception as _e:
                         log.warning(f"[perm] déclencheur micro KO : {_e}")
                 threading.Thread(target=_trig_mic, name="mic-perm-trigger", daemon=True).start()
@@ -208,7 +217,7 @@ class SystemApi:
                     if (not permissions.mic_ok()) and permissions.mic_status() != 0:
                         permissions.open_settings("microphone")
                 except Exception:
-                    pass
+                    log.debug("permissions.open_settings : échec ignoré", exc_info=True)
             else:
                 # Déclenche le dialogue système (AXIsProcessTrustedWithOptions) :
                 # inscrit Vlocal dans la liste Accessibilité de TCC (sinon il
@@ -216,7 +225,7 @@ class SystemApi:
                 permissions.accessibility_prompt()
                 permissions.open_settings("accessibility")
         except Exception:
-            pass
+            log.debug("permissions.mic_prompt : échec ignoré", exc_info=True)
         return {"ok": True}
 
     def arm_hotkey(self):
@@ -242,6 +251,7 @@ class SystemApi:
                 from Foundation import NSBundle
                 path = NSBundle.mainBundle().bundlePath() or "/Applications/Vlocal.app"
             except Exception:
+                log.debug("import Foundation : échec ignoré", exc_info=True)
                 path = "/Applications/Vlocal.app"
             import subprocess
             # le shell attend que CE process meure (sleep), puis ouvre du NEUF (-n)
@@ -301,6 +311,7 @@ class SystemApi:
         try:
             st = notifier.auth_status()
         except Exception:
+            log.debug("notifier.auth_status : échec ignoré", exc_info=True)
             st = "unknown"
         return {"status": st}
 
@@ -349,5 +360,5 @@ class SystemApi:
                 appstate.window.hide()
                 appstate.window_visible = False
         except Exception:
-            pass
+            log.debug("window.hide : échec ignoré", exc_info=True)
         return True

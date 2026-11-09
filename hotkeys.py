@@ -98,7 +98,7 @@ def start_global_hotkey():
     try:
         overlay.set_hotkey_label(hotkey_label)
     except Exception:
-        pass
+        log.debug("overlay.set_hotkey_label : échec ignoré", exc_info=True)
 
     def begin():
         # Nouvelle dictée -> annule un éventuel fade-out de résultat en cours.
@@ -123,7 +123,7 @@ def start_global_hotkey():
                 _schedule_overlay_hide(5.0)
                 return
         except Exception:
-            pass
+            log.debug("permissions.mic_status : échec ignoré", exc_info=True)
         # v1.0.11 — ZÉRO LATENCE PERÇUE : l'overlay s'affiche IMMÉDIATEMENT, AVANT
         # l'ouverture du micro (qui peut prendre un instant au 1er appui, en
         # Bluetooth, ou quand le device bascule). Avant, il n'apparaissait qu'APRÈS
@@ -201,6 +201,7 @@ def start_global_hotkey():
                 import clipboard as _clip
                 _orig_clip = _clip.get_clipboard()
             except Exception:
+                log.debug("import clipboard : échec ignoré", exc_info=True)
                 _orig_clip = None
             try:
                 # notify_ui=False : la fenêtre principale ne réagit pas (overlay seul).
@@ -259,6 +260,7 @@ def start_global_hotkey():
                         try:
                             copied_ok = (_ck.get_clipboard() == text)
                         except Exception:
+                            log.debug("_ck.get_clipboard : échec ignoré", exc_info=True)
                             copied_ok = True
                         # v1.0.22 — chaînage : ne toucher l'overlay QUE si cette
                         # dictée est toujours la plus récente (sinon on écraserait
@@ -274,7 +276,7 @@ def start_global_hotkey():
                                 try:
                                     permissions.open_settings("accessibility")
                                 except Exception:
-                                    pass
+                                    log.debug("permissions.open_settings : échec ignoré", exc_info=True)
                             else:
                                 overlay.info(_te("Texte copié"), _te("Collez avec Cmd + V."))
                             _insert_guided = True
@@ -340,10 +342,12 @@ def start_global_hotkey():
     # keycodes -> aucun crash. (hotkey_mac est importé au niveau module, v1.3.2.)
     try:
         log.info(f"[hotkey] '{hotkey_name}' ({hotkey_label}) | "
-              f"accessibility_ok={permissions.accessibility_ok()} "
-              f"mic_ok={permissions.mic_ok()}")
+                 f"accessibility_ok={permissions.accessibility_ok()} "
+                 f"mic_ok={permissions.mic_ok()}")
     except Exception:
-        pass
+        # Les sondes de permission passent par pyobjc : un échec ne doit pas
+        # empêcher le raccourci de démarrer.
+        log.debug("sondes de permission : échec ignoré", exc_info=True)
     # max_seconds = garde-fou anti-runaway SI le relâchement est perdu, PAS un
     # plafond de dictée. 600 s (10 min) : on n'interrompt plus une vraie dictée
     # longue, tout en restant protégé contre une touche bloquée.
@@ -381,4 +385,4 @@ def _rearm_global_hotkey():
             if _EV:
                 _EV.log(_EV.E.HOTKEY_START_FAIL, err=type(e).__name__, rearm=True)
         except Exception:
-            pass
+            log.debug("_EV.log : échec ignoré", exc_info=True)

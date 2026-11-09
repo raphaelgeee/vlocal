@@ -78,7 +78,7 @@ class MeetingsApi:
             overlay.hide()
             _cancel_overlay_hide()
         except Exception:
-            pass
+            log.debug("overlay.hide : échec ignoré", exc_info=True)
         # v16.1 — Section critique atomique : check ET prise d'état sous verrou.
         with _meeting_lock:
             if _meeting_state["recording"]:
@@ -198,6 +198,7 @@ class MeetingsApi:
                                     _toast("Capture du son système indisponible : réunion "
                                            "en micro seul.", kind="info")
                         except Exception:
+                            log.debug("_ui : échec ignoré", exc_info=True)
                             break
                         _lt.sleep(0.1)
                 threading.Thread(target=_reunion_level_loop, args=(rec,),
@@ -259,7 +260,7 @@ class MeetingsApi:
                 try:
                     lt.finalize()
                 except Exception:
-                    pass
+                    log.debug("lt.finalize : échec ignoré", exc_info=True)
             # Libère le diariseur live (CAM++) APRÈS lt.finalize() — qui peut
             # encore appeler feed_window et rechargerait l'extracteur si on
             # l'avait déchargé avant. Sans cet unload, l'instance restait
@@ -268,14 +269,14 @@ class MeetingsApi:
                 try:
                     dz.unload()
                 except Exception:
-                    pass
+                    log.debug("dz.unload : échec ignoré", exc_info=True)
             mid0 = _meeting_state.get("id")
             if appstate.store and mid0:
                 try:
                     appstate.store.update_meeting(mid0, duree_audio_s=duree,
                                           status="error")
                 except Exception:
-                    pass
+                    log.debug("store.update_meeting : échec ignoré", exc_info=True)
             _meeting_state.pop("n_spk_forced", None)   # forçage périmé purgé
             _meeting_state.pop("mode", None)
             _toast("Enregistrement trop court, rien à transcrire.", kind="info")
@@ -289,7 +290,7 @@ class MeetingsApi:
                     mid, duree_audio_s=duree, status="transcribing"
                 )
             except Exception:
-                pass
+                log.debug("store.update_meeting : échec ignoré", exc_info=True)
         # v16.1 — pipeline_busy posé MAINTENANT (avant de lancer le thread) pour
         # qu'aucun reunion_start ne se faufile dans l'intervalle.
         _meeting_state["pipeline_busy"] = True
@@ -311,7 +312,7 @@ class MeetingsApi:
                 try:
                     appstate.store.update_meeting(mid, status="error")
                 except Exception:
-                    pass
+                    log.debug("store.update_meeting : échec ignoré", exc_info=True)
             _toast("Le traitement de la réunion n'a pas pu démarrer. Réessayez.",
                    kind="error")
             _end_activity(_meeting_state.pop("activity", None))
@@ -326,6 +327,7 @@ class MeetingsApi:
         try:
             import sounddevice as sd
         except Exception:
+            log.debug("import sounddevice : échec ignoré", exc_info=True)
             return []
         out = []
         for i, d in enumerate(sd.query_devices()):
@@ -341,6 +343,7 @@ class MeetingsApi:
         try:
             idx = int(index)
         except Exception:
+            log.debug("int : échec ignoré", exc_info=True)
             idx = -1
         # v1.5 — le NOM accompagne l'index : la dictée le fait résoudre par le
         # worker micro, dont l'énumération (à jour) ne suit pas celle d'ici.
@@ -364,6 +367,7 @@ class MeetingsApi:
             from visio_recorder import is_helper_available
             return bool(is_helper_available())
         except Exception:
+            log.debug("import visio_recorder : échec ignoré", exc_info=True)
             return False
 
     @_api_safe(default=list)
@@ -380,6 +384,7 @@ class MeetingsApi:
         try:
             return appstate.store.get_meeting(int(mid))
         except Exception:
+            log.debug("store.get_meeting : échec ignoré", exc_info=True)
             return None
 
     @_api_safe(default=False)
@@ -455,10 +460,12 @@ class MeetingsApi:
                 segs = (json.loads(m.get("confidence_json") or "{}")
                         or {}).get("segments", [])
             except Exception:
+                log.debug("get('confidence_json') or '{}') or {}).get : échec ignoré", exc_info=True)
                 segs = []
             try:
                 n = int(num_speakers) if str(num_speakers).isdigit() else 0
             except Exception:
+                log.debug("isdigit : échec ignoré", exc_info=True)
                 n = 0
             if not n:
                 _sp = _load_settings().get("meeting_speakers", "auto")
@@ -471,7 +478,7 @@ class MeetingsApi:
                     _rl = getattr(appstate.controller.engine, "model", None) is not None
                     appstate.controller.engine.unload_model()
             except Exception:
-                pass
+                log.debug("engine.unload_model : échec ignoré", exc_info=True)
             dia = diarizer.Diarizer()
             try:
                 # v26 — même VOIE PRIMAIRE que la pipeline : guidée-transcription
@@ -482,6 +489,7 @@ class MeetingsApi:
                 try:
                     _dur = float(m.get("duree_audio_s") or 0)
                 except Exception:
+                    log.debug("float : échec ignoré", exc_info=True)
                     _dur = 0.0
                 if segs and 0 < _dur <= GUIDED_MAX_MIN * 60:
                     try:
@@ -548,12 +556,12 @@ class MeetingsApi:
                 try:
                     dia.unload()
                 except Exception:
-                    pass
+                    log.debug("dia.unload : échec ignoré", exc_info=True)
                 if _rl:
                     try:
                         appstate.controller.engine.load_model()
                     except Exception:
-                        pass
+                        log.debug("engine.load_model : échec ignoré", exc_info=True)
         except Exception as e:
             log.warning(f"[reunion] re-diarisation KO : {e}")
             return False
@@ -578,6 +586,7 @@ class MeetingsApi:
             data.setdefault("names", {})
             return data
         except Exception:
+            log.debug("json.loads : échec ignoré", exc_info=True)
             return None
 
     # ------------------------------------------------------------------ #
@@ -647,6 +656,7 @@ class MeetingsApi:
                 directory=os.path.expanduser("~/Documents"),
                 save_filename=safe + ".txt")
         except Exception as e:
+            log.debug("import webview : échec ignoré", exc_info=True)
             return {"ok": False, "error": f"Dialogue d'enregistrement indisponible : {e}"}
         if not dest:
             return {"ok": False, "cancelled": True}
@@ -666,6 +676,7 @@ class MeetingsApi:
             with open(path, "w", encoding="utf-8") as f:
                 f.write(content)
         except Exception as e:
+            log.debug("open : échec ignoré", exc_info=True)
             return {"ok": False, "error": f"Écriture impossible : {e}"}
         return {"ok": True, "path": path, "format": fmt}
 
@@ -741,6 +752,7 @@ class MeetingsApi:
         try:
             data["blocks"][int(block_index)]["text"] = (text or "").strip()
         except Exception:
+            log.debug("(text or '').strip : échec ignoré", exc_info=True)
             return False
         appstate.store.update_meeting(int(mid), speaker_blocks_json=json.dumps(
             data, ensure_ascii=False))

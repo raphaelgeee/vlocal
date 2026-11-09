@@ -51,7 +51,7 @@ def _point_mlx_to_cache():
             import mlx_engine as _mlx_set
             _mlx_set._model_ref = _q8
     except Exception:
-        pass
+        log.debug("path.join : échec ignoré", exc_info=True)
 
 
 def _refresh_whisper_bias():
@@ -63,7 +63,7 @@ def _refresh_whisper_bias():
         from engine import set_correction_terms
         set_correction_terms([c for _, c in appstate.store.glossary_pairs()])
     except Exception:
-        pass
+        log.debug("import engine : échec ignoré", exc_info=True)
 
 
 def _telemetry_profile() -> dict:
@@ -156,7 +156,7 @@ def _post_startup_model_checks():
                        "envoyé en ligne." % _how, kind="info")
             _save_settings({"welcome_shown": True})
     except Exception:
-        pass
+        log.debug("model_store.needs_download : échec ignoré", exc_info=True)
 
 
 _engine_ready = threading.Event()
@@ -290,7 +290,7 @@ def _load_engine_async():
         threading.Thread(target=engine.prewarm_mic_worker,
                          name="micworker-prewarm", daemon=True).start()
     except Exception:
-        pass
+        log.debug("start : échec ignoré", exc_info=True)
     _watch_system_wake(engine)
     _start_idle_unloader()   # libère Whisper de la RAM après inactivité prolongée
     # v2 — Préchargement de small EN FOND si la dictée l'utilisera (modes
@@ -300,6 +300,7 @@ def _load_engine_async():
     try:
         speed = _load_settings().get("dictation_speed", "auto")
     except Exception:
+        log.debug("get : échec ignoré", exc_info=True)
         speed = "auto"
     def _preload_and_warm():
         try:
@@ -312,6 +313,7 @@ def _load_engine_async():
                 import mlx_engine as _mlx
                 _gpu = _mlx.available()
             except Exception:
+                log.debug("import mlx_engine : échec ignoré", exc_info=True)
                 _gpu = False
             if speed in ("auto", "rapide") and not _gpu:
                 if engine._ensure_fast_model():
@@ -320,7 +322,7 @@ def _load_engine_async():
             # dictée réelle est aussi rapide que les suivantes.
             engine.warmup()
         except Exception:
-            pass
+            log.debug("_mlx.available : échec ignoré", exc_info=True)
     threading.Thread(target=_preload_and_warm, daemon=True).start()
 
 
@@ -380,7 +382,7 @@ def _cpu_threads():
         if _pcores > 0:
             _ncpu = min(_ncpu, _pcores + 2)   # P-cores + marge (ne JAMAIS élargir)
     except Exception:
-        pass
+        log.debug("import subprocess : échec ignoré", exc_info=True)
     _default_threads = max(2, min(4, _ncpu - 2))
     # Mode SILENCIEUX (Réglages) : moitié des cœurs (borné [2,4]) -> les ventilos
     # se calment pendant la transcription, au prix d'un peu de vitesse. Utile sur
@@ -389,7 +391,7 @@ def _cpu_threads():
         if _load_settings().get("cpu_economy", False):
             _default_threads = max(2, min(4, _ncpu // 2))
     except Exception:
-        pass
+        log.debug("get : échec ignoré", exc_info=True)
     cpu_threads = int(os.environ.get("VLOCAL_THREADS", str(_default_threads)))
     # v20 — la diarisation (ONNX) respecte le MÊME plafond mesuré (avant : elle
     # montait à min(8, cpu-2) et ignorait cpu_economy/VLOCAL_THREADS).
@@ -397,5 +399,5 @@ def _cpu_threads():
         import diarizer as _dz_threads
         _dz_threads.set_num_threads(cpu_threads)
     except Exception:
-        pass
+        log.debug("import diarizer : échec ignoré", exc_info=True)
     return cpu_threads

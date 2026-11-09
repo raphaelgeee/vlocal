@@ -126,7 +126,7 @@ def after_start():
             if _EV:
                 _EV.log(_EV.E.STARTUP_STAGE_FAIL, stage="notifier", err=type(_nt_err).__name__)
         except Exception:
-            pass
+            log.debug("_EV.log : échec ignoré", exc_info=True)
 
     # Premier render des listes (après que la fenêtre soit prête).
     threading.Timer(0.5, _refresh_lists_ui).start()
@@ -159,7 +159,7 @@ def _start_hotkey_or_warn():
             if _EV:
                 _EV.log(_EV.E.HOTKEY_START_FAIL, err=type(_hk_err).__name__)
         except Exception:
-            pass
+            log.debug("_EV.log : échec ignoré", exc_info=True)
 
         def _prevenir_raccourci_ko():
             try:
@@ -168,7 +168,7 @@ def _start_hotkey_or_warn():
                                  "le problème nous sera signalé."))
                 _schedule_overlay_hide(9.0)
             except Exception:
-                pass
+                log.debug("overlay.info : échec ignoré", exc_info=True)
 
 
 def _create_overlay():
@@ -190,7 +190,7 @@ def _start_show_request_watch():
         if os.path.exists(_SHOW_REQUEST):
             os.remove(_SHOW_REQUEST)   # purge un résidu de démarrage
     except Exception:
-        pass
+        log.debug("path.exists : échec ignoré", exc_info=True)
     threading.Thread(target=_watch_show_requests, daemon=True).start()
 
 
@@ -201,7 +201,7 @@ def _watch_show_requests():
                 os.remove(_SHOW_REQUEST)
                 _on_main_thread(_lifecycle_show, "show")
         except Exception:
-            pass
+            log.debug("path.exists : échec ignoré", exc_info=True)
         time.sleep(0.6)
 
 
@@ -222,12 +222,12 @@ def _activate_on_launch():
                 NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
                 _set_dock_visible(True)   # B1 — ré-impose Accessory APRÈS l'affichage (pywebview a pu remettre Regular)
         except Exception:
-            pass
+            log.debug("window.show : échec ignoré", exc_info=True)
     try:
         from Foundation import NSOperationQueue
         NSOperationQueue.mainQueue().addOperationWithBlock_(_go)
     except Exception:
-        pass
+        log.debug("import Foundation : échec ignoré", exc_info=True)
 
 
 # v19 — RÉ-OUVERTURE PAR LE DOCK : cliquer l'icône du Dock (ou Cmd+Tab)
@@ -248,7 +248,7 @@ def _reopen_check():   # tourne sur le MAIN thread (lecture AppKit sûre)
             app.activateIgnoringOtherApps_(True)
         _reopen["prev_active"] = active
     except Exception:
-        pass
+        log.debug("import AppKit : échec ignoré", exc_info=True)
 
 
 def _reopen_pump():
@@ -258,7 +258,7 @@ def _reopen_pump():
         try:
             NSOperationQueue.mainQueue().addOperationWithBlock_(_reopen_check)
         except Exception:
-            pass
+            log.debug("addOperationWithBlock_ : échec ignoré", exc_info=True)
 
 
 # v19 — Permission « Accessibilité » : sans elle, le moniteur NSEvent
@@ -281,7 +281,7 @@ def _check_hotkey_perm():
             if permissions.mic_status() == 0:   # 0 = non déterminé
                 permissions.mic_prompt()
         except Exception:
-            pass
+            log.debug("permissions.mic_status : échec ignoré", exc_info=True)
         # v3.1 — La permission Accessibilité est désormais gérée par
         # l'onboarding intégré (étape Autorisations) ET par l'auto-
         # réparation du hotkey (watch AXIsProcessTrusted). On ne montre
@@ -293,9 +293,9 @@ def _check_hotkey_perm():
             if _EV and not permissions.accessibility_ok():
                 _EV.log(_EV.E.HOTKEY_UNTRUSTED, level="warn")
         except Exception:
-            pass
+            log.debug("_EV.log : échec ignoré", exc_info=True)
     except Exception:
-        pass
+        log.debug("model_store.needs_download : échec ignoré", exc_info=True)
 
 
 def _perform_quit():
@@ -326,7 +326,7 @@ def _perform_quit():
                 if live is not None:
                     live._stop.set()        # stoppe la boucle, pas de finalize
             except Exception:
-                pass
+                log.debug("_meeting_state.get : échec ignoré", exc_info=True)
             rec.stop()                      # flush + clôture du WAV
             mid = _meeting_state.get("id")
             if appstate.store and mid:
@@ -342,7 +342,7 @@ def _perform_quit():
         if appstate.store:
             appstate.store.close()
     except Exception:
-        pass
+        log.debug("store.close : échec ignoré", exc_info=True)
 
 # Le nettoyage complet est enregistré TOUT DE SUITE : le délégué de cycle de
 # vie l'utilisera même si la suite du démarrage échoue.
@@ -355,6 +355,7 @@ def _on_quit():
         from AppKit import NSApplication
         NSApplication.sharedApplication().terminate_(None)
     except Exception:
+        log.debug("import AppKit : échec ignoré", exc_info=True)
         os._exit(0)
 
 

@@ -44,7 +44,7 @@ def _ui(code: str):
                 lambda: web.evaluateJavaScript_completionHandler_(code, None))
             return
     except Exception:
-        pass
+        log.debug("import webview.platforms.cocoa : échec ignoré", exc_info=True)
     try:
         # v1.0.22 — repli ultime (accès natif indisponible) rendu NON BLOQUANT :
         # evaluate_js reste synchrone sur un sémaphore SANS timeout (cf. Bug #1
@@ -54,7 +54,7 @@ def _ui(code: str):
         threading.Thread(target=lambda: appstate.window.evaluate_js(code),
                          name="ui-fallback", daemon=True).start()
     except Exception:
-        pass
+        log.debug("start : échec ignoré", exc_info=True)
 
 
 def _api_safe(default=None):
@@ -89,7 +89,7 @@ def _toast(message: str, kind: str = "info"):
         _ui("if(typeof showToast==='function') showToast(%s, %s);"
             % (json.dumps(_te(message or "")), json.dumps(kind)))
     except Exception:
-        pass
+        log.debug("_ui : échec ignoré", exc_info=True)
 
 
 def _refresh_lists_ui():
@@ -99,14 +99,14 @@ def _refresh_lists_ui():
     try:
         _ui("renderTasks(%s)" % json.dumps(appstate.store.list_tasks(limit=10)))
     except Exception:
-        pass
+        log.debug("_ui : échec ignoré", exc_info=True)
     # v1.0.6 — STATS LIVE : rafraîchit aussi la vue ouverte (Accueil compris) pour
     # que les compteurs se mettent à jour SANS avoir à quitter/revenir sur l'onglet.
     # No-op sûr si l'UI n'est pas encore prête (garde && côté JS).
     try:
         _ui("window.refreshLists && window.refreshLists()")
     except Exception:
-        pass
+        log.debug("_ui : échec ignoré", exc_info=True)
 
 
 def _menubar_labels():
@@ -128,7 +128,7 @@ def _refresh_menubar():
         _tasks = appstate.store.list_tasks(only_open=True, limit=5) if appstate.store else []
         appstate.menubar.refresh(tasks=_tasks, labels=_menubar_labels(), update_version=appstate.update_latest)
     except Exception:
-        pass
+        log.debug("store.list_tasks : échec ignoré", exc_info=True)
 
 
 # v13.2 — Ouverture robuste du modal Réglages.
@@ -161,13 +161,14 @@ def _open_settings_modal_robust():
             from Foundation import NSOperationQueue
             NSOperationQueue.mainQueue().addOperationWithBlock_(_cocoa_show)
         except Exception:
+            log.debug("import Foundation : échec ignoré", exc_info=True)
             _cocoa_show()
     else:
         try:
             if appstate.window is not None:
                 appstate.window.show()
         except Exception:
-            pass
+            log.debug("window.show : échec ignoré", exc_info=True)
 
     def _inject_later():
         import time as _t
@@ -218,7 +219,7 @@ def _cancel_overlay_hide():
             try:
                 t.cancel()
             except Exception:
-                pass
+                log.debug("t.cancel : échec ignoré", exc_info=True)
     _overlay_hide_timers = None
 
 

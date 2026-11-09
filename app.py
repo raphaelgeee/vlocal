@@ -48,7 +48,10 @@ def _hide_worker_from_dock():
         class _PSN(ctypes.Structure):
             _fields_ = [("hi", ctypes.c_uint32), ("lo", ctypes.c_uint32)]
         _lib.TransformProcessType(ctypes.byref(_PSN(0, 2)), 4)  # kCurrentProcess, UIElement
-    except Exception:
+    except (OSError, AttributeError):
+        # Framework introuvable (OSError) ou symbole absent (AttributeError) :
+        # best-effort strict, le worker fonctionne comme avant (journal pas
+        # encore configuré dans un worker).
         pass
 
 
@@ -145,7 +148,7 @@ def main():
         import multiprocessing
         multiprocessing.freeze_support()   # le child tracker/spawn part ICI -> reste Prohibited
     except Exception:
-        pass
+        log.debug("import multiprocessing : échec ignoré", exc_info=True)
     _set_dock_visible(True)           # process principal + fenêtre visible -> Regular (icône Dock)
 
     applog.setup()
@@ -209,7 +212,7 @@ def _close_store():
         if appstate.store:
             appstate.store.close()
     except Exception:
-        pass
+        log.debug("store.close : échec ignoré", exc_info=True)
 
 
 def _open_store():

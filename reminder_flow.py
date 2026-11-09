@@ -33,19 +33,19 @@ def _fire_reminder(titre: str):
     try:
         notifier.show("Rappel", titre, subtitle=None)
     except Exception:
-        pass
+        log.debug("notifier.show : échec ignoré", exc_info=True)
     # 2) Bannière in-app prominente + réveil de la fenêtre (macOS)
     try:
         _ui("if(typeof showReminder==='function') showReminder(%s);"
             % json.dumps(titre))
     except Exception:
-        pass
+        log.debug("_ui : échec ignoré", exc_info=True)
     try:
         if sys.platform == "darwin":
             from AppKit import NSApplication
             NSApplication.sharedApplication().requestUserAttention_(1)  # rebond Dock
     except Exception:
-        pass
+        log.debug("requestUserAttention_ : échec ignoré", exc_info=True)
 
 
 # v20 — Timers de rappel TRAÇABLES : avant, un rappel supprimé ou coché
@@ -64,6 +64,7 @@ def _task_still_open(task_id) -> bool:
             if t.get("id") == task_id:
                 return True
     except Exception:
+        log.debug("store.list_tasks : échec ignoré", exc_info=True)
         return True            # doute -> on sonne (ne jamais perdre un rappel)
     return False
 
@@ -75,7 +76,7 @@ def _cancel_reminder_timer(task_id):
         try:
             t.cancel()
         except Exception:
-            pass
+            log.debug("t.cancel : échec ignoré", exc_info=True)
 
 
 def _schedule_reminder(at_ts: float, titre: str, task_id=None):
@@ -117,7 +118,7 @@ def _recently_added_same(raw: str, store) -> bool:
             if t.get("source_raw_text") == raw and (now - (t.get("created_at") or 0)) < _DEDUP_WINDOW_S:
                 return True
     except Exception:
-        pass
+        log.debug("import time : échec ignoré", exc_info=True)
     return False
 
 
@@ -135,6 +136,7 @@ def _looks_like_timed_reminder(raw: str) -> bool:
         data = reminders.parse_reminder(raw_gloss, time.time()) or {}
         return bool(data.get("datetime_iso"))
     except Exception:
+        log.debug("reminders.is_reminder : échec ignoré", exc_info=True)
         return False
 
 
@@ -191,6 +193,7 @@ def _create_reminder_from_text(raw: str):
                               echeance_iso=datetime_iso, details=None,
                               source_raw_text=raw)
     except Exception:
+        log.debug("store.add_task : échec ignoré", exc_info=True)
         return
     # v1.1.0 — coffre « Vlocal, ma voix » : le rappel y est aussi consigné.
     try:
@@ -198,7 +201,7 @@ def _create_reminder_from_text(raw: str):
         if _s.get("obsidian_enabled") and _s.get("obsidian_vault"):
             obsidian.capture_reminder(titre, echeance_naturelle, _s.get("obsidian_vault"))
     except Exception:
-        pass
+        log.debug("_load_settings : échec ignoré", exc_info=True)
     iso_ts = notifier.parse_iso(datetime_iso)
     if iso_ts and iso_ts > now_ts:
         when = reminders.humanize_when(datetime_iso, now_ts)
@@ -206,7 +209,7 @@ def _create_reminder_from_text(raw: str):
         try:
             appstate.store.mark_notif_scheduled(tid)
         except Exception:
-            pass
+            log.debug("store.mark_notif_scheduled : échec ignoré", exc_info=True)
         _toast((f"C'est noté : « {titre} ». Vous serez prévenu {when}."
                 if when else f"C'est noté : « {titre} »."), kind="success")
     elif iso_ts and iso_ts <= now_ts:

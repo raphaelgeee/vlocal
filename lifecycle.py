@@ -59,7 +59,7 @@ def _lifecycle_quit():
         if appstate.store:
             appstate.store.close()
     except Exception:
-        pass
+        log.debug("store.close : échec ignoré", exc_info=True)
 
 
 def _lifecycle_show():
@@ -69,12 +69,12 @@ def _lifecycle_show():
             appstate.window.show()
         appstate.window_visible = True
     except Exception:
-        pass
+        log.debug("window.show : échec ignoré", exc_info=True)
     try:
         from AppKit import NSApplication
         NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
     except Exception:
-        pass
+        log.debug("import AppKit : échec ignoré", exc_info=True)
 
 
 def _install_lifecycle_delegate_class():
@@ -90,6 +90,7 @@ def _install_lifecycle_delegate_class():
                 try:
                     _lifecycle_quit()
                 except Exception:
+                    log.debug("_lifecycle_quit : échec ignoré", exc_info=True)
                     os._exit(0)
                 return 1   # NSTerminateNow
 
@@ -117,11 +118,13 @@ def _quit_app():
             from AppKit import NSApplication
             NSApplication.sharedApplication().terminate_(None)
         except Exception:
+            log.debug("import AppKit : échec ignoré", exc_info=True)
             os._exit(0)
     try:
         from Foundation import NSOperationQueue
         NSOperationQueue.mainQueue().addOperationWithBlock_(_do)
     except Exception:
+        log.debug("import Foundation : échec ignoré", exc_info=True)
         _do()
 
 
@@ -132,12 +135,13 @@ def _reveal_app_in_finder():
         from Foundation import NSBundle
         path = NSBundle.mainBundle().bundlePath() or "/Applications/Vlocal.app"
     except Exception:
+        log.debug("import Foundation : échec ignoré", exc_info=True)
         path = "/Applications/Vlocal.app"
     try:
         from AppKit import NSWorkspace
         NSWorkspace.sharedWorkspace().selectFile_inFileViewerRootedAtPath_(path, "")
     except Exception:
-        pass
+        log.debug("import AppKit : échec ignoré", exc_info=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -159,10 +163,12 @@ def _begin_activity(reason: str):
                                     NSActivityLatencyCritical)
             opts = NSActivityUserInitiated | NSActivityLatencyCritical
         except Exception:
+            log.debug("import Foundation : échec ignoré", exc_info=True)
             opts = 0x00FFFFFF | 0xFF00000000   # valeurs documentées NSProcessInfo.h
         return NSProcessInfo.processInfo().beginActivityWithOptions_reason_(
             opts, reason)
     except Exception:
+        log.debug("import Foundation : échec ignoré", exc_info=True)
         return None
 
 
@@ -172,7 +178,7 @@ def _end_activity(token) -> None:
             from Foundation import NSProcessInfo
             NSProcessInfo.processInfo().endActivity_(token)
     except Exception:
-        pass
+        log.debug("endActivity_ : échec ignoré", exc_info=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -278,7 +284,7 @@ def _arm_freeze_watchdog():
                 if _EV:
                     _EV.log(_EV.E.MAIN_FREEZE_KILL, age=round(age, 1))
             except Exception:
-                pass
+                log.debug("_EV.log : échec ignoré", exc_info=True)
             log.warning(f"[watchdog] thread principal figé > {age:.0f}s -> arrêt "
                   "forcé de Vlocal (à relancer).")
             os._exit(70)
@@ -314,7 +320,7 @@ def _self_relaunch(reason: str = "") -> None:
                           _te("La dictée était bloquée. Vlocal se relance, réessayez dans un instant."),
                           subtitle=None)
         except Exception:
-            pass
+            log.debug("notifier.show : échec ignoré", exc_info=True)
         import subprocess
         subprocess.Popen(["/bin/sh", "-c", 'sleep 1.2; /usr/bin/open -n "%s"' % bundle],
                          start_new_session=True)
@@ -368,6 +374,7 @@ def _auto_diag_enabled() -> bool:
         s = _load_settings()
         return bool(s.get("auto_diag", False))
     except Exception:
+        log.debug("_load_settings : échec ignoré", exc_info=True)
         return False
 
 
@@ -380,6 +387,7 @@ def _auto_diag_loop():
                 try:
                     last = float(_load_settings().get("auto_diag_last", 0) or 0)
                 except Exception:
+                    log.debug("float : échec ignoré", exc_info=True)
                     last = 0.0
                 if (_t.time() - last) > _AUTO_DIAG_DAYS * 86400:
                     try:
@@ -388,9 +396,9 @@ def _auto_diag_loop():
                         if isinstance(r, dict) and r.get("ok"):
                             _save_settings({"auto_diag_last": _t.time()})
                     except Exception:
-                        pass
+                        log.debug("api.send_support_diagnostic : échec ignoré", exc_info=True)
         except Exception:
-            pass
+            log.debug("_auto_diag_enabled : échec ignoré", exc_info=True)
         _t.sleep(6 * 3600)   # re-vérifie toutes les 6 h
 
 
@@ -398,7 +406,7 @@ def _start_auto_diag():
     try:
         threading.Thread(target=_auto_diag_loop, name="auto-diag", daemon=True).start()
     except Exception:
-        pass
+        log.debug("start : échec ignoré", exc_info=True)
 
 
 def _acquire_single_instance():
@@ -425,7 +433,7 @@ def _hand_over_to_running_instance():
         with open(_SHOW_REQUEST, "w") as f:
             f.write("show")
     except Exception:
-        pass
+        log.debug("open : échec ignoré", exc_info=True)
     try:
         from AppKit import (NSRunningApplication,
                             NSApplicationActivateIgnoringOtherApps)
@@ -435,4 +443,4 @@ def _hand_over_to_running_instance():
             if ap.processIdentifier() != me:
                 ap.activateWithOptions_(NSApplicationActivateIgnoringOtherApps)
     except Exception:
-        pass
+        log.debug("import AppKit : échec ignoré", exc_info=True)

@@ -7,6 +7,7 @@ réunion), relire et vider l'historique, gérer les rappels.
 import os
 import time
 
+import applog
 import appstate
 import errors as _EV
 import notifier
@@ -24,6 +25,8 @@ from ui_bridge import (
     _toast,
     _ui,
 )
+
+log = applog.get("api_dictation")
 
 
 class DictationApi:
@@ -46,7 +49,7 @@ class DictationApi:
                        "> Confidentialité > Microphone.", kind="error")
                 return False
         except Exception:
-            pass
+            log.debug("permissions.mic_status : échec ignoré", exc_info=True)
         return bool(appstate.controller.start())
 
     def engine_ready(self):
@@ -119,7 +122,7 @@ class DictationApi:
                               "apercu": (txt or "")[:140],
                               "ts": m.get("created_at") or 0})
         except Exception:
-            pass
+            log.debug("store.list_meetings : échec ignoré", exc_info=True)
         try:
             for d in appstate.store.list_dictations(limit=limit):
                 _c = d.get("content") or ""
@@ -129,7 +132,7 @@ class DictationApi:
                               "full": _c,        # v29.6 — copie directe au clic
                               "ts": d.get("created_at") or 0})
         except Exception:
-            pass
+            log.debug("store.list_dictations : échec ignoré", exc_info=True)
         try:
             for t in appstate.store.list_tasks(limit=limit):
                 items.append({"type": "rappel", "id": t.get("id"),
@@ -137,7 +140,7 @@ class DictationApi:
                               "apercu": (t.get("echeance") or ""),
                               "ts": t.get("created_at") or 0})
         except Exception:
-            pass
+            log.debug("store.list_tasks : échec ignoré", exc_info=True)
         items.sort(key=lambda x: x.get("ts") or 0, reverse=True)
         return items[:limit]
 
@@ -174,7 +177,7 @@ class DictationApi:
             if appstate.store is not None and os.path.exists(appstate.store.path):
                 info["db_mo"] = round(os.path.getsize(appstate.store.path) / 1e6, 2)
         except Exception:
-            pass
+            log.debug("path.exists : échec ignoré", exc_info=True)
         try:
             if appstate.store is not None:
                 # v20 — comptages/chemins LÉGERS : plus aucune transcription ni
@@ -191,11 +194,11 @@ class DictationApi:
                             tot += os.path.getsize(wp)
                             n += 1
                     except Exception:
-                        pass
+                        log.debug("path.exists : échec ignoré", exc_info=True)
                 info["audio_mo"] = round(tot / 1e6, 2)
                 info["audio_files"] = n
         except Exception:
-            pass
+            log.debug("store.count_meetings : échec ignoré", exc_info=True)
         info["total_mo"] = round(info["db_mo"] + info["audio_mo"], 2)
         return info
 
@@ -235,7 +238,7 @@ class DictationApi:
                                                task_id=int(task_id))
                         break
         except Exception:
-            pass
+            log.debug("_cancel_reminder_timer : échec ignoré", exc_info=True)
         _refresh_menubar()
         return new
 

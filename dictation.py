@@ -47,6 +47,7 @@ def copy_to_clipboard(text: str) -> bool:
         import clipboard
         return clipboard.set_clipboard(text)
     except Exception:
+        log.debug("import clipboard : échec ignoré", exc_info=True)
         return False
 
 
@@ -90,12 +91,13 @@ def _mic_grabber_name():
             try:
                 low = (app.localizedName() or "").lower()
             except Exception:
+                log.debug("localizedName() or '').lower : échec ignoré", exc_info=True)
                 continue
             for needle, label in _MIC_GRABBERS:
                 if needle in low:
                     return label
     except Exception:
-        pass
+        log.debug("import AppKit : échec ignoré", exc_info=True)
     return None
 
 
@@ -171,7 +173,7 @@ def _dictation_supervisor():
                         threading.Thread(target=_eng.mic_health_heal,
                                          name="mic-health", daemon=True).start()
                 except Exception:
-                    pass
+                    log.debug("getattr : échec ignoré", exc_info=True)
             ft0 = float(getattr(c, "_finalize_t0", 0.0) or 0.0)
             t0 = float(getattr(c, "_t0", ft0) or ft0)
             now = _t.time()
@@ -216,13 +218,13 @@ def _dictation_supervisor():
             try:
                 c.force_reset("superviseur")
             except Exception:
-                pass
+                log.debug("c.force_reset : échec ignoré", exc_info=True)
             try:
                 overlay.info(_te("Dictée réparée"),
                              _te("La dernière dictée n'a pas abouti. Vous pouvez recommencer."))
                 _schedule_overlay_hide(4.0)
             except Exception:
-                pass
+                log.debug("overlay.info : échec ignoré", exc_info=True)
             try:
                 # v1.0.22 — EN THREAD : notifier.show peut construire le bundle
                 # de marque (sips/PlistBuddy, plusieurs secondes). Appelé en
@@ -236,12 +238,13 @@ def _dictation_supervisor():
                         subtitle=None),
                     name="heal-notify", daemon=True).start()
             except Exception:
-                pass
+                log.debug("start : échec ignoré", exc_info=True)
             # Re-coincement répété MALGRÉ les resets -> sous-système audio OS
             # irrécupérable -> dernier recours : relance auto (garde-fou interne).
             if len(resets) >= 3:
                 _self_relaunch("dictée coincée à répétition")
         except Exception:
+            log.debug("bool : échec ignoré", exc_info=True)
             continue
 
 
@@ -592,6 +595,7 @@ class DictationController:
                                 log.info("[dictée] micro récupéré sur le micro intégré (worker).")
                                 _via = "builtin"
                         except Exception as e3:
+                            log.debug("engine.start_recording : échec ignoré", exc_info=True)
                             if _trace: _trace.fail("fallback_builtin", e3)
                     # Repli 2 (dernier recours) : autres micros, par NOM, listés
                     # et résolus par le worker (v1.5), tant que le budget tient.
@@ -603,6 +607,7 @@ class DictationController:
                                 ok = self.engine.start_recording(device=_dev,
                                                                  deadline=_budget_dl)
                             except Exception:
+                                log.debug("engine.start_recording : échec ignoré", exc_info=True)
                                 continue
                             if ok:
                                 log.info(f"[dictée] micro récupéré sur le périphérique {_dev}.")
@@ -685,7 +690,7 @@ class DictationController:
             try:
                 speed = _load_settings().get("dictation_speed", "auto")
             except Exception:
-                pass
+                log.debug("get : échec ignoré", exc_info=True)
             _prewarm = threading.Timer(
                 self.CAPTURE_SETTLE_S,
                 lambda: self.engine.prewarm(want_small=(speed in ("auto", "rapide"))))
@@ -770,8 +775,9 @@ class DictationController:
                         overlay.info(_te("Aucun son"),
                                      _te("Micro déconnecté ? Relâchez et réessayez."))
                     except Exception:
-                        pass
+                        log.debug("overlay.info : échec ignoré", exc_info=True)
             except Exception:
+                log.debug("engine.rms_recent : échec ignoré", exc_info=True)
                 continue
 
     def cancel(self) -> bool:
@@ -803,7 +809,7 @@ class DictationController:
         try:
             self.engine.cancel_recording()
         except Exception:
-            pass
+            log.debug("engine.cancel_recording : échec ignoré", exc_info=True)
         return True
 
     def force_reset(self, reason: str = "") -> None:
@@ -814,10 +820,7 @@ class DictationController:
         n'insère plus rien), coupe le worker audio, et REMET LE MICRO À NEUF
         (engine.reset_audio, fermeture bornée). Le prochain raccourci repart sain.
         Idempotent. Piloté par le superviseur de dictée et le reset manuel."""
-        try:
-            log.info(f"[auto-heal] reset dictée ({reason}).")
-        except Exception:
-            pass
+        log.info(f"[auto-heal] reset dictée ({reason}).")
         # 1) état -> libre immédiatement (un démarrage ultérieur passe)
         self._active = False
         self._busy = False
@@ -825,6 +828,7 @@ class DictationController:
         try:
             self._gen = int(getattr(self, "_gen", 0)) + 1
         except Exception:
+            log.debug("int : échec ignoré", exc_info=True)
             self._gen = 0
         # v1.0.22 — chaînage : invalide TOUTES les finalisations en vol (epoch :
         # texte périmé jamais inséré, attentes FIFO abandonnées) et remet la
@@ -837,30 +841,30 @@ class DictationController:
             with self._fin_cv:
                 self._fin_cv.notify_all()
         except Exception:
-            pass
+            log.debug("_fin_cv.notify_all : échec ignoré", exc_info=True)
         # 2) coupe le worker de niveau audio + relâche live-tail / assertion App Nap
         try:
             self._stop_evt.set()
         except Exception:
-            pass
+            log.debug("_stop_evt.set : échec ignoré", exc_info=True)
         self._audio_worker = None
         try:
             tail = getattr(self, "_tail", None)
             if tail is not None:
                 tail.abort()
         except Exception:
-            pass
+            log.debug("getattr : échec ignoré", exc_info=True)
         self._tail = None
         try:
             _end_activity(getattr(self, "_activity", None))
         except Exception:
-            pass
+            log.debug("_end_activity : échec ignoré", exc_info=True)
         self._activity = None
         # 3) MICRO À NEUF : abandonne un flux figé, repart propre (jamais bloquant)
         try:
             self.engine.reset_audio()
         except Exception:
-            pass
+            log.debug("engine.reset_audio : échec ignoré", exc_info=True)
 
     def empty_overlay_text(self):
         """Texte court (FR, à passer par _te) qui explique pourquoi la dernière
@@ -1033,7 +1037,7 @@ class DictationController:
         try:
             speed = _load_settings().get("dictation_speed", "auto")
         except Exception:
-            pass
+            log.debug("get : échec ignoré", exc_info=True)
         # v21 — QoS USER_INITIATED sur CE thread (et le décodage qu'il pilote) :
         # pas de démotion E-core/background pendant que l'utilisateur attend.
         from engine import _qos_user_initiated
@@ -1084,6 +1088,7 @@ class DictationController:
         except TimeoutError as e:
             stalled = e
         except Exception as e:
+            log.debug("engine.stop_and_transcribe : échec ignoré", exc_info=True)
             crash = e
         # v1.4.4 — UN verdict par appui : si le chien de garde a déjà parlé, ni
         # incident, ni message, ni insertion de plus.
@@ -1105,7 +1110,7 @@ class DictationController:
                 overlay.error(_te("La transcription a calé."))
                 _schedule_overlay_hide(3.0)
             except Exception:
-                pass
+                log.debug("overlay.error : échec ignoré", exc_info=True)
             _toast("La transcription a calé un instant (GPU), c'est réinitialisé. "
                    "Relancez votre dictée, ça repart.", kind="error")
             return ""
@@ -1167,7 +1172,7 @@ class DictationController:
                            "Système > Confidentialité et sécurité > Accessibilité.",
                            kind="info")
             except Exception:
-                pass
+                log.debug("_toast : échec ignoré", exc_info=True)
         else:
             log.warning("[dictee] copie presse-papier ÉCHOUÉE -> texte non collable.")
             if _EV: _EV.log(_EV.E.CLIPBOARD_FAIL)
@@ -1187,7 +1192,7 @@ class DictationController:
                 if appstate.telemetry is not None:
                     appstate.telemetry.notify_usage()
         except Exception:
-            pass
+            log.debug("store.record_usage : échec ignoré", exc_info=True)
         # v18.4 — Historique des DICTÉES (texte seul, très léger). Persisté
         # UNIQUEMENT si le réglage de stockage = "all" (les rappels sont déjà
         # rangés dans leur table). Jamais d'audio pour une dictée.

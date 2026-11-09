@@ -65,13 +65,13 @@ def _obsidian_meeting_sync(meeting_id):
                         blocks = payload.get("blocks") or None
                         names = payload.get("names") or {}
                 except Exception:
-                    pass
+                    log.debug("json.loads : échec ignoré", exc_info=True)
                 obsidian.capture_meeting(m, vault, blocks=blocks, names=names)
             except Exception as e:
                 log.warning(f"[reunion] note Obsidian ignorée ({e}).")
         threading.Thread(target=_run, name="obsidian-meeting", daemon=True).start()
     except Exception:
-        pass
+        log.debug("_load_settings : échec ignoré", exc_info=True)
 
 
 # v18.5 — Plafond AUTO de locuteurs côté app (3 sites : frise live, repli WAV,
@@ -185,6 +185,7 @@ def _attribute_blocks(diar_obj, units, wav_path, spk_segs):
                     _fn = diarizer.make_subproc_embedder(
                         wav_path, _wf.getframerate(), mode="raw")
             except Exception:
+                log.debug("import wave : échec ignoré", exc_info=True)
                 _fn = None
             blocks = diar_obj.assign_words_precise(units, wav_path,
                                                    embed_batch_fn=_fn)
@@ -205,7 +206,7 @@ def _attribute_blocks(diar_obj, units, wav_path, spk_segs):
         for b in blocks or []:
             b["text"] = _crl(b.get("text") or "")
     except Exception:
-        pass
+        log.debug("import engine : échec ignoré", exc_info=True)
     return blocks
 
 
@@ -226,6 +227,7 @@ def _visio_relabel_blocks(blocks, dom_path):
             return blocks
         dom = dom.reshape(-1, 2)               # [N,2] : (mic_rms, sys_rms) / bloc 50 ms
     except Exception:
+        log.debug("_np.fromfile : échec ignoré", exc_info=True)
         return blocks
     _BS = 0.05
     relabeled = []
@@ -237,6 +239,7 @@ def _visio_relabel_blocks(blocks, dom_path):
             mic_e = float(_np.mean(seg[:, 0])) if seg.size else 0.0
             sys_e = float(_np.mean(seg[:, 1])) if seg.size else 0.0
         except Exception:
+            log.debug("max : échec ignoré", exc_info=True)
             mic_e = sys_e = 0.0
         nb = dict(b)
         # Ids au format SPEAKER_NN (l'UI les reconnaît : couleur stable + renommage).
@@ -285,7 +288,7 @@ def _reunion_transcribe_pipeline(meeting_id, wav_path, audio_duree):
                           "La transcription de la réunion a échoué. L'audio est "
                           "conservé, vous pouvez réessayer.")
         except Exception:
-            pass
+            log.debug("_meeting_fail : échec ignoré", exc_info=True)
     finally:
         _meeting_state["pipeline_busy"] = False
         _end_activity(_act)
@@ -395,7 +398,7 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
                         try:
                             imp_diar.unload()
                         except Exception:
-                            pass
+                            log.debug("imp_diar.unload : échec ignoré", exc_info=True)
                         imp_diar = None
             if detailed is None:
                 # VOIE LISSE (mode silencieux, RAM serrée, ou échec batched) :
@@ -464,7 +467,7 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
                 try:
                     imp_diar.unload()
                 except Exception:
-                    pass
+                    log.debug("imp_diar.unload : échec ignoré", exc_info=True)
                 imp_diar = None
     if live is not None and not getattr(live, "failed", False):
         try:
@@ -481,7 +484,7 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
         try:
             live.finalize()   # arrête proprement la boucle
         except Exception:
-            pass
+            log.debug("live.finalize : échec ignoré", exc_info=True)
     # v29.3 — QUALITÉ DIARISATION live : remplace les segments incrémentaux
     # (grossiers) par une RE-TRANSCRIPTION propre du WAV complet pour une réunion
     # LIVE COURTE -> diarisation guidée sur segments Whisper nets (interjections
@@ -596,6 +599,7 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
         conf_json = json.dumps({"segments": segments, "avg_conf": avg_conf},
                                ensure_ascii=False)
     except Exception:
+        log.debug("json.dumps : échec ignoré", exc_info=True)
         conf_json = None
 
     # v18 — DIARISATION (qui parle quand), EN RELAIS, optionnelle, repli
@@ -638,6 +642,7 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
                     _sp = _load_settings().get("meeting_speakers", "auto")
                     n_spk_set = int(_sp) if str(_sp).isdigit() else 0
                 except Exception:
+                    log.debug("get : échec ignoré", exc_info=True)
                     n_spk_set = 0
                 # v26 — choix PER-RÉUNION du sélecteur « Combien de participants ? »
                 # (posé par reunion_start, consommé ICI une seule fois). Prioritaire
@@ -685,7 +690,7 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
                             _reloaded = getattr(appstate.controller.engine, "model", None) is not None
                             appstate.controller.engine.unload_model()
                         except Exception:
-                            pass
+                            log.debug("getattr : échec ignoré", exc_info=True)
                         # v27 — relais GPU : la transcription est finie, on rend
                         # la RAM MLX (~0,8-1,5 Go) pendant la diarisation. Rechargé
                         # paresseusement au prochain usage (dictée/réunion), comme
@@ -695,7 +700,7 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
                             if _mlxe.available() and not getattr(appstate.controller, "_busy", False):
                                 _mlxe.unload()
                         except Exception:
-                            pass
+                            log.debug("import mlx_engine : échec ignoré", exc_info=True)
                         _dg = None
                         _tg0 = _t.perf_counter()
                         try:
@@ -705,6 +710,7 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
                                 with _wv.open(wav_path, "rb") as _wf:
                                     _sr16 = _wf.getframerate()
                             except Exception:
+                                log.debug("import wave : échec ignoré", exc_info=True)
                                 _sr16 = SAMPLE_RATE
                             # v27 — extraction en SOUS-PROCESS (RAM principale
                             # plate ; repli in-process automatique si spawn KO).
@@ -760,7 +766,7 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
                             try:
                                 wt_diar.unload()
                             except Exception:
-                                pass
+                                log.debug("wt_diar.unload : échec ignoré", exc_info=True)
                     # REPLI (live absent / échoué) : diarisation complète du WAV
                     # avec relais RAM (décharge turbo le temps de scanner avec
                     # CAM++ ; turbo est rechargé dans le finally, après
@@ -782,7 +788,7 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
                                                     None) is not None
                             appstate.controller.engine.unload_model()
                         except Exception:
-                            pass
+                            log.debug("getattr : échec ignoré", exc_info=True)
                         try:
                             # v26 — réutilise l'instance de la voie guidée si elle
                             # existe (même extracteur CAM++ ; sinon fuite RAM).
@@ -861,17 +867,17 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
                         try:
                             wt_diar.unload()
                         except Exception:
-                            pass
+                            log.debug("wt_diar.unload : échec ignoré", exc_info=True)
                     if dia is not None:
                         try:
                             dia.unload()
                         except Exception:
-                            pass
+                            log.debug("dia.unload : échec ignoré", exc_info=True)
                     if _reloaded:
                         try:
                             appstate.controller.engine.load_model()
                         except Exception:
-                            pass
+                            log.debug("engine.load_model : échec ignoré", exc_info=True)
             else:
                 log.warning("[reunion] diarisation indisponible (sherpa/modèles absents)"
                       " -> affichage continu.")
@@ -893,7 +899,7 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
             if appstate.telemetry is not None:
                 appstate.telemetry.notify_usage()
         except Exception:
-            pass
+            log.debug("store.record_meeting : échec ignoré", exc_info=True)
         _obsidian_meeting_sync(meeting_id)   # v1.1.0 — coffre « Vlocal, ma voix »
 
     # Notif + refresh UI.
@@ -920,8 +926,10 @@ def _total_ram_gb():
                       text=True, timeout=2).stdout.strip()
         return int(out) / 2 ** 30
     except Exception:
+        log.debug("import subprocess : échec ignoré", exc_info=True)
         try:
             import psutil as _ps
             return _ps.virtual_memory().total / 2 ** 30
         except Exception:
+            log.debug("import psutil : échec ignoré", exc_info=True)
             return 8.0   # hypothèse PRUDENTE (cible basse) si indéterminé

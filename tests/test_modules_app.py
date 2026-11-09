@@ -6,7 +6,9 @@
   cachée à l'ordre d'import d'app.py) ;
 - aucune fonction de plus de 150 lignes dans ces modules, sauf exception
   justifiée ci-dessous ;
-- aucun module de plus de 1 500 lignes, app.py sous 1 200.
+- aucun module de plus de 1 500 lignes, app.py sous 1 200 ;
+- aucune exception avalée en silence : un « except Exception » journalise,
+  signale ou relance (les échecs volontairement ignorés vont en DEBUG).
 """
 import ast
 import os
@@ -92,14 +94,46 @@ class TestModulesApp(unittest.TestCase):
         self.assertEqual(echecs, [])
 
     def test_fonctions_courtes(self):
+        """Une fonction justifiée couvre ses fermetures (fonctions imbriquées)."""
         longues = []
-        for m in MODULES:
-            for n in ast.walk(_arbre(m)):
+
+        def visite(noeud, m, justifiee):
+            for n in ast.iter_child_nodes(noeud):
                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     taille = n.end_lineno - n.lineno + 1
-                    if taille > 150 and n.name not in LONGUES:
+                    ok = justifiee or n.name in LONGUES
+                    if taille > 150 and not ok:
                         longues.append(f"{m}.{n.name} ({taille} lignes)")
+                    visite(n, m, ok)
+                else:
+                    visite(n, m, justifiee)
+
+        for m in MODULES:
+            visite(_arbre(m), m, False)
         self.assertEqual(longues, [])
+
+    def test_aucune_exception_avalee(self):
+        signale = {"debug", "info", "warning", "error", "exception", "critical",
+                   "log", "print", "_toast"}
+
+        def large(h):
+            types = h.type.elts if isinstance(h.type, ast.Tuple) else [h.type]
+            return h.type is None or any(isinstance(t, ast.Name) and t.id in
+                                         ("Exception", "BaseException") for t in types)
+
+        def muet(h):
+            for n in ast.walk(ast.Module(body=h.body, type_ignores=[])):
+                if isinstance(n, ast.Raise):
+                    return False
+                if isinstance(n, ast.Call):
+                    f = n.func
+                    if (f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", "")) in signale:
+                        return False
+            return True
+
+        muets = [f"{m}:{h.lineno}" for m in MODULES for h in ast.walk(_arbre(m))
+                 if isinstance(h, ast.ExceptHandler) and large(h) and muet(h)]
+        self.assertEqual(muets, [])
 
     def test_tailles_des_modules(self):
         tailles = {m: app_sources.texte(m + ".py").count("\n") for m in MODULES}

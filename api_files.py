@@ -66,6 +66,7 @@ class FilesApi:
         try:
             raw = _b64.b64decode(base64_data, validate=False)
         except Exception as e:
+            log.debug("_b64.b64decode : échec ignoré", exc_info=True)
             return {"ok": False, "error": f"Décodage échoué : {e}"}
         if len(raw) > self.MAX_AUDIO_BYTES:
             return {"ok": False, "error": self._size_limit_msg(len(raw))}
@@ -76,6 +77,7 @@ class FilesApi:
             with open(tmp_path, "wb") as f:
                 f.write(raw)
         except Exception as e:
+            log.debug("open : échec ignoré", exc_info=True)
             import shutil
             shutil.rmtree(tmp_dir, ignore_errors=True)   # pas de fuite si KO
             return {"ok": False, "error": f"Écriture tmp échouée : {e}"}
@@ -108,6 +110,7 @@ class FilesApi:
         try:
             size = os.path.getsize(path)
         except Exception:
+            log.debug("path.getsize : échec ignoré", exc_info=True)
             size = 0
         if size > self.MAX_AUDIO_BYTES:
             return {"ok": False, "error": self._size_limit_msg(size)}
@@ -140,6 +143,7 @@ class FilesApi:
                                     on_progress=lambda p: _ui("setFileProgress(%.2f)" % p))
                                 text = det.get("text", "")
                     except Exception:
+                        log.debug("get : échec ignoré", exc_info=True)
                         text = ""
                     if not text:
                         # mode="dictee" : voie dictée par fichier (kwargs identiques
@@ -153,6 +157,7 @@ class FilesApi:
                             mode="dictee",
                         )
                 except Exception as e:
+                    log.debug("get : échec ignoré", exc_info=True)
                     _ui("showToast(%s)" % json.dumps(
                         _te(f"Erreur de transcription : {e}")))
                     return
@@ -165,7 +170,7 @@ class FilesApi:
                 try:
                     copy_to_clipboard(text)
                 except Exception:
-                    pass
+                    log.debug("copy_to_clipboard : échec ignoré", exc_info=True)
                 _ui("showFileResult(%s, %.1f)" % (json.dumps(text), dt))
                 # Auto-détection de rappel (sans effet si ce n'est pas un rappel).
                 threading.Thread(target=_post_process_by_mode,
@@ -259,14 +264,14 @@ class FilesApi:
                 try:
                     os.remove(wav_path)   # pas de WAV orphelin de 44 octets
                 except Exception:
-                    pass
+                    log.debug("os.remove : échec ignoré", exc_info=True)
                 raise ValueError("Aucune piste audio exploitable dans le fichier.")
             dur = n_frames / 16000.0
             if dur < 0.6:
                 try:
                     os.remove(wav_path)
                 except Exception:
-                    pass
+                    log.debug("os.remove : échec ignoré", exc_info=True)
                 raise ValueError("Audio trop court.")
             titre = "Import · " + (os.path.splitext(name)[0][:40] or "audio")
             mid = appstate.store.add_meeting(titre, wav_path, "transcribing")
@@ -295,4 +300,4 @@ class FilesApi:
                     import shutil
                     shutil.rmtree(tmpdir, ignore_errors=True)
                 except Exception:
-                    pass
+                    log.debug("import shutil : échec ignoré", exc_info=True)

@@ -43,7 +43,7 @@ def _set_dock(policy):
         from AppKit import NSApplication
         NSApplication.sharedApplication().setActivationPolicy_(policy)
     except Exception:
-        pass
+        log.debug("import AppKit : échec ignoré", exc_info=True)
 
 
 # Compat : conserve l'API booléenne existante. True (fenêtre visible) -> Regular
@@ -65,6 +65,7 @@ def _purge_webkit_cache_on_update():
             with open(_ui_marker, "r") as _f:
                 _last_ui = _f.read().strip()
         except Exception:
+            log.debug("open : échec ignoré", exc_info=True)
             _last_ui = None
         if _last_ui != appstate.app_version:
             import shutil as _sh
@@ -78,7 +79,7 @@ def _purge_webkit_cache_on_update():
                 with open(_ui_marker, "w") as _f:
                     _f.write(appstate.app_version)
             except Exception:
-                pass
+                log.debug("os.makedirs : échec ignoré", exc_info=True)
             log.info(f"[ui]      cache WebKit purgé (MAJ {_last_ui} -> {appstate.app_version}) : UI fraîche garantie.")
     except Exception as _e:
         log.warning(f"[ui]      purge cache WebKit ignorée : {_e}")
@@ -125,7 +126,7 @@ def _on_window_closing():
         appstate.window.hide()
         appstate.window_visible = False
     except Exception:
-        pass
+        log.debug("window.hide : échec ignoré", exc_info=True)
     return False   # fermeture fenêtre = masquage -> process maintenu en vie
 
 
@@ -158,11 +159,11 @@ def _drag_view_cls():
                         w.performWindowDragWithEvent_(event)
                         return
                 except Exception:
-                    pass
+                    log.debug("w.respondsToSelector_ : échec ignoré", exc_info=True)
                 try:
                     objc.super(_VlocalDragView, self).mouseDown_(event)
                 except Exception:
-                    pass
+                    log.debug("mouseDown_ : échec ignoré", exc_info=True)
         _DRAG_VIEW_CLS = _VlocalDragView
     return _DRAG_VIEW_CLS
 def _style_window_native(_tries=0):
@@ -186,7 +187,7 @@ def _style_window_native(_tries=0):
                 try:
                     w.setMovableByWindowBackground_(True)
                 except Exception:
-                    pass
+                    log.debug("w.setMovableByWindowBackground_ : échec ignoré", exc_info=True)
                 # v3.2.6 — APPARENCE SOMBRE forcée : sans ça, le chrome de la barre
                 # de titre reste en mode clair (liseré plus clair sous les feux,
                 # repéré à l'œil). En dark, la barre devient NOIRE -> feux fondus
@@ -195,7 +196,7 @@ def _style_window_native(_tries=0):
                     from AppKit import NSAppearance
                     w.setAppearance_(NSAppearance.appearanceNamed_("NSAppearanceNameDarkAqua"))
                 except Exception:
-                    pass
+                    log.debug("import AppKit : échec ignoré", exc_info=True)
                 # Bande de déplacement invisible (haut, hauteur d'une barre de
                 # titre). Posée UNE seule fois (identifiant). Les feux flottent
                 # AU-DESSUS (boutons de fenêtre, z-order supérieur) ; le contenu
@@ -213,7 +214,7 @@ def _style_window_native(_tries=0):
                             if (_sv.identifier() or "") == "vlocalDrag":
                                 _sv.removeFromSuperview()
                         except Exception:
-                            pass
+                            log.debug("_sv.removeFromSuperview : échec ignoré", exc_info=True)
                     # v1.0.8 — FIX CLICS SIDEBAR BLOQUÉS (plein écran surtout) : la bande
                     # de drag est OPAQUE et avale tout clic dans sa zone (mouseDown ->
                     # performWindowDrag). Avant, elle était PLEINE LARGEUR x 64px -> elle
@@ -234,6 +235,7 @@ def _style_window_native(_tries=0):
                     cv.addSubview_(dv)
                 applied = True
             except Exception:
+                log.debug("w.styleMask : échec ignoré", exc_info=True)
                 continue
     except Exception as e:
         log.warning(f"[window] style premium indisponible ({e}) — fenêtre macOS standard.")
@@ -248,7 +250,7 @@ def _style_window_native(_tries=0):
             NSOperationQueue.mainQueue().addOperationWithBlock_(
                 lambda: _style_window_native(_tries + 1))
         except Exception:
-            pass
+            log.debug("import Foundation : échec ignoré", exc_info=True)
 
 
 def _on_window_shown():
@@ -256,7 +258,7 @@ def _on_window_shown():
         from Foundation import NSOperationQueue
         NSOperationQueue.mainQueue().addOperationWithBlock_(_style_window_native)
     except Exception:
-        pass
+        log.debug("import Foundation : échec ignoré", exc_info=True)
 
 
 def _install_native_style():
@@ -265,7 +267,7 @@ def _install_native_style():
     try:
         appstate.window.events.shown += _on_window_shown
     except Exception:
-        pass
+        log.debug("échec ignoré", exc_info=True)
     # v3.3.2 — RE-APPLIQUER APRÈS CHARGEMENT (fix fenêtre figée ~5s) : pywebview fait
     # setContentView_(webview) + makeFirstResponder_(webview) à la fin de la 1re
     # navigation (cocoa didFinishNavigation), ce qui enterre la bande de drag. On
@@ -274,7 +276,7 @@ def _install_native_style():
     try:
         appstate.window.events.loaded += _on_window_shown
     except Exception:
-        pass
+        log.debug("échec ignoré", exc_info=True)
     # v1.0.1 — FILET ANTI-FIGEAGE : pywebview peut ré-installer la contentView à des
     # instants variables après le chargement (gros HTML + polices). On ré-affirme la
     # bande de drag plusieurs fois sur les premières secondes (toujours sur le main
@@ -284,7 +286,7 @@ def _install_native_style():
         for _d in (0.6, 1.5, 3.0, 5.0, 7.0, 9.0):
             threading.Timer(_d, lambda: _NSOQ.mainQueue().addOperationWithBlock_(_style_window_native)).start()
     except Exception:
-        pass
+        log.debug("import Foundation : échec ignoré", exc_info=True)
 
 
 # v10c — Force la NSWindow vraiment transparente (pywebview ne le fait

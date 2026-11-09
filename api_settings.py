@@ -133,7 +133,7 @@ class SettingsApi:
                 ):
                     n += 1
             except Exception:
-                pass
+                log.debug("store.add_glossary_entry : échec ignoré", exc_info=True)
         _refresh_whisper_bias()
         return n
 
@@ -147,11 +147,11 @@ class SettingsApi:
         try:
             overlay.set_lang(appstate.ui_lang)
         except Exception:
-            pass
+            log.debug("overlay.set_lang : échec ignoré", exc_info=True)
         try:
             _refresh_menubar()   # relabel le menu NSStatusItem (Dicter/Ouvrir/Quitter…)
         except Exception:
-            pass
+            log.debug("_refresh_menubar : échec ignoré", exc_info=True)
         return True
 
     @_api_safe(default=False)
@@ -172,13 +172,13 @@ class SettingsApi:
             if _sh.disk_usage(os.path.expanduser("~")).free < 3_500_000_000:
                 return {"ok": False, "error": "Espace disque insuffisant : libérez environ 3 Go puis réessayez."}
         except Exception:
-            pass
+            log.debug("import shutil : échec ignoré", exc_info=True)
         def _prog(done, total, label):
             try:
                 _ui("if(typeof setModelProgress==='function') setModelProgress(%.4f);"
                     % (float(done) / total if total else 0.0))
             except Exception:
-                pass
+                log.debug("_ui : échec ignoré", exc_info=True)
         _dl_in_flight = True
         try:
             try:
@@ -208,39 +208,42 @@ class SettingsApi:
         try:
             d["engine_ready"] = bool(self.engine_ready())
         except Exception:
+            log.debug("bool : échec ignoré", exc_info=True)
             d["engine_ready"] = False
         try:
             import mlx_engine as _mlx
             d["gpu_mlx"] = bool(_mlx.available())
         except Exception:
+            log.debug("import mlx_engine : échec ignoré", exc_info=True)
             d["gpu_mlx"] = False
         try:
             d["models_need_download"] = bool(model_store.needs_download())
             d["models_dir"] = model_store.models_dir()
         except Exception:
-            pass
+            log.debug("bool : échec ignoré", exc_info=True)
         try:
             d["macos"] = _pf.mac_ver()[0]
             d["arch"] = _pf.machine()
         except Exception:
-            pass
+            log.debug("_pf.mac_ver : échec ignoré", exc_info=True)
         try:
             import psutil as _ps
             d["ram_gb"] = round(_ps.virtual_memory().total / 2 ** 30, 1)
         except Exception:
-            pass
+            log.debug("import psutil : échec ignoré", exc_info=True)
         try:
             if _EV:
                 d["errors_summary"] = _EV.summary()
                 d["recent_events"] = _EV.recent(40)
         except Exception:
-            pass
+            log.debug("_EV.summary : échec ignoré", exc_info=True)
         # v1.0.11 — flag dev : pilote l'affichage du détail technique côté UI (les
         # utilisateurs ne voient que le formulaire d'envoi). N'affecte PAS l'envoi.
         d["is_dev"] = os.environ.get("VLOCAL_DEV") == "1"
         try:
             d["auto_diag"] = _auto_diag_enabled()   # v1.0.11 — état effectif du toggle
         except Exception:
+            log.debug("_auto_diag_enabled : échec ignoré", exc_info=True)
             d["auto_diag"] = False
         return d
 
@@ -266,6 +269,7 @@ class SettingsApi:
         try:
             d = self.get_diagnostics()
         except Exception:
+            log.debug("self.get_diagnostics : échec ignoré", exc_info=True)
             d = {}
         if not isinstance(d, dict):
             d = {}
@@ -281,7 +285,7 @@ class SettingsApi:
         try:
             lines.append("Errors : " + json.dumps(d.get("errors_summary") or {}))
         except Exception:
-            pass
+            log.debug("lines.append : échec ignoré", exc_info=True)
         ev = d.get("recent_events") or []
         if isinstance(ev, list) and ev:
             lines.append("Recent events :")
@@ -289,7 +293,7 @@ class SettingsApi:
                 try:
                     lines.append("  " + str(e.get("ts") or "") + "  " + str(e.get("code") or ""))
                 except Exception:
-                    pass
+                    log.debug("lines.append : échec ignoré", exc_info=True)
         diag = "\n".join(lines)
         message = note + "\n\n— Diagnostic (aucune donnée personnelle) —\n" + diag
         if len(message) > 3900:
@@ -297,6 +301,7 @@ class SettingsApi:
         try:
             os_ver = _pf.mac_ver()[0] or ""
         except Exception:
+            log.debug("_pf.mac_ver : échec ignoré", exc_info=True)
             os_ver = ""
         payload = {"category": "bug", "message": message,
                    "source": (source or "app-diag")[:20],
@@ -313,6 +318,7 @@ class SettingsApi:
             with _u.urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
         except Exception:
+            log.debug("encode : échec ignoré", exc_info=True)
             return {"ok": False, "reason": "network"}
         return {"ok": bool(data.get("ok")), "reason": data.get("reason") or ""}
 
@@ -388,7 +394,7 @@ class SettingsApi:
                     "_applyReunionFlag(%s);" %
                     ("true" if appstate.reunion_enabled else "false"))
         except Exception:
-            pass
+            log.debug("bool : échec ignoré", exc_info=True)
         return new
 
     # ── v1.0.13 — Connexion Obsidian (capture locale des dictées, ADDITIF) ───
@@ -420,6 +426,7 @@ class SettingsApi:
         try:
             import obsidian as _obs
         except Exception:
+            log.debug("import obsidian : échec ignoré", exc_info=True)
             return {"ok": False, "error": "Module Obsidian indisponible."}
         path = _obs.detect_vault()
         if not path:
@@ -429,7 +436,7 @@ class SettingsApi:
         try:
             _obs.seed_routing(path)
         except Exception:
-            pass
+            log.debug("_obs.seed_routing : échec ignoré", exc_info=True)
         return {"ok": True, "path": path, "auto": True}
 
     @_api_safe(default=lambda: {"ok": False, "error": "Connexion à Obsidian impossible."})
@@ -441,6 +448,7 @@ class SettingsApi:
             dest = appstate.window.create_file_dialog(
                 _wv.FOLDER_DIALOG, directory=os.path.expanduser("~"))
         except Exception:
+            log.debug("import webview : échec ignoré", exc_info=True)
             return {"ok": False, "error": "Connexion à Obsidian impossible."}
         if not dest:
             return {"ok": False, "cancelled": True}
@@ -454,6 +462,7 @@ class SettingsApi:
             _save_settings({"obsidian_vault": path, "obsidian_enabled": True})
             _obs.seed_routing(path)
         except Exception:
+            log.debug("import obsidian : échec ignoré", exc_info=True)
             return {"ok": False, "error": "Connexion à Obsidian impossible."}
         return {"ok": True, "path": path}
 
@@ -483,6 +492,7 @@ class SettingsApi:
                     "last_sync": float(s.get("telemetry_last_sync") or 0),
                     "totals": totals}
         except Exception:
+            log.debug("_load_settings : échec ignoré", exc_info=True)
             return {"enabled": None, "first_name": "", "last_name": "",
                     "email": "", "install_id": "", "last_sync": 0, "totals": {}}
 
@@ -501,6 +511,7 @@ class SettingsApi:
         try:
             _save_settings(patch)
         except Exception:
+            log.debug("_save_settings : échec ignoré", exc_info=True)
             return {"ok": False}
         if patch["telemetry_enabled"] and appstate.telemetry is not None:
             threading.Thread(target=appstate.telemetry.sync_now, name="telemetry-now",
