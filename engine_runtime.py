@@ -28,7 +28,7 @@ from engine import (
 from lifecycle import _watch_system_wake
 from meetings import _meeting_state
 from settings import _load_settings, _onboarding_done, _save_settings
-from ui_bridge import _toast
+from ui_bridge import _msg, _toast
 
 log = applog.get("engine_runtime")
 
@@ -136,7 +136,9 @@ def _post_startup_model_checks():
     même à True, donc le message ne serait jamais revu après activation."""
     try:
         if not _onboarding_done() or model_store.needs_download():
-            threading.Timer(2.0, _post_startup_model_checks).start()
+            t = threading.Timer(2.0, _post_startup_model_checks)
+            t.daemon = True    # ne retient jamais la sortie du processus
+            t.start()
             return
         s = _load_settings()
         if not s.get("welcome_shown"):
@@ -250,23 +252,63 @@ def _finish_model_download():
     return True
 
 
+# Chargement du moteur : un seul à la fois (démarrage et fin de téléchargement
+# des modèles pouvaient en lancer deux), et nouvelles tentatives bornées après
+# un échec passager (fichier encore verrouillé, mémoire momentanément serrée).
+_ENGINE_LOAD_LOCK = threading.Lock()
+ENGINE_LOAD_RETRY_DELAYS_S = (3.0, 10.0)
+
+
 def _load_engine_async():
     """Charge le moteur Whisper en tâche de fond (la fenêtre est déjà affichée).
     Met à jour _controller + injecte le glossaire + signale l'UI quand prêt."""
     if not appstate.engine_load_params:
         return
+    if not _ENGINE_LOAD_LOCK.acquire(blocking=False):
+        log.info("[whisper] chargement déjà en cours : demande ignorée.")
+        return
+    try:
+        if appstate.controller is not None:
+            log.info("[whisper] moteur déjà chargé : demande ignorée.")
+            return
+        engine = _create_engine_with_retries()
+        if engine is None:
+            return
+        appstate.controller = DictationController(engine)
+    finally:
+        _ENGINE_LOAD_LOCK.release()
+    _engine_after_load(engine)
+
+
+def _create_engine_with_retries():
+    """Instancie VlocalEngine ; après un échec, ENGINE_LOAD_RETRY_DELAYS_S
+    nouvelles tentatives. Renvoie le moteur, ou None après le dernier échec
+    (message clair à l'utilisateur, incident journalisé à chaque essai)."""
     whisper_dir, cpu_threads = appstate.engine_load_params
     log.info(f"[whisper] chargement en arrière-plan "
           f"({os.path.basename(whisper_dir)}, int8, cpu_threads={cpu_threads})…")
-    try:
-        engine = VlocalEngine(model_dir=whisper_dir, cpu_threads=cpu_threads)
-    except Exception as e:
-        log.warning(f"[whisper] échec chargement moteur : {e}")
-        if _EV: _EV.log(_EV.E.ENGINE_LOAD_FAIL, err=type(e).__name__)   # S2 — capté par la tour de contrôle
-        _toast("Le moteur de transcription n'a pas pu démarrer. Réessayez de "
-               "lancer Vlocal.", kind="error")
-        return
-    appstate.controller = DictationController(engine)
+    delays = (0.0,) + tuple(ENGINE_LOAD_RETRY_DELAYS_S)
+    for attempt, delay in enumerate(delays, 1):
+        if delay:
+            time.sleep(delay)
+        try:
+            return VlocalEngine(model_dir=whisper_dir, cpu_threads=cpu_threads)
+        except Exception as e:
+            log.warning(f"[whisper] échec chargement moteur (essai {attempt}/"
+                        f"{len(delays)})", exc_info=True)
+            if _EV: _EV.log(_EV.E.ENGINE_LOAD_FAIL, err=type(e).__name__,   # S2 — tour de contrôle
+                            attempt=attempt)
+    _toast(_msg("Le moteur de transcription n'a pas pu démarrer. Quittez puis "
+                "relancez Vlocal ; si cela se répète, envoyez un diagnostic "
+                "depuis les Réglages.",
+                "The transcription engine could not start. Quit and reopen "
+                "Vlocal; if this happens again, send a diagnostic from "
+                "Settings."), kind="error")
+    return None
+
+
+def _engine_after_load(engine):
+    """Suite du chargement : glossaire, superviseur, préchauffes, surveillances."""
     # Glossaire -> biais lexical (hotwords)
     try:
         if appstate.store is not None:

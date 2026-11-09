@@ -16,9 +16,10 @@ import notifier
 import permissions
 import updater
 from lifecycle import _quit_app, _reveal_app_in_finder
+from meetings import meeting_in_progress
 from supabase_config import auth_headers, edge_url
 from texts import _te
-from ui_bridge import _ui
+from ui_bridge import _msg, _ui
 
 log = applog.get("api_system")
 
@@ -138,6 +139,14 @@ class SystemApi:
         attend la mort de l'app, remplace le bundle en 2 renames atomiques —
         JAMAIS deux versions — puis ROUVRE Vlocal à jour), affiche « Vlocal va
         se fermer » et termine ce process. Les modèles ne sont pas touchés."""
+        # L'installation ferme Vlocal : pendant une réunion (enregistrement ou
+        # traitement), elle couperait le micro ou le pipeline en plein travail.
+        if meeting_in_progress():
+            return {"ok": False, "error": _msg(
+                "Une réunion est en cours d'enregistrement ou de traitement. "
+                "Installez la mise à jour quand elle sera terminée.",
+                "A meeting is being recorded or processed. Install the update "
+                "once it has finished.")}
         staged = _update_staged
         if not staged or not os.path.isdir(staged):
             return {"ok": False, "error": _te("Mise à jour non préparée.")}

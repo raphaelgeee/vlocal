@@ -81,6 +81,14 @@ def _api_safe(default=None):
     return deco
 
 
+def _msg(fr: str, en: str) -> str:
+    """Message FIXE destiné à l'utilisateur, dans la langue de l'interface.
+
+    Règle : aucun texte d'exception n'est montré à l'utilisateur. Le détail
+    technique va au journal ; l'interface reçoit l'une de ces deux phrases."""
+    return en if appstate.ui_lang == "en" else fr
+
+
 def _toast(message: str, kind: str = "info"):
     """v15.1 — Affiche un toast clair à l'utilisateur. Helper centralisé :
     une seule façon de parler à l'utilisateur, vouvoiement cohérent.
@@ -131,19 +139,9 @@ def _refresh_menubar():
         log.debug("store.list_tasks : échec ignoré", exc_info=True)
 
 
-# v13.2 — Ouverture robuste du modal Réglages.
-# Bug terrain v13.1 : clic menu bar "Réglages..." et Cmd+, : rien à l'écran.
-# Cause : evaluate_js sur fenêtre cachée = no-op silencieux (pywebview ne
-# raise pas), et selon le chemin d'appel l'activation Cocoa pouvait être
-# faite hors du main thread.
-#
-# Solution : un seul point d'entrée robuste, qui :
-#   1) Dispatche show() + activateIgnoringOtherApps_ sur main thread Cocoa
-#   2) Retente l'injection JS à 3 instants (50/180/420 ms) — la 1ʳᵉ est
-#      synchrone (au cas où le DOM est prêt), les 2 autres laissent à
-#      WKWebView le temps de rendre la fenêtre visible et le pywebview
-#      bridge le temps de se reconnecter
-#   3) Loggue chaque étape pour qu'on voie noir sur blanc ce qui se passe
+# Ouverture des Réglages (menu de la barre, Cmd+,) : la fenêtre est montrée et
+# activée sur le thread principal, puis la vue Réglages est demandée à la page,
+# sans jamais attendre de réponse du JavaScript.
 def _open_settings_modal_robust():
     log.info("[settings] ouverture demandée")
 
@@ -170,32 +168,11 @@ def _open_settings_modal_robust():
         except Exception:
             log.debug("window.show : échec ignoré", exc_info=True)
 
-    def _inject_later():
-        import time as _t
-        for delay in (0.05, 0.18, 0.42):
-            _t.sleep(delay)
-            if appstate.window is None:
-                log.info("[settings] _window None, abandon")
-                return
-            try:
-                # On vérifie que la fonction existe AVANT de l'appeler.
-                # evaluate_js synchrone retourne la valeur — None si le JS
-                # n'a pas tourné. typeof renvoie 'function' si tout va bien.
-                kind = appstate.window.evaluate_js(
-                    "typeof openSettingsModal"
-                )
-                log.info(f"[settings] tentative t+{delay}s : "
-                      f"typeof openSettingsModal = {kind!r}")
-                if kind == "function":
-                    appstate.window.evaluate_js("openSettingsModal();")
-                    log.info(f"[settings] OK : modal ouvert (t+{delay}s)")
-                    return
-            except Exception as e:
-                log.warning(f"[settings] evaluate_js exception (t+{delay}s) : {e}")
-        log.warning("[settings] ÉCHEC FINAL : impossible d'ouvrir le modal "
-              "après 3 tentatives.")
-
-    threading.Thread(target=_inject_later, daemon=True).start()
+    # Vue Réglages du tableau de bord. _ui ne bloque jamais (evaluate_js,
+    # synchrone sans délai, gelait ce fil quand la WKWebView ne répondait pas) ;
+    # sa file est la file principale, déjà chargée de show() : l'ordre est
+    # garanti. L'ancien appel visait openSettingsModal, absent de la page.
+    _ui("if(typeof activateView==='function')activateView('reglages')")
 
 
 # v19 — Minuterie de fermeture de l'overlay (résultat -> fade -> orderOut).

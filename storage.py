@@ -257,6 +257,26 @@ class Store:
                 f"UPDATE meetings SET {cols} WHERE id=?", tuple(vals)
             )
 
+    # Statuts d'une réunion en cours de vie : un processus arrêté pendant l'un
+    # d'eux laisse la réunion figée (le pipeline ne reprend jamais seul).
+    MEETING_TRANSIENT_STATUSES = ("recording", "transcribing", "formatting")
+
+    def recover_interrupted_meetings(self):
+        """Au démarrage : toute réunion restée dans un statut transitoire a été
+        interrompue (arrêt brutal, plantage). Elle passe en « error », que
+        l'interface propose de réessayer depuis le WAV gardé. Renvoie les
+        réunions récupérées : [{"id", "wav_path"}]."""
+        marks = ",".join("?" * len(self.MEETING_TRANSIENT_STATUSES))
+        with self._lock:
+            rows = [dict(r) for r in self._conn.execute(
+                f"SELECT id, wav_path FROM meetings WHERE status IN ({marks})",
+                self.MEETING_TRANSIENT_STATUSES)]
+            if rows:
+                self._conn.execute(
+                    f"UPDATE meetings SET status='error' WHERE status IN ({marks})",
+                    self.MEETING_TRANSIENT_STATUSES)
+        return rows
+
     def list_meetings(self, limit=10):
         with self._lock:
             return [

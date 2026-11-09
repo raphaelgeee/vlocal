@@ -6,6 +6,7 @@ drapeaux d'environnement (VLOCAL_REUNION, VLOCAL_VISIO) sont lus à l'import.
 """
 import json
 import os
+import tempfile
 import threading
 
 import applog
@@ -34,6 +35,31 @@ appstate.reunion_enabled = os.environ.get("VLOCAL_REUNION", "1") not in ("0", "f
 VISIO_MODE_ENABLED = os.environ.get("VLOCAL_VISIO", "1") not in ("0", "false", "False")
 
 
+def write_text_atomic(path: str, text: str) -> None:
+    """Écrit `text` dans `path` sans jamais exposer un fichier tronqué.
+
+    Fichier temporaire dans le même dossier, fsync, puis os.replace : un arrêt
+    brutal laisse l'ancien contenu ou le nouveau, et un lecteur concurrent ne
+    voit jamais un fichier vide. Lève en cas d'échec (le temporaire est retiré).
+    Seule façon d'écrire un fichier d'état dans les modules de l'app."""
+    folder = os.path.dirname(os.path.abspath(path))
+    fd, tmp = tempfile.mkstemp(prefix="." + os.path.basename(path) + ".",
+                               suffix=".tmp", dir=folder)
+    try:
+        os.fchmod(fd, 0o644)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+        raise
+
+
 def _current_mode() -> str:
     try:
         with open(_MODE_FILE, "r") as f:
@@ -51,10 +77,9 @@ def _set_mode(mode: str) -> str:
         mode = "DICTEE"
     try:
         os.makedirs(os.path.dirname(_MODE_FILE), exist_ok=True)
-        with open(_MODE_FILE, "w") as f:
-            f.write(mode)
+        write_text_atomic(_MODE_FILE, mode)
     except Exception:
-        log.debug("os.makedirs : échec ignoré", exc_info=True)
+        log.warning("mode.txt : écriture impossible", exc_info=True)
     return mode
 
 
@@ -65,6 +90,10 @@ def _set_mode(mode: str) -> str:
 # On retourne une COPIE (les appelants mutent parfois le dict reçu).
 _SETTINGS_CACHE = {"mtime": None, "data": None}
 _SETTINGS_LOCK = threading.Lock()
+# Sérialise TOUT le cycle lecture-modification-écriture de _save_settings :
+# sans lui, deux enregistrements concurrents relisaient le même état et le
+# dernier écrivain effaçait les clés de l'autre (66 clés réduites à 2 en 4 s).
+_SETTINGS_WRITE_LOCK = threading.Lock()
 
 
 def _load_settings() -> dict:
@@ -119,24 +148,28 @@ def _voice_memory_enabled() -> bool:
 
 
 def _save_settings(patch: dict) -> dict:
+    """Fusionne `patch` dans settings.json et renvoie l'état complet.
+
+    Lecture, fusion et écriture se font sous _SETTINGS_WRITE_LOCK ; l'écriture
+    est atomique (write_text_atomic) : ni clé perdue entre écrivains
+    concurrents, ni fichier vide vu par un lecteur."""
     try:
         os.makedirs(_APP_SUPPORT, exist_ok=True)
     except Exception:
-        log.debug("os.makedirs : échec ignoré", exc_info=True)
-    # v20 — read-modify-write SOUS verrou (appels JS->Python concurrents) +
-    # invalidation du cache (le mtime relu après écriture revalide).
-    with _SETTINGS_LOCK:
-        _SETTINGS_CACHE["data"] = None
-    current = _load_settings()
-    if isinstance(patch, dict):
-        current.update(patch)
-    try:
-        with open(_SETTINGS_FILE, "w", encoding="utf-8") as f:
-            json.dump(current, f, indent=2, ensure_ascii=False)
-    except Exception:
-        log.debug("open : échec ignoré", exc_info=True)
-    with _SETTINGS_LOCK:
-        _SETTINGS_CACHE["data"] = None
+        log.warning("dossier de support : création impossible", exc_info=True)
+    with _SETTINGS_WRITE_LOCK:
+        with _SETTINGS_LOCK:
+            _SETTINGS_CACHE["data"] = None
+        current = _load_settings()
+        if isinstance(patch, dict):
+            current.update(patch)
+        try:
+            write_text_atomic(_SETTINGS_FILE,
+                              json.dumps(current, indent=2, ensure_ascii=False))
+        except Exception:
+            log.warning("settings.json : écriture impossible", exc_info=True)
+        with _SETTINGS_LOCK:
+            _SETTINGS_CACHE["data"] = None
     return current
 
 
@@ -152,8 +185,7 @@ def _load_glossary_text() -> str:
 def _save_glossary_text(text: str) -> bool:
     try:
         os.makedirs(_APP_SUPPORT, exist_ok=True)
-        with open(_GLOSSARY_FILE, "w", encoding="utf-8") as f:
-            f.write(text or "")
+        write_text_atomic(_GLOSSARY_FILE, text or "")
         # Reset cache engine pour rechargement immédiat (helper verrouillé,
         # un seul écrivain de la sentinelle — best-effort comme avant).
         try:
@@ -163,7 +195,7 @@ def _save_glossary_text(text: str) -> bool:
             log.debug("import engine : échec ignoré", exc_info=True)
         return True
     except Exception:
-        log.debug("os.makedirs : échec ignoré", exc_info=True)
+        log.warning("glossary.txt : écriture impossible", exc_info=True)
         return False
 
 

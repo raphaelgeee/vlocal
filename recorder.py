@@ -28,6 +28,7 @@ Garanties :
 import os
 import queue
 import shutil
+import struct
 import threading
 import time
 import wave
@@ -46,6 +47,52 @@ BLOCK_SEC = 0.05           # 50 ms par bloc de capture
 # File bornée : ~10 s de marge. Si le disque est trop lent et que ça déborde,
 # on DROP des blocs (compté) plutôt que de bloquer le thread temps-réel.
 _QUEUE_MAX_BLOCKS = int(10 / BLOCK_SEC)
+
+
+# En-tête WAV poussé jusqu'au DISQUE pendant l'enregistrement. writeframes met
+# à jour l'en-tête dans le tampon et le flush d'1 s le confie à l'OS (un
+# plantage du processus laisse donc un fichier lisible) ; sans fsync, une
+# coupure de courant ou un noyau figé pouvait perdre tailles et données. Toutes
+# les HEADER_REFRESH_SEC, en-tête et trames sont rendus durables.
+HEADER_REFRESH_SEC = 10.0
+_WAV_HEADER_BYTES = 44
+
+
+def _refresh_wav_header(wav) -> None:
+    """Réécrit dans l'en-tête les tailles RIFF et data des trames déjà écrites
+    (no-op si writeframes l'a déjà fait), puis pousse le fichier jusqu'au
+    disque (fsync). _patchheader est la routine de wave (seek, écrit, revient)."""
+    if not wav._headerwritten:          # aucune trame encore : rien à décrire
+        return
+    wav._patchheader()
+    wav._file.flush()
+    os.fsync(wav._file.fileno())
+
+
+def repair_wav_header(path) -> bool:
+    """Répare l'en-tête d'un WAV PCM laissé par un enregistrement interrompu :
+    tailles RIFF et data recalculées depuis la taille du fichier. Ne touche
+    qu'un en-tête canonique de 44 octets (celui qu'écrit wave). Renvoie True
+    si l'en-tête a été corrigé."""
+    size = os.path.getsize(path)
+    if size < _WAV_HEADER_BYTES:
+        return False
+    with open(path, "r+b") as f:
+        head = f.read(_WAV_HEADER_BYTES)
+        if head[0:4] != b"RIFF" or head[8:12] != b"WAVE" or head[36:40] != b"data":
+            return False
+        block_align = struct.unpack("<H", head[32:34])[0] or 1
+        data = size - _WAV_HEADER_BYTES
+        data -= data % block_align
+        if struct.unpack("<L", head[40:44])[0] == data:
+            return False
+        f.seek(4)
+        f.write(struct.pack("<L", 36 + data))
+        f.seek(40)
+        f.write(struct.pack("<L", data))
+        f.flush()
+        os.fsync(f.fileno())
+    return True
 
 
 def _free_mb(path: Path) -> int:
@@ -150,6 +197,7 @@ class MeetingRecorder:
         surveille l'espace disque. Ne lève jamais (best-effort)."""
         last_flush = time.perf_counter()
         last_disk_check = last_flush
+        last_header = last_flush
         try:
             while True:
                 try:
@@ -174,6 +222,14 @@ class MeetingRecorder:
                     except Exception:
                         pass
                     last_flush = now
+                if now - last_header > HEADER_REFRESH_SEC:
+                    try:
+                        _refresh_wav_header(wav)
+                    except Exception as e:
+                        # L'écriture continue ; seul l'en-tête intermédiaire
+                        # manque (la fermeture l'écrira de toute façon).
+                        print(f"[recorder] en-tête WAV non rafraîchi : {e}")
+                    last_header = now
                 # Surveillance disque toutes les ~5 s
                 if now - last_disk_check > 5.0:
                     if _free_mb(REC_DIR) < STOP_FREE_MB:

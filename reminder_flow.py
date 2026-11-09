@@ -40,12 +40,24 @@ def _fire_reminder(titre: str):
             % json.dumps(titre))
     except Exception:
         log.debug("_ui : échec ignoré", exc_info=True)
-    try:
-        if sys.platform == "darwin":
+    if sys.platform == "darwin":
+        _request_dock_attention()
+
+
+def _request_dock_attention():
+    """Rebond de l'icône du Dock. AppKit n'est sûr que sur le thread
+    principal : l'appel y est confié (le rappel sonne sur un fil Timer)."""
+    def _bounce():
+        try:
             from AppKit import NSApplication
-            NSApplication.sharedApplication().requestUserAttention_(1)  # rebond Dock
+            NSApplication.sharedApplication().requestUserAttention_(1)
+        except Exception:
+            log.warning("requestUserAttention_ KO", exc_info=True)
+    try:
+        from Foundation import NSOperationQueue
+        NSOperationQueue.mainQueue().addOperationWithBlock_(_bounce)
     except Exception:
-        log.debug("requestUserAttention_ : échec ignoré", exc_info=True)
+        log.warning("rebond du Dock : file principale indisponible", exc_info=True)
 
 
 # v20 — Timers de rappel TRAÇABLES : avant, un rappel supprimé ou coché

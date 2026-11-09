@@ -43,6 +43,14 @@ _meeting_state = {
 _meeting_lock = threading.RLock()
 
 
+def meeting_in_progress() -> bool:
+    """Une réunion est-elle en enregistrement ou en traitement (pipeline,
+    import, réessai) ? Lu sous verrou : état cohérent avec les transitions."""
+    with _meeting_lock:
+        return bool(_meeting_state.get("recording")
+                    or _meeting_state.get("pipeline_busy"))
+
+
 def _obsidian_meeting_sync(meeting_id):
     """v1.1.0 — Écrit (ou met à jour) la note Obsidian d'une réunion si un coffre
     est connecté. Appelé à la fin du pipeline, après une ré-analyse et après un
@@ -87,6 +95,10 @@ MAX_AUTO_SPEAKERS = 6
 # d'extraction ~0,2-0,6 s/min d'audio). Mesuré : 34 min -> frise+attribution en
 # ~20 s, RSS principal 207 Mo.
 GUIDED_MAX_MIN = 240
+# Plein débit GPU (engine.transcribe_import_mlx) : enveloppe RAM mesurée et
+# verrouillée jusqu'à 45 min d'audio. Au-delà, chemin fenêtré (import réunion)
+# ou CPU par lots (fichier déposé). Point de vérité unique des deux appelants.
+IMPORT_GPU_MAX_MIN = 45
 # v3.4.0 — GARDE ANTI-OOM du repli diarisation IN-PROCESS : ce chemin (dia.diarize /
 # tuiles) lit tout le WAV en RAM + ~1 inférence CAM++/s (fuite arène ONNX ~3 Go à
 # 34 min, ~10 Go+ à 2h). Il ne sert QUE si la voie sous-process échoue (spawn KO) ou
@@ -419,7 +431,7 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
                 # prend le relais en fin de pipeline). Repli incrémental sinon.
                 # <= 45 min : enveloppe RAM mesurée/verrouillée du plein débit.
                 # Au-delà : fenêtré incrémental (RAM stable éprouvée, ~×13).
-                if _mlx.available() and not _feed_tiles and _dur_min <= 45:
+                if _mlx.available() and not _feed_tiles and _dur_min <= IMPORT_GPU_MAX_MIN:
                     try:
                         detailed = appstate.controller.engine.transcribe_import_mlx(
                             _au, sr=_sr,

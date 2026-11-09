@@ -24,6 +24,7 @@ from engine_runtime import _load_engine_async, _post_startup_model_checks
 from hotkeys import start_global_hotkey
 from lifecycle import _arm_freeze_watchdog, _lifecycle_show, _register_quit_hook
 from meetings import _meeting_state
+from recorder import repair_wav_header
 from reminder_flow import _rearm_pending_reminders
 from settings import _SHOW_REQUEST, _load_settings, _onboarding_done
 from texts import _te
@@ -90,6 +91,9 @@ def on_main_window_loaded():
 
 def after_start():
     """Étapes du démarrage, chacune isolée : un échec n'empêche pas les suivantes."""
+    # AVANT le moteur : aucune réunion ne peut être en traitement à cet instant,
+    # donc tout statut transitoire en base vient d'un processus interrompu.
+    _recover_interrupted_meetings()
     # v2 — Charge le moteur Whisper en tâche de fond TOUT DE SUITE (la
     # fenêtre est déjà affichée -> démarrage instantané).
     threading.Thread(target=_load_engine_async, daemon=True).start()
@@ -98,7 +102,7 @@ def after_start():
     _start_show_request_watch()
     threading.Thread(target=_activate_on_launch, daemon=True).start()
     threading.Thread(target=_reopen_pump, daemon=True).start()
-    threading.Timer(2.5, _check_hotkey_perm).start()
+    _daemon_timer(2.5, _check_hotkey_perm)
     # Le nettoyage complet est enregistré TOUT DE SUITE : le délégué de cycle de
     # vie l'utilisera même si la suite du démarrage échoue.
     _register_quit_hook(_perform_quit)
@@ -111,10 +115,10 @@ def after_start():
         _on_main_thread(_force_clear_window, "window")
     # v15 — Plus aucun SLM. Vlocal = Whisper large-v3-turbo, point.
     # v15 — Message de bienvenue / note Ollama (différé, non bloquant).
-    threading.Timer(1.2, _post_startup_model_checks).start()
+    _daemon_timer(1.2, _post_startup_model_checks)
     # v15 — Re-planifie les rappels à échéance future (les Timer ne
     # survivent pas à un redémarrage).
-    threading.Timer(0.8, _rearm_pending_reminders).start()
+    _daemon_timer(0.8, _rearm_pending_reminders)
     # v15 — Pré-construit le bundle de notification de marque "Vlocal"
     # (icône V premium) en arrière-plan : 1ʳᵉ notif instantanée + la
     # permission macOS est demandée tôt sous le nom Vlocal.
@@ -129,9 +133,44 @@ def after_start():
             log.debug("_EV.log : échec ignoré", exc_info=True)
 
     # Premier render des listes (après que la fenêtre soit prête).
-    threading.Timer(0.5, _refresh_lists_ui).start()
+    _daemon_timer(0.5, _refresh_lists_ui)
 
     threading.Thread(target=_update_watch, name="update-watch", daemon=True).start()
+
+
+def _recover_interrupted_meetings():
+    """Réunions interrompues (arrêt brutal pendant l'enregistrement ou le
+    traitement) : passées en « error », récupérables par « Réessayer », et
+    en-tête de leur WAV réparé pour que le réessai lise tout l'audio capté."""
+    if appstate.store is None:
+        return
+    try:
+        recovered = appstate.store.recover_interrupted_meetings()
+    except Exception:
+        log.warning("[réunion] récupération des réunions interrompues KO",
+                    exc_info=True)
+        return
+    for m in recovered:
+        wav = m.get("wav_path")
+        if not wav or not os.path.exists(wav):
+            continue
+        try:
+            if repair_wav_header(wav):
+                log.info(f"[réunion] en-tête WAV réparé (réunion {m['id']}).")
+        except Exception:
+            log.warning(f"[réunion] en-tête WAV non réparé (réunion {m['id']})",
+                        exc_info=True)
+    if recovered:
+        log.info(f"[réunion] {len(recovered)} réunion(s) interrompue(s) passée(s) "
+                 "en erreur récupérable.")
+
+
+def _daemon_timer(delay, fn):
+    """Minuteur de démarrage en fil daemon : ne retient jamais la sortie."""
+    t = threading.Timer(delay, fn)
+    t.daemon = True
+    t.start()
+    return t
 
 
 def _on_main_thread(fn, tag):
@@ -272,7 +311,7 @@ def _check_hotkey_perm():
         # tant que l'écran d'activation est affiché : on repousse jusqu'à
         # ce que l'utilisateur ait activé, pour un premier contact propre.
         if not _onboarding_done() or model_store.needs_download():
-            threading.Timer(3.0, _check_hotkey_perm).start()
+            _daemon_timer(3.0, _check_hotkey_perm)
             return
         # v1.0.3 — Demande proactive de la permission Micro (dialogue natif
         # AVFoundation, SANS ouvrir de flux audio) pour que la toute première

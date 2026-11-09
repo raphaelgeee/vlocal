@@ -31,7 +31,10 @@ from ui_bridge import _api_safe, _open_settings_modal_robust, _refresh_menubar, 
 
 log = applog.get("api_settings")
 
-_dl_in_flight = False       # v3.3 (N2) — garde anti-double téléchargement modèles
+# Un seul téléchargement des modèles à la fois : prise non bloquante du verrou
+# (le test-puis-pose d'un booléen laissait passer deux clics simultanés, donc
+# deux téléchargements et deux moteurs).
+_DL_LOCK = threading.Lock()
 
 
 class SettingsApi:
@@ -164,9 +167,15 @@ class SettingsApi:
         """v3.3 — Télécharge les modèles depuis R2 (bloquant ; progression poussée à
         l'UI via setModelProgress 0..1), puis lance le moteur. {ok:True} ou {ok:False,error}.
         Idempotent + reprise + 3 réessais par fichier (cf. model_store.download_models)."""
-        global _dl_in_flight
-        if _dl_in_flight:
+        if not _DL_LOCK.acquire(blocking=False):
             return {"ok": False, "error": "Téléchargement déjà en cours."}
+        try:
+            return self._download_models_locked()
+        finally:
+            _DL_LOCK.release()
+
+    def _download_models_locked(self):
+        """Corps de download_models, appelé sous _DL_LOCK."""
         try:   # v3.3 — espace disque suffisant pour ~2,8 Go (sinon faux diagnostic 'connexion')
             import shutil as _sh
             if _sh.disk_usage(os.path.expanduser("~")).free < 3_500_000_000:
@@ -179,24 +188,20 @@ class SettingsApi:
                     % (float(done) / total if total else 0.0))
             except Exception:
                 log.debug("_ui : échec ignoré", exc_info=True)
-        _dl_in_flight = True
         try:
-            try:
-                model_store.download_models(progress=_prog)
-            except model_store.DownloadError as e:
-                # Disque plein pendant le téléchargement : le dire clairement plutôt
-                # que le message générique « vérifiez votre connexion ».
-                if e.code == "no_space":
-                    return {"ok": False, "error": "Espace disque insuffisant : "
-                            "libérez environ 3 Go puis réessayez."}
-                raise   # autre échec définitif : _api_safe renvoie le message par défaut
-            if not _finish_model_download():
-                # S1 — DL « réussi » mais moteur introuvable : NE PAS débloquer en silence,
-                # remonter une erreur -> l'écran préparation montre Réessayer.
-                return {"ok": False, "error": "Modèles téléchargés mais moteur introuvable. Réessayez."}
-            return {"ok": True}
-        finally:
-            _dl_in_flight = False
+            model_store.download_models(progress=_prog)
+        except model_store.DownloadError as e:
+            # Disque plein pendant le téléchargement : le dire clairement plutôt
+            # que le message générique « vérifiez votre connexion ».
+            if e.code == "no_space":
+                return {"ok": False, "error": "Espace disque insuffisant : "
+                        "libérez environ 3 Go puis réessayez."}
+            raise   # autre échec définitif : _api_safe renvoie le message par défaut
+        if not _finish_model_download():
+            # S1 — DL « réussi » mais moteur introuvable : NE PAS débloquer en silence,
+            # remonter une erreur -> l'écran préparation montre Réessayer.
+            return {"ok": False, "error": "Modèles téléchargés mais moteur introuvable. Réessayez."}
+        return {"ok": True}
 
     @_api_safe(default=lambda: {})
     def get_diagnostics(self):
