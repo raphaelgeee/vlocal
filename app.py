@@ -419,6 +419,12 @@ _BT = {
     "The dictation took too long and could not be transcribed, so it was lost. Please try your dictation again.",
   "Dictée perdue (transcription trop longue). Réessayez.":
     "Dictation lost (transcription took too long). Please try again.",
+  "La transcription prend trop de temps : la dictée ne sera pas insérée. Si elle aboutit, vous la retrouverez dans l'historique.":
+    "The transcription is taking too long, so the dictation will not be inserted. If it completes, you will find it in the history.",
+  "Trop long : dictée non insérée.": "Too long: dictation not inserted.",
+  "Votre dictée a abouti trop tard pour être insérée : elle est dans l'historique.":
+    "Your dictation finished too late to be inserted. It is in the history.",
+  "Dictée retrouvée dans l'historique.": "Dictation saved in the history.",
   "Dictée réparée": "Dictation repaired",
   "La dernière dictée n'a pas abouti. Vous pouvez recommencer.":
     "The last dictation did not go through. You can start again.",
@@ -536,10 +542,20 @@ _EMPTY_TEXT_MSG = {
                         "et sécurité > Microphone, puis autorisez Vlocal et relancez.",
                         "Aucun son capté. Réessayez."),
 }
-# v1.4.4 — chien de garde de finalisation déclenché : la dictée est perdue.
+# v1.4.4 — chien de garde de finalisation déclenché (_late_dictation_messages).
+# Historique désactivé : la dictée est perdue.
 _LOST_DICTATION_TOAST = ("La dictée a pris trop de temps et n'a pas pu être "
                          "transcrite : elle est perdue. Réessayez votre dictée.")
 _LOST_DICTATION_OVERLAY = "Dictée perdue (transcription trop longue). Réessayez."
+# Historique actif : la dictée ne sera pas insérée, mais elle y sera gardée.
+_LATE_PENDING_TOAST = ("La transcription prend trop de temps : la dictée ne sera "
+                       "pas insérée. Si elle aboutit, vous la retrouverez dans "
+                       "l'historique.")
+_LATE_PENDING_OVERLAY = "Trop long : dictée non insérée."
+# Le texte tardif est arrivé et a été rangé dans l'historique.
+_LATE_SAVED_TOAST = ("Votre dictée a abouti trop tard pour être insérée : "
+                     "elle est dans l'historique.")
+_LATE_SAVED_OVERLAY = "Dictée retrouvée dans l'historique."
 
 
 def copy_to_clipboard(text: str) -> bool:
@@ -998,6 +1014,74 @@ def _start_auto_diag():
         pass
 
 
+def _polish_dictation(raw: str) -> str:
+    """Texte brut du moteur -> texte de la dictée (filtre anti-hallucination,
+    glossaire, raccourcis vocaux, commandes de mise en forme). Sans effet de
+    bord : partagé par la livraison normale et la dictée tardive. "" si rien ne
+    reste."""
+    # v3.2.8 — FILTRE anti-hallucination POST-moteur (en plus de celui d'engine.py,
+    # qu'on NE touche PAS). Attrape ce qui glisse : crédits de sous-titres hallucinés
+    # ("Transcription by CastingWords", "Sous-titres réalisés par…", amara.org) et
+    # boucles de répétition ("Er Er Er…" : un mot court répété 6x+ -> 1). Ne déclenche
+    # JAMAIS sur une vraie phrase (seuil 6 répétitions consécutives identiques).
+    try:
+        raw = re.sub(r"(?i)(transcription by castingwords|sous-titr\w*\s+(réalisé|fait|par|pour)\b[^.\n]*|sous-titrage\s+société radio-canada|amara\.org|♪+)", "", raw)
+        raw = re.sub(r"(?i)\b(\w{1,4})(?:[\s,]+\1\b){5,}", r"\1", raw)
+        raw = re.sub(r"\s{2,}", " ", raw).strip()
+    except Exception as e:
+        print(f"[dictée] filtre anti-hallucination ignoré : {e}")
+    if not raw:
+        return ""
+    # Vlocal 2 — Correction GLOSSAIRE sur la dictée (noms propres/acronymes),
+    # quel que soit le modèle utilisé par la cascade. Fidélité garantie même
+    # quand small a fast-pathé.
+    try:
+        if _store is not None:
+            gl = _store.glossary_pairs()
+            if gl:
+                raw = processor.apply_glossary(raw, gl)
+    except Exception as e:
+        print(f"[dictée] glossaire ignoré : {e}")
+    # Vlocal 2 — Raccourcis vocaux (snippets) : on dicte « ma signature »
+    # -> insertion du bloc enregistré. Appliqué sur TOUS les modes.
+    try:
+        if _store is not None:
+            pairs = _store.snippet_pairs()
+            if pairs:
+                raw = processor.apply_glossary(raw, pairs)
+    except Exception as e:
+        print(f"[dictée] raccourcis vocaux ignorés : {e}")
+    # v1.0.14 — Commandes vocales de mise en forme (« à la ligne », « virgule »…),
+    # APRÈS le glossaire/snippets et AVANT la copie/insertion. DICTÉE uniquement
+    # (jamais en RÉUNION, qui a son propre pipeline). La moindre erreur -> texte
+    # inchangé.
+    try:
+        if _current_mode() != "REUNION":
+            raw = processor.apply_vocal_commands(raw)
+    except Exception as e:
+        print(f"[dictée] commandes vocales ignorées : {e}")
+    return raw
+
+
+def _history_keeps_dictations() -> bool:
+    """Le réglage de stockage garde-t-il le texte des dictées (« all ») ?"""
+    return _store is not None and _load_settings().get("history_scope", "all") == "all"
+
+
+def _late_dictation_messages() -> tuple:
+    """(toast, overlay) quand le chien de garde déclare une dictée en retard :
+    elle ne sera pas insérée ; si l'historique la garde, on dit où la retrouver
+    si elle finit par arriver, sinon on dit qu'elle est perdue."""
+    try:
+        keeps = _history_keeps_dictations()
+    except Exception as e:
+        print(f"[dictée] réglage d'historique illisible : {e}")
+        keeps = False
+    if keeps:
+        return _LATE_PENDING_TOAST, _LATE_PENDING_OVERLAY
+    return _LOST_DICTATION_TOAST, _LOST_DICTATION_OVERLAY
+
+
 class _DictationStop(threading.Event):
     """Événement d'arrêt PROPRE À UNE dictée (v1.0.22), qui porte aussi ce que le
     worker de niveau a constaté pendant l'enregistrement (v1.4.4) : un flux mort
@@ -1006,6 +1090,70 @@ class _DictationStop(threading.Event):
     def __init__(self):
         super().__init__()
         self.stream_dead = False
+
+
+class _FinalizeWatch:
+    """Chien de garde et battement de cœur d'UNE finalisation de dictée.
+
+    v1.4.4 :
+      - le chien de garde est ARMÉ quand vient le tour de la dictée dans la file
+        FIFO (arm), plus au relâchement : une dictée enchaînée derrière une
+        dictée lente n'est plus déclarée en retard pour le temps passé à attendre ;
+      - claim() tranche, sous le verrou de la file, entre « résultat livré » et
+        « déclaré en retard » : jamais les deux, donc un seul incident et un seul
+        message par appui ;
+      - le battement (superviseur) couvre l'attente puis le budget, et se tait
+        au-delà : une vraie panne redevient visible.
+    `on_fire` est appelé une fois, hors verrou, si le budget est dépassé."""
+
+    def __init__(self, cv, budget_s, on_fire, on_beat):
+        self._cv = cv
+        self.budget_s = budget_s
+        self._on_fire = on_fire
+        self._on_beat = on_beat
+        self._done = threading.Event()
+        self._settled = False   # claim(), le déclenchement ou disarm() a tranché
+        self.fired = False
+        self.beat_until = time.time() + budget_s
+
+    def start(self):
+        """Au relâchement : battement de cœur seul."""
+        threading.Thread(target=self._beat_loop, name="finalize-beat", daemon=True).start()
+
+    def arm(self):
+        """Au tour de la dictée dans la file : le budget commence maintenant."""
+        self.beat_until = time.time() + self.budget_s
+        threading.Thread(target=self._watch, name="finalize-watchdog", daemon=True).start()
+
+    def claim(self) -> bool:
+        """True : le résultat sera livré, le chien de garde ne déclenchera plus.
+        False : la dictée a déjà été déclarée en retard, rien ne doit être livré."""
+        with self._cv:
+            self._settled = True
+            return not self.fired
+
+    def disarm(self):
+        """Fin de la finalisation, quelle qu'en soit l'issue."""
+        with self._cv:
+            self._settled = True
+        self._done.set()
+
+    def _watch(self):
+        if self._done.wait(self.budget_s):
+            return
+        with self._cv:
+            if self._settled:
+                return
+            self._settled = self.fired = True
+        self._on_fire()
+
+    def _beat_loop(self):
+        # Ne s'arrête qu'à la fin de la finalisation : arm() peut repousser
+        # beat_until après une longue attente dans la file. Au-delà, il se tait
+        # et laisse voir la panne.
+        while not self._done.wait(2.0):
+            if time.time() < self.beat_until:
+                self._on_beat()
 
 
 class DictationController:
@@ -1469,90 +1617,86 @@ class DictationController:
         self._fin_beat = time.time()
         # v29.2 — WATCHDOG DE FINALISATION (anticipe TOUTE la classe « dictée
         # infinie ») : la finalisation peut se figer AILLEURS que dans le worker
-        # GPU (live-tail, fusion, verrou, attente disque...) — le timeout MLX ne
-        # couvre que lui. Si _do_finalize ne rend pas la main en FINALIZE_WATCHDOG_S,
-        # on RÉCUPÈRE de force : libère _busy + nettoie l'overlay -> la dictée
-        # suivante repart, plus jamais de blocage infini. Le thread figé est
-        # abandonné (daemon) ; son éventuel réveil tardif est sans effet utile.
+        # GPU (fusion, verrou, attente disque...). Si la dictée ne rend pas la
+        # main dans son budget, on RÉCUPÈRE de force : libère _busy, avance la
+        # file FIFO et prévient l'utilisateur ; le résultat tardif n'est jamais
+        # inséré (voir _late_dictation). v1.4.4 : armé au TOUR de la dictée.
         _wd_s = _finalize_budget_s(_my_dur)   # v1.1.0 : proportionnel à l'audio
-        _fin_done = threading.Event()
 
-        _wd_fired = [False]   # le watchdog a-t-il déjà rendu notre ticket ?
-
-        def _finalize_watchdog():
-            if _fin_done.wait(_wd_s):
-                return
+        def _on_fire():
             # v1.0.22 — chaînage : libère le compteur + AVANCE la file FIFO
             # (une finalisation figée ne doit jamais retenir la suivante).
             with self._fin_cv:
-                if _fin_done.is_set():
-                    return   # la finalisation vient de finir (course à la seconde pile)
-                _wd_fired[0] = True
                 self._fin_inflight = max(0, self._fin_inflight - 1)
                 self._fin_serving = max(self._fin_serving, _my_ticket + 1)
                 self._busy = self._fin_inflight > 0
                 self._fin_cv.notify_all()
             _end_activity(_my_act)
             print(f"[dictée] finalisation FIGÉE > {_wd_s:.0f}s -> "
-                  "récupération forcée (watchdog), dictée perdue.")
+                  "récupération forcée (watchdog), dictée non insérée.")
             if _EV: _EV.log(_EV.E.FINALIZE_TIMEOUT, s=round(_wd_s), audio_s=round(_my_dur, 1))
-            # v1.4.4 — la dictée est PERDUE (son résultat tardif est jeté, voir
-            # plus bas) : on le dit. Le battement couvre tout le budget, donc le
-            # superviseur n'intervient qu'après ce chien de garde et ne peut plus
-            # annoncer « Dictée réparée » sur cette dictée-là.
+            toast_msg, overlay_msg = _late_dictation_messages()
             try:
-                overlay.error(_te(_LOST_DICTATION_OVERLAY))
+                overlay.error(_te(overlay_msg))
                 _schedule_overlay_hide(4.0)
             except Exception as e_ov:
                 print(f"[dictée] overlay indisponible : {e_ov}")
-            _toast(_LOST_DICTATION_TOAST, kind="error")
-        threading.Thread(target=_finalize_watchdog, name="finalize-watchdog",
-                         daemon=True).start()
+            _toast(toast_msg, kind="error")
+
+        def _on_beat():
+            self._fin_beat = time.time()
+
         # v1.0.22 — BATTEUR BORNÉ. La transcription est un appel ATOMIQUE (GPU) :
         # sans battement pendant cette étape, le superviseur couperait à 9 s une
-        # transcription parfaitement saine (et le texte, arrivé après, ne serait
-        # jamais inséré). Le batteur couvre donc le TEMPS LÉGITIME du moteur
-        # (FINALIZE_WATCHDOG_S, calé au-dessus du timeout MLX 22 s) — et PAS
-        # au-delà : passé ce délai il se tait, l'inactivité redevient visible et
-        # l'auto-réparation reprend tous ses droits sur une VRAIE panne.
-        _beat_until = time.time() + _wd_s
-
-        def _fin_heartbeat():
-            while not _fin_done.wait(2.0):
-                if time.time() >= _beat_until:
-                    return   # au-delà du temps légitime : on laisse voir la panne
-                self._fin_beat = time.time()
-        threading.Thread(target=_fin_heartbeat, name="finalize-beat",
-                         daemon=True).start()
-        _lost = False
+        # transcription parfaitement saine. Le batteur couvre l'attente du tour
+        # puis le budget, et PAS au-delà : l'auto-réparation garde ses droits
+        # sur une VRAIE panne.
+        watch = _FinalizeWatch(self._fin_cv, _wd_s, _on_fire, _on_beat)
+        watch.start()
         try:
-            text = self._do_finalize(notify_ui, _my_evt, _my_worker, _my_tail,
-                                     _my_ticket, _my_epoch)
+            return self._do_finalize(notify_ui, _my_evt, _my_worker, _my_tail,
+                                     _my_ticket, _my_epoch, watch)
         finally:
-            _fin_done.set()
+            watch.disarm()
             # v1.0.22 — rendre le ticket UNE seule fois : si le watchdog l'a déjà
             # rendu (finalisation qui se réveille tardivement), on n'avance que
             # la file (max idempotent), sans re-décrémenter le compteur.
             with self._fin_cv:
-                _lost = _wd_fired[0]
-                if not _lost:
+                if not watch.fired:
                     self._fin_inflight = max(0, self._fin_inflight - 1)
                 self._fin_serving = max(self._fin_serving, _my_ticket + 1)
                 self._busy = self._fin_inflight > 0
                 self._fin_cv.notify_all()
             # v21 — fin de l'assertion anti-App Nap (succès OU échec).
             _end_activity(_my_act)
-        if _lost:
-            # v1.4.4 — l'utilisateur a déjà lu « dictée perdue » : un texte qui
-            # arrive après coup n'est pas inséré au curseur (il tomberait, sans
-            # prévenir, dans ce qu'il fait maintenant).
-            print("[dictée] résultat arrivé après le chien de garde -> non inséré.")
-            self._outcome.overlay = _LOST_DICTATION_OVERLAY
-            return ""
-        return text
 
-    def _do_finalize(self, notify_ui: bool = True, my_evt=None, my_worker=None,
-                     my_tail=None, my_ticket: int = 0, my_epoch: int = 0) -> str:
+    def _late_dictation(self, raw: str) -> str:
+        """v1.4.4 — Résultat arrivé APRÈS le chien de garde : l'utilisateur a déjà
+        lu que la dictée ne serait pas insérée. On ne perd pas le texte, mais on
+        ne touche à rien de ce qu'il fait maintenant : ni curseur, ni
+        presse-papier, ni compteurs, ni rappels. Le texte va à l'historique (si
+        l'utilisateur le garde) et on le lui dit. Aucun incident de plus :
+        finalize_timeout a déjà compté cet appui. Rend toujours ""."""
+        raw = _polish_dictation(raw)
+        if not (raw and _history_keeps_dictations()):
+            print("[dictée] résultat tardif vide ou historique désactivé -> rien à garder.")
+            self._outcome.overlay = _late_dictation_messages()[1]
+            return ""
+        try:
+            _store.add_dictation(raw, mode="DICTEE")
+        except Exception as e:
+            print(f"[dictée] dictée tardive non sauvegardée : {e}")
+            self._outcome.overlay = _LOST_DICTATION_OVERLAY
+            _toast(_LOST_DICTATION_TOAST, kind="error")
+            return ""
+        print("[dictée] résultat tardif rangé dans l'historique (non inséré).")
+        _refresh_lists_ui()
+        self._outcome.overlay = _LATE_SAVED_OVERLAY
+        _toast(_LATE_SAVED_TOAST, kind="info")
+        return ""
+
+    def _do_finalize(self, notify_ui: bool, my_evt, my_worker, my_tail,
+                     my_ticket: int, my_epoch: int, watch: "_FinalizeWatch") -> str:
         # v1.0.22 — chaînage : on opère sur l'état DÉTACHÉ de CETTE dictée
         # (my_evt/my_worker/my_tail, détachés sous verrou par stop_and_finalize) —
         # les champs self.* peuvent déjà appartenir à la dictée suivante.
@@ -1621,17 +1765,27 @@ class DictationController:
             if self._epoch != my_epoch:
                 print("[dictée] finalisation invalidée par un reset -> abandon.")
                 return ""
+        watch.arm()   # v1.4.4 : notre tour est venu, le budget commence ici
         _tt0 = time.perf_counter()
+        raw, stalled, crash = "", None, None
         try:
             raw = self.engine.stop_and_transcribe(
                 fast=(speed == "rapide"), adaptive=(speed == "auto"),
                 live_tail=lt, audio=audio)
         except TimeoutError as e:
+            stalled = e
+        except Exception as e:
+            crash = e
+        # v1.4.4 — UN verdict par appui : si le chien de garde a déjà parlé, ni
+        # incident, ni message, ni insertion de plus.
+        if not watch.claim():
+            return self._late_dictation(raw)
+        if stalled is not None:
             # v29.1 — figeage GPU rare sous dictée intensive : mlx_engine a borné
             # l'inférence (60 s) et RÉINITIALISÉ le worker. On ne bloque pas : le
             # verrou _busy est libéré par le finally de stop_and_finalize, et la
             # dictée suivante repart sur un worker neuf (fini le blocage 180 s).
-            print(f"[dictée] transcription interrompue ({e}).")
+            print(f"[dictée] transcription interrompue ({stalled}).")
             if _EV: _EV.log(_EV.E.GPU_TIMEOUT)
             # v29.2 — et on NETTOIE l'overlay (sinon il restait coincé en
             # « transcription… » et chevauchait l'UI -> panneau fantôme).
@@ -1657,70 +1811,31 @@ class DictationController:
         # supprimé en v15, le brut est le seul produit.
         # v9 TOP-5 #2 / v11 — Feedback explicite micro non autorisé / silence.
         # Aucun emoji (cf. brief V11). Texte clair sans jargon.
+        if crash is not None:
+            print(f"[dictée] transcription en échec : {crash}")
         if not raw:
             # v1.4.4 — texte vide : on dit POURQUOI, d'après le moteur
             # (engine.last_empty_reason) et le signal capté. Avant, tout ce
             # qui n'était pas un signal nul devenait « silence », panne moteur
-            # comprise, avec un « son très faible » qui mentait.
+            # comprise, avec un « son très faible » qui mentait. C'est ICI, et
+            # nulle part ailleurs, que transcribe_fail est journalisé.
             rms = float(getattr(self.engine, "last_rms", 0.0))
             peak = float(getattr(self.engine, "last_peak", 0.0))
-            reason = self.engine.last_empty_reason()
+            reason = "fail" if crash is not None else self.engine.last_empty_reason()
             code = (_EV.empty_text_code(reason, rms, peak) if _EV
                     else ("transcribe_fail" if reason == "fail" else "silence"))
             # Un flux mort a déjà été journalisé pendant l'enregistrement
             # (mic_device_fail:stream_dead) : même appui, même cause, un seul incident.
             if _EV and not (code == _EV.E.MIC_ZERO_SIGNAL and my_evt.stream_dead):
-                _EV.log(code, reason=reason, rms=round(rms, 5), peak=round(peak, 5))
+                _EV.log(code, reason=reason, rms=round(rms, 5), peak=round(peak, 5),
+                        error=type(crash).__name__ if crash is not None else None)
             toast_msg, self._outcome.overlay = _EMPTY_TEXT_MSG[code]
             _toast(toast_msg, kind="error")
-            return raw
+            return ""
 
-        # v3.2.8 — FILTRE anti-hallucination POST-moteur (en plus de celui d'engine.py,
-        # qu'on NE touche PAS). Attrape ce qui glisse : crédits de sous-titres hallucinés
-        # ("Transcription by CastingWords", "Sous-titres réalisés par…", amara.org) et
-        # boucles de répétition ("Er Er Er…" : un mot court répété 6x+ -> 1). Ne déclenche
-        # JAMAIS sur une vraie phrase (seuil 6 répétitions consécutives identiques).
-        try:
-            import re as _re_h
-            raw = _re_h.sub(r"(?i)(transcription by castingwords|sous-titr\w*\s+(réalisé|fait|par|pour)\b[^.\n]*|sous-titrage\s+société radio-canada|amara\.org|♪+)", "", raw)
-            raw = _re_h.sub(r"(?i)\b(\w{1,4})(?:[\s,]+\1\b){5,}", r"\1", raw)
-            raw = _re_h.sub(r"\s{2,}", " ", raw).strip()
-        except Exception:
-            pass
+        raw = _polish_dictation(raw)
         if not raw:
             return ""   # hallucination pure scrubée -> rien à insérer (mieux que du faux)
-
-        # Vlocal 2 — Correction GLOSSAIRE sur la dictée (noms propres/acronymes),
-        # quel que soit le modèle utilisé par la cascade. Fidélité garantie même
-        # quand small a fast-pathé.
-        try:
-            if _store is not None:
-                gl = _store.glossary_pairs()
-                if gl:
-                    raw = processor.apply_glossary(raw, gl)
-        except Exception:
-            pass
-
-        # Vlocal 2 — Raccourcis vocaux (snippets) : on dicte « ma signature »
-        # -> insertion du bloc enregistré. Appliqué sur TOUS les modes.
-        try:
-            if _store is not None:
-                pairs = _store.snippet_pairs()
-                if pairs:
-                    raw = processor.apply_glossary(raw, pairs)
-        except Exception:
-            pass
-
-        # v1.0.14 — Commandes vocales de mise en forme (« à la ligne », « virgule »…),
-        # APRÈS le glossaire/snippets et AVANT la copie/insertion. DICTÉE uniquement
-        # (jamais en RÉUNION, qui a son propre pipeline). Isolé, déterministe, et
-        # protégé : la moindre erreur -> texte inchangé (la fonction retourne
-        # l'original). Aucune autre étape du pipeline n'est modifiée.
-        try:
-            if _current_mode() != "REUNION":
-                raw = processor.apply_vocal_commands(raw)
-        except Exception:
-            pass
 
         # v29.10 — la copie EST le produit (collage Cmd+V). Si elle échoue (rare),
         # on NE ment PAS avec flashCopied : on prévient clairement, sinon le texte
@@ -1768,8 +1883,7 @@ class DictationController:
         try:
             # v1.0.7 — un VRAI rappel daté est rangé dans Rappels, PAS aussi en
             # dictée (fini le doublon « rappel + dictée » remonté par Raphael).
-            if _current_mode() == "DICTEE" and _store is not None \
-                    and _load_settings().get("history_scope", "all") == "all" \
+            if _current_mode() == "DICTEE" and _history_keeps_dictations() \
                     and not _looks_like_timed_reminder(raw):
                 _store.add_dictation(raw, mode="DICTEE")
                 # Bug #4 — rafraîchit l'accueil (mots / temps gagné / sessions du

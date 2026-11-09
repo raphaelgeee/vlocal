@@ -60,6 +60,19 @@ class E:
     HOTKEY_UNTRUSTED = "hotkey_untrusted"      # onboarding fini mais Accessibilité non accordée : raccourci muet hors de Vlocal
 
 
+# v1.4.4 — Étapes `where` connues : la télémétrie ne transmet QUE celles-ci
+# (« code:where »), jamais une valeur libre. Une étape nouvelle s'ajoute ici.
+WHERE_CODES = frozenset({
+    # ouverture du micro (MicStartTrace) et incidents micro hors escalade
+    "start", "start_retry", "fallback_builtin", "fallback_exhausted",
+    "stream_dead", "start_lock_stuck",
+    # moyen de récupération du micro (mic_recovered)
+    "hard_reset", "builtin", "device",
+    # diarisation retombée sur le repli (diar_fallback)
+    "rediar_exception", "rediar_empty",
+})
+
+
 def log(code, level="error", **context):
     """Journalise un événement : (code stable, niveau, contexte métadonnées).
     Best-effort, ne lève jamais. `text` est explicitement EXCLU du contexte."""

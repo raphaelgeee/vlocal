@@ -125,18 +125,97 @@ class TestUnAppuiUnIncident(unittest.TestCase):
             errors.MicStartTrace().log_outcome(False, None)
         self.assertEqual(j.evts, [])
 
-    def test_app_ne_journalise_plus_chaque_etape(self):
-        """Garde-fou : dans app.py, l'escalade passe par la trace ; les seuls
-        mic_device_fail directs restants sont des appuis distincts (flux mort
-        pendant l'enregistrement, verrou de démarrage figé)."""
-        src = _source_app()
+
+class _FauxMicro:
+    """Moteur dont l'ouverture du micro échoue selon un scénario : `pannes` =
+    ensemble des tentatives qui lèvent ("start", "builtin", "device:A"...)."""
+
+    def __init__(self, pannes, devices=("A", "B")):
+        self.pannes = set(pannes)
+        self.devices = list(devices)
+        self.tentatives = []
+        self.resets = 0
+
+    def start_recording(self, prefer=None, device=None, deadline=None):
+        nom = "builtin" if prefer == "builtin" else (f"device:{device}" if device else "start")
+        n = sum(1 for t in self.tentatives if t == nom)
+        self.tentatives.append(nom)
+        cle = f"{nom}#{n}" if f"{nom}#{n}" in self.pannes else nom
+        if cle in self.pannes:
+            raise OSError(f"PortAudio : {nom} indisponible")
+        return True
+
+    def hard_mic_reset(self, timeout=None):
+        self.resets += 1
+        return True
+
+    def list_input_devices(self):
+        return self.devices
+
+    # Chemin « micro ouvert » de start()
+    def rms_recent(self, s):
+        return 0.0
+
+    def seconds_since_audio(self):
+        return 0.0
+
+    def prewarm(self, want_small=False):
+        pass
+
+
+class TestEscaladeReelle(unittest.TestCase):
+    """Le VRAI DictationController.start de app.py, micro simulé : chaque issue
+    de l'escalade donne exactement un événement."""
+
+    def _appui(self, pannes):
+        ns = {"threading": threading, "time": time, "VlocalEngine": object, "_EV": errors,
+              "_mic_fail_count": [0], "_mic_grabber_name": lambda: None,
+              "_toast": lambda m, kind="info": None, "_ui": lambda code: None,
+              "overlay": types.SimpleNamespace(level=lambda r: None, info=lambda *a: None),
+              "_te": lambda t: t, "_begin_activity": lambda nom: None,
+              "_load_settings": lambda: {"dictation_speed": "rapide"},
+              "_DictationLiveTail": None}
+        _charge_depuis_app({"_time_left", "_DictationStop", "DictationController"}, ns)
+        moteur = _FauxMicro(pannes)
+        c = ns["DictationController"](moteur)
+        with _JournalCapture() as j:
+            ok = c.start()
+        c._stop_evt.set()
+        return ok, j.evts, moteur
+
+    def test_echec_complet_un_seul_incident(self):
+        ok, evts, moteur = self._appui({"start", "builtin", "device:A", "device:B"})
+        self.assertFalse(ok)
+        self.assertEqual(moteur.tentatives, ["start", "start", "builtin", "device:A", "device:B"])
+        self.assertEqual(len(evts), 1)
+        code, level, ctx = evts[0]
+        self.assertEqual((code, ctx["where"]), (E.MIC_DEVICE_FAIL, "fallback_exhausted"))
+        self.assertEqual(ctx["steps"], "start,start_retry,fallback_builtin,fallback_exhausted")
+
+    def test_recuperations_une_seule_entree(self):
+        cas = [({"start#0"}, "hard_reset"),
+               ({"start"}, "builtin"),
+               ({"start", "builtin", "device:A"}, "device")]
+        for pannes, via in cas:
+            ok, evts, _ = self._appui(pannes)
+            self.assertTrue(ok, via)
+            self.assertEqual([(e[0], e[2]["where"]) for e in evts], [(E.MIC_RECOVERED, via)])
+            self.assertIn(evts[0][2]["where"], errors.WHERE_CODES)
+
+    def test_micro_sain_aucun_incident(self):
+        ok, evts, _ = self._appui(set())
+        self.assertTrue(ok)
+        self.assertEqual(evts, [])
+
+    def test_etapes_journalisees_dans_la_liste_fermee(self):
+        """Toute étape `where` écrite dans app.py est connue de la télémétrie
+        (sinon elle ne serait jamais transmise, en silence)."""
         import re
-        directs = re.findall(r"_EV\.log\(_EV\.E\.MIC_DEVICE_FAIL,\s*where=\"(\w+)\"", src)
-        self.assertEqual(sorted(directs), ["start_lock_stuck", "stream_dead"])
-        self.assertNotIn("_EV.log(_EV.E.MIC_RECOVERED", src)
-        etapes = re.findall(r"_trace\.fail\(\"(\w+)\"", src)
-        self.assertEqual(etapes, ["start", "start_retry", "fallback_builtin", "fallback_exhausted"])
-        self.assertEqual(src.count("_trace.log_outcome("), 1)
+        src = _source_app()
+        ecrites = set(re.findall(r"where=\"(\w+)\"", src)) | set(re.findall(r"_trace\.fail\(\"(\w+)\"", src))
+        ecrites |= set(re.findall(r"_via(?:, _dev_ok)? = \"(\w+)\"", src))
+        self.assertTrue(ecrites)
+        self.assertLessEqual(ecrites, errors.WHERE_CODES)
 
 
 class TestTexteVide(unittest.TestCase):
@@ -171,7 +250,9 @@ class TestTexteVide(unittest.TestCase):
         self.assertEqual(set(msgs), codes)
         bt = _litteral_app("_BT")
         textes = [t for paire in msgs.values() for t in paire]
-        textes += [_litteral_app("_LOST_DICTATION_TOAST"), _litteral_app("_LOST_DICTATION_OVERLAY")]
+        textes += [_litteral_app(n) for n in (
+            "_LOST_DICTATION_TOAST", "_LOST_DICTATION_OVERLAY", "_LATE_PENDING_TOAST",
+            "_LATE_PENDING_OVERLAY", "_LATE_SAVED_TOAST", "_LATE_SAVED_OVERLAY")]
         for t in textes:
             self.assertTrue(bt.get(t), f"pas de traduction anglaise : {t!r}")
             self.assertNotIn("—", t + bt[t])
@@ -219,61 +300,193 @@ class TestBudgetDeFinalisation(unittest.TestCase):
         self.assertNotIn("dictation_gpu_timeout", _source_app())
 
 
-class TestChienDeGarde(unittest.TestCase):
-    """Le chien de garde déclenché : journalisé, dit à l'utilisateur, et le
-    résultat tardif n'est pas rendu pour insertion."""
+class _FauxMoteurDictee:
+    """VlocalEngine simulé : chaque transcription consomme un scénario
+    (durée, texte | exception, raison du vide)."""
 
-    def setUp(self):
-        self.evts, self.toasts, self.overlays = [], [], []
-        ev = types.SimpleNamespace(E=E, log=lambda code, level="error", **ctx: self.evts.append((code, ctx)))
-        self.ns = _charge_depuis_app(
-            {"_DictationStop", "DictationController", "_LOST_DICTATION_TOAST",
-             "_LOST_DICTATION_OVERLAY"},
-            {"threading": threading, "time": time, "VlocalEngine": object, "_EV": ev,
-             "_finalize_budget_s": lambda d: 0.3,
-             "_end_activity": lambda tok: None,
-             "_te": lambda s: s,
-             "_toast": lambda m, kind="info": self.toasts.append(m),
-             "_schedule_overlay_hide": lambda d: None,
-             "overlay": types.SimpleNamespace(error=lambda m: self.overlays.append(m))})
+    sample_rate = 16000
 
-    def _controleur(self, duree_finalisation, texte="bonjour"):
-        Base = self.ns["DictationController"]
+    def __init__(self, scenarios):
+        self._scenarios = list(scenarios)
+        self._raison = None
+        self.last_rms, self.last_peak = 0.02, 0.2
+        self.transcriptions = 0
 
-        class Ctrl(Base):
-            def _do_finalize(self, *a, **k):
-                time.sleep(duree_finalisation)
-                return texte
+    def stop_recording(self):
+        return [0.0] * (self.sample_rate * 3)
 
-        c = Ctrl.__new__(Ctrl)
+    def stop_and_transcribe(self, **kw):
+        duree, issue, raison = self._scenarios.pop(0)
+        self.transcriptions += 1
+        time.sleep(duree)
+        self._raison = raison
+        if isinstance(issue, BaseException):
+            raise issue
+        return issue
+
+    def last_empty_reason(self):
+        return self._raison
+
+    def last_backend(self):
+        return "cpu"
+
+
+class _FauxStore:
+    def __init__(self):
+        self.dictees, self.usages = [], []
+
+    def glossary_pairs(self):
+        return []
+
+    def snippet_pairs(self):
+        return []
+
+    def word_count(self, t):
+        return len(t.split())
+
+    def record_usage(self, mots, duree):
+        self.usages.append(mots)
+
+    def add_dictation(self, texte, mode):
+        self.dictees.append(texte)
+
+
+class TestFinalisationReelle(unittest.TestCase):
+    """Le VRAI stop_and_finalize / _do_finalize de app.py, moteur simulé.
+    Garanties : un seul incident par appui, rien d'inséré ni de copié après le
+    chien de garde, le texte tardif gardé dans l'historique, et une dictée
+    enchaînée derrière une dictée lente qui n'est pas déclarée perdue."""
+
+    BUDGET = 0.6
+
+    def _monte(self, scenarios, historique="all"):
+        self.evts, self.toasts, self.overlays, self.copies = [], [], [], []
+        self.store = _FauxStore()
+        self.reglages = {"history_scope": historique, "dictation_speed": "auto"}
+        ev = types.SimpleNamespace(
+            E=E, empty_text_code=errors.empty_text_code,
+            log=lambda code, level="error", **ctx: self.evts.append(code))
+        faux_engine = types.ModuleType("engine")
+        faux_engine._qos_user_initiated = lambda: None
+        p = mock.patch.dict(sys.modules, {"engine": faux_engine})
+        p.start()
+        self.addCleanup(p.stop)
+        import processor
+        ns = {
+            "threading": threading, "time": time, "re": __import__("re"),
+            "processor": processor, "VlocalEngine": object, "_EV": ev,
+            "_finalize_budget_s": lambda d: self.BUDGET,
+            "_end_activity": lambda tok: None, "_te": lambda t: t,
+            "_toast": lambda m, kind="info": self.toasts.append(m),
+            "_schedule_overlay_hide": lambda d: None,
+            "overlay": types.SimpleNamespace(error=lambda m: self.overlays.append(m)),
+            "_store": self.store, "_load_settings": lambda: self.reglages,
+            "_save_settings": lambda d: None, "_current_mode": lambda: "DICTEE",
+            "copy_to_clipboard": lambda t: self.copies.append(t) or True,
+            "_ui": lambda code: None, "permissions": None, "_acc_warned": [False],
+            "_telemetry": None, "_looks_like_timed_reminder": lambda t: False,
+            "_refresh_lists_ui": lambda: None, "_post_process_by_mode": lambda raw, mode: None,
+        }
+        _charge_depuis_app(
+            {"_EMPTY_TEXT_MSG", "_LOST_DICTATION_TOAST", "_LOST_DICTATION_OVERLAY",
+             "_LATE_PENDING_TOAST", "_LATE_PENDING_OVERLAY", "_LATE_SAVED_TOAST",
+             "_LATE_SAVED_OVERLAY", "_polish_dictation", "_history_keeps_dictations",
+             "_late_dictation_messages", "_DictationStop", "_FinalizeWatch",
+             "DictationController"}, ns)
+        self.ns = ns
+        c = ns["DictationController"].__new__(ns["DictationController"])
+        c.engine = _FauxMoteurDictee(scenarios)
         c._lock = threading.Lock()
-        c._active = True
-        c._stop_evt = self.ns["_DictationStop"]()
+        c._stop_evt = ns["_DictationStop"]()
         c._audio_worker = c._tail = c._activity = None
-        c._t0 = time.time() - 3.0
         c._fin_cv = threading.Condition()
         c._fin_next = c._fin_serving = c._fin_inflight = c._epoch = 0
         c._busy = False
         c._outcome = threading.local()
         return c
 
-    def test_finalisation_normale_inchangee(self):
-        c = self._controleur(0.05)
-        self.assertEqual(c.stop_and_finalize(notify_ui=False), "bonjour")
-        self.assertIsNone(c.empty_overlay_text())
-        time.sleep(0.4)
-        self.assertEqual((self.evts, self.toasts), ([], []))
-        self.assertFalse(c._busy)
+    def _relache(self, c):
+        """Ce que start() pose avant un relâchement, puis le relâchement."""
+        c._active = True
+        c._t0 = time.time() - 3.0
+        return c.stop_and_finalize(notify_ui=False)
 
-    def test_declenche_dit_et_journalise_la_perte(self):
-        c = self._controleur(0.8)
-        self.assertEqual(c.stop_and_finalize(notify_ui=False), "")
-        self.assertEqual([e[0] for e in self.evts], [E.FINALIZE_TIMEOUT])
-        self.assertEqual(self.toasts, [self.ns["_LOST_DICTATION_TOAST"]])
-        self.assertEqual(self.overlays, [self.ns["_LOST_DICTATION_OVERLAY"]])
-        self.assertEqual(c.empty_overlay_text(), self.ns["_LOST_DICTATION_OVERLAY"])
-        self.assertNotIn("réparée", self.toasts[0] + self.overlays[0])
+    def test_dictee_normale(self):
+        c = self._monte([(0.05, "bonjour à tous", None)])
+        self.assertEqual(self._relache(c), "bonjour à tous")
+        self.assertEqual(self.copies, ["bonjour à tous"])
+        self.assertEqual(self.store.dictees, ["bonjour à tous"])
+        time.sleep(self.BUDGET + 0.2)
+        self.assertEqual((self.evts, self.toasts), ([], []))
+        self.assertEqual((c._fin_inflight, c._busy), (0, False))
+
+    def test_texte_tardif_garde_sans_insertion_ni_copie(self):
+        c = self._monte([(self.BUDGET + 0.4, "texte arrivé tard", None)])
+        self.assertEqual(self._relache(c), "")          # rien à insérer au curseur
+        self.assertEqual(self.copies, [])                # presse-papier jamais écrasé
+        self.assertEqual(self.evts, [E.FINALIZE_TIMEOUT])
+        self.assertEqual(self.store.dictees, ["texte arrivé tard"])
+        self.assertEqual(self.store.usages, [])          # pas compté comme dictée utile
+        self.assertEqual(self.toasts, [self.ns["_LATE_PENDING_TOAST"],
+                                       self.ns["_LATE_SAVED_TOAST"]])
+        self.assertEqual(c.empty_overlay_text(), self.ns["_LATE_SAVED_OVERLAY"])
         self.assertEqual((c._fin_inflight, c._busy, c._fin_serving), (0, False, 1))
+
+    def test_historique_desactive_la_dictee_est_dite_perdue(self):
+        c = self._monte([(self.BUDGET + 0.4, "texte arrivé tard", None)], historique="none")
+        self.assertEqual(self._relache(c), "")
+        self.assertEqual((self.copies, self.store.dictees), ([], []))
+        self.assertEqual(self.evts, [E.FINALIZE_TIMEOUT])
+        self.assertEqual(self.toasts, [self.ns["_LOST_DICTATION_TOAST"]])
+        self.assertEqual(c.empty_overlay_text(), self.ns["_LOST_DICTATION_OVERLAY"])
+
+    def test_vide_tardif_un_seul_incident(self):
+        for issue, raison in (("", "vad"), ("", "gate"), (TimeoutError("GPU"), None),
+                              (RuntimeError("panne"), "fail")):
+            c = self._monte([(self.BUDGET + 0.4, issue, raison)])
+            self.assertEqual(self._relache(c), "")
+            self.assertEqual(self.evts, [E.FINALIZE_TIMEOUT], (issue, raison))
+            self.assertEqual(self.toasts, [self.ns["_LATE_PENDING_TOAST"]], (issue, raison))
+
+    def test_echec_moteur_un_seul_transcribe_fail(self):
+        for issue, raison in ((RuntimeError("décodeur KO"), "fail"), ("", "fail")):
+            c = self._monte([(0.05, issue, raison)])
+            self.assertEqual(self._relache(c), "")
+            time.sleep(self.BUDGET + 0.2)                 # le chien de garde reste muet
+            self.assertEqual(self.evts, [E.TRANSCRIBE_FAIL], issue)
+            self.assertEqual(self.toasts, [self.ns["_EMPTY_TEXT_MSG"]["transcribe_fail"][0]])
+            self.assertEqual(c.empty_overlay_text(),
+                             self.ns["_EMPTY_TEXT_MSG"]["transcribe_fail"][1])
+
+    def test_dictee_enchainee_derriere_une_lente_n_est_pas_perdue(self):
+        # A prend presque tout son budget ; B, relâchée juste après, attend A
+        # puis se transcrit dans le sien. Compté depuis le relâchement, B
+        # dépasserait (0,45 + 0,4 > 0,6) : elle était jetée à tort.
+        c = self._monte([(0.45, "première", None), (0.4, "seconde", None)])
+        res = {}
+        ta = threading.Thread(target=lambda: res.__setitem__("A", self._relache(c)))
+        ta.start()
+        while c._fin_next < 1:
+            time.sleep(0.005)
+        tb = threading.Thread(target=lambda: res.__setitem__("B", self._relache(c)))
+        tb.start()
+        ta.join(5)
+        tb.join(5)
+        self.assertEqual(res, {"A": "première", "B": "seconde"})
+        self.assertEqual(self.copies, ["première", "seconde"])
+        self.assertEqual((self.evts, self.toasts), ([], []))
+
+    def test_le_superviseur_voit_une_vraie_panne(self):
+        """Le battement s'arrête au-delà du budget : une transcription figée
+        redevient visible pour le superviseur (et le chien de garde a parlé)."""
+        c = self._monte([(self.BUDGET + 2.6, "trop tard", None)])
+        c._fin_beat = 0.0
+        t = threading.Thread(target=lambda: self._relache(c))
+        t.start()
+        time.sleep(self.BUDGET + 2.3)
+        self.assertLess(c._fin_beat, time.time() - 2.0 + 0.3)
+        self.assertEqual(self.evts, [E.FINALIZE_TIMEOUT])
+        t.join(5)
 
 
 class TestVerdictGpuApresTelechargement(unittest.TestCase):
