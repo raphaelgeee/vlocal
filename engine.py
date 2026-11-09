@@ -26,6 +26,7 @@ import threading
 
 import numpy as np
 
+import errors       # journal d'événements (codes stables, best-effort)
 import mlx_engine   # backend GPU optionnel (repli CPU auto si indisponible)
 
 
@@ -210,6 +211,30 @@ DICT_GPU_TIMEOUT_PER_AUDIO_S = 0.5
 def dictation_gpu_timeout(audio_s: float) -> float:
     """Délai maximal accordé à l'inférence GPU d'une dictée de `audio_s` secondes."""
     return DICT_GPU_TIMEOUT_BASE_S + DICT_GPU_TIMEOUT_PER_AUDIO_S * max(0.0, float(audio_s))
+
+
+# v1.4.4 : RÉSERVE DU REPLI CPU dans le budget de finalisation. Après un gel GPU
+# (budget dictation_gpu_timeout entièrement consommé), le repli doit encore
+# charger le turbo int8 (1,6 Go ; ~0,7 s page cache chaud, plusieurs secondes sur
+# un Mac 8 Go au cache évincé, small en plus pour la cascade) puis transcrire
+# (~7x temps réel mesuré pour turbo CPU, cascade small -> turbo au pire). Le chien
+# de garde de l'app ne lui laissait que 3 s : la dictée était perdue. Le budget
+# est un PLAFOND (il ne retarde que la récupération d'un vrai gel), on le prend
+# donc large et toujours chargement compris : l'état chargé du modèle peut
+# changer entre le calcul et le repli (déchargement à l'inactivité).
+CPU_FALLBACK_LOAD_S = 15.0          # chargement turbo (+ small) à froid
+CPU_FALLBACK_BASE_S = 5.0           # amorçage de l'inférence, VAD, post-traitement
+CPU_FALLBACK_PER_AUDIO_S = 0.5      # cascade small + turbo au pire, machine chargée
+
+
+def finalize_budget_s(audio_s: float) -> float:
+    """Temps dont la transcription d'une dictée de `audio_s` secondes peut avoir
+    besoin au pire : tentative GPU complète (dictation_gpu_timeout) puis repli
+    CPU (chargement du modèle + inférence). Ne couvre PAS la fusion et
+    l'insertion côté app, qui ajoute sa propre marge. Fonction pure."""
+    audio_s = max(0.0, float(audio_s))
+    return (dictation_gpu_timeout(audio_s) + CPU_FALLBACK_LOAD_S
+            + CPU_FALLBACK_BASE_S + CPU_FALLBACK_PER_AUDIO_S * audio_s)
 SILENCE_SEARCH_S = 8.0   # fenêtre de recherche d'un silence après la cible
 
 # Garde-fous anti-hallucination sur silence/bruit faible (RMS gate amont).
@@ -584,6 +609,18 @@ class VlocalEngine:
         self.last_peak: float = 0.0
         self.last_device_name: str = "?"
         self.last_model: str | None = None   # branche de la dernière dictée (small/turbo)
+        # v1.4.4 — ISSUE DE LA DERNIÈRE DICTÉE, pour que l'app distingue « silence »
+        # de « panne moteur » (transcribe renvoie "" dans les deux cas). Notée par
+        # thread pendant la transcription (le live-tail transcrit en parallèle sur
+        # son propre thread), publiée sous verrou à la fin de stop_and_transcribe.
+        self._outcome_tls = threading.local()
+        self._outcome_lock = threading.Lock()
+        self._last_backend = ""
+        self._last_empty_reason = None
+        self._last_producer = ""            # dernier moteur ayant produit, tous threads
+        # v1.4.4 — préchargement du repli CPU au premier gel GPU (un seul à la fois).
+        self._cpu_preload_lock = threading.Lock()
+        self._cpu_preloading = False
 
         self._frames = []
         self._lock = threading.Lock()
@@ -712,6 +749,68 @@ class VlocalEngine:
             except Exception as e:
                 print(f"[whisper] modèle rapide indisponible : {e}")
                 return False
+
+    # ------------------------------------------------------------------ #
+    def last_backend(self) -> str:
+        """Moteur qui a RÉELLEMENT produit la dernière transcription de dictée :
+        "mlx" ou "cpu" ; "" si aucune (rien transcrit, ou échec)."""
+        with self._outcome_lock:
+            return self._last_backend
+
+    def last_empty_reason(self) -> "str | None":
+        """Pourquoi la dernière dictée est vide : "gate" (seuil de silence),
+        "vad" (le VAD n'a rien gardé), "filtered" (anti-hallucination ou décodage
+        sans parole), "fail" (exception moteur). None si le texte n'est pas vide."""
+        with self._outcome_lock:
+            return self._last_empty_reason
+
+    def _note(self, backend: str, empty_reason) -> None:
+        """Note l'issue de la transcription en cours sur CE thread."""
+        self._outcome_tls.value = (backend, empty_reason)
+        if backend:
+            with self._outcome_lock:
+                self._last_producer = backend
+
+    def _publish_outcome(self, text: str) -> None:
+        backend, reason = getattr(self._outcome_tls, "value", ("", None))
+        if text:
+            reason = None
+        elif reason is None:
+            reason = "filtered"         # vidé après coup (fusion live-tail, filtres)
+        with self._outcome_lock:
+            if text and not backend:
+                # Live-tail au reliquat silencieux : le texte vient des fenêtres
+                # transcrites sur l'autre thread, par le dernier moteur actif.
+                backend = self._last_producer
+            self._last_backend = backend
+            self._last_empty_reason = reason
+
+    def _after_gpu_failure(self) -> None:
+        """v1.4.4 — Au premier gel GPU (suspension ou bascule), charge le turbo
+        CPU en ARRIÈRE-PLAN : les dictées suivantes, envoyées au CPU pendant la
+        suspension, n'ont plus à payer son chargement (1,6 Go) dans le budget du
+        chien de garde. Rien à faire si le GPU reste disponible (simple attente
+        de file) ou si le modèle CPU est déjà là."""
+        if self.model is not None or mlx_engine.status()[0] == "ok":
+            return
+        with self._cpu_preload_lock:
+            if self._cpu_preloading:
+                return
+            self._cpu_preloading = True
+
+        def _go():
+            try:
+                self.load_model()
+                print("[whisper] repli CPU préchargé après un gel GPU.")
+            except Exception as e:
+                print(f"[whisper] préchargement du repli CPU KO : {e}")
+                errors.log(errors.E.ENGINE_LOAD_FAIL, stage="cpu_preload",
+                           error=type(e).__name__)
+            finally:
+                with self._cpu_preload_lock:
+                    self._cpu_preloading = False
+
+        threading.Thread(target=_go, name="cpu-fallback-preload", daemon=True).start()
 
     # ------------------------------------------------------------------ #
     def warmup(self):
@@ -1636,6 +1735,7 @@ class VlocalEngine:
                 return self._mlx_detailed(audio_np, time_offset, mode)
             except Exception as e:
                 print(f"[mlx] window KO ({e}) -> repli CPU.")
+                self._after_gpu_failure()
         model = self._ensure_model()
         kwargs = self._base_kwargs(mode)
         kwargs["word_timestamps"] = True
@@ -1695,8 +1795,12 @@ class VlocalEngine:
         text = collapse_repetition_loops(
             strip_hallucinations(assemble_segments([r.get("text", "")])))
         if _is_known_hallucination(text):
-            return ""
-        self.last_model = "mlx-turbo"
+            text = ""
+        # Pas de VAD sur ce chemin : un texte vide vient des seuils de décodage
+        # (no_speech) ou des filtres anti-hallucination.
+        self._note("mlx", None if text else "filtered")
+        if text:
+            self.last_model = "mlx-turbo"
         return text
 
     def _mlx_detailed(self, audio_np, time_offset: float = 0.0,
@@ -1741,22 +1845,28 @@ class VlocalEngine:
         return {"text": text, "segments": seg_list, "avg_conf": avg}
 
     def transcribe(self, audio_np: np.ndarray, vad: bool = True,
-                   mode: str = "dictee", fast: bool = False) -> str:
+                   mode: str = "dictee", fast: bool = False,
+                   use_gpu: bool = True) -> str:
         """Transcrit un float32 mono 16 kHz en texte FR propre.
         Mode 'dictee' = greedy rapide (latence minimale).
         fast=True : utilise le modèle small (dictée rapide) si disponible.
         v23 — Si le GPU MLX est dispo, il prime (turbo partout, ~7x, qualité
-        turbo) ; repli CPU automatique et silencieux sinon."""
+        turbo) ; repli CPU automatique et silencieux sinon.
+        use_gpu=False : CPU direct, pour un repli dont le GPU vient d'échouer
+        dans la MÊME dictée (sinon double attente sur un GPU occupé)."""
         if audio_np is None or len(audio_np) == 0:
+            self._note("", "gate")
             return ""
         rms, peak = _audio_stats(audio_np)
         if _is_silent(rms, peak):
+            self._note("", "gate")
             return ""  # silence -> pas de transcription (anti-Amara)
-        if mlx_engine.available():
+        if use_gpu and mlx_engine.available():
             try:
                 return self._mlx_text(audio_np, mode)
             except Exception as e:
                 print(f"[mlx] transcribe KO ({e}) -> repli CPU.")
+                self._after_gpu_failure()
         model = self._ensure_model()
         if fast:
             # Référence LOCALE au small : un unload_fast_model() concurrent ne
@@ -1779,19 +1889,31 @@ class VlocalEngine:
             raise TimeoutError("moteur occupé par une autre transcription")
         try:
             try:
-                segments, _info = model.transcribe(audio_np, **kwargs)
-                text = assemble_segments(seg.text for seg in segments)
+                segments, info = model.transcribe(audio_np, **kwargs)
+                pieces = [seg.text for seg in segments]
             except Exception as e:
+                # Le contrat visible reste "" (l'app gère le vide) ; la cause va
+                # au journal et à last_empty_reason pour ne plus la confondre
+                # avec un silence.
                 print(f"[engine] transcribe échec : {e}")
+                errors.log(errors.E.TRANSCRIBE_FAIL, backend="cpu",
+                           error=type(e).__name__, detail=str(e)[:120])
+                self._note("", "fail")
                 return ""
         finally:
             self._infer_lock.release()
-        text = strip_hallucinations(text)
+        text = strip_hallucinations(assemble_segments(pieces))
         # Filet quasi mort (texte déjà strippé, cf. docstring du garde) : ne se
         # déclenche que sur un fragment recollé par la passe ponctuation — et
         # jette alors TOUT le texte.
         if _is_known_hallucination(text):
-            return ""
+            text = ""
+        if text:
+            self._note("cpu", None)
+        elif vad and not pieces and not getattr(info, "duration_after_vad", 0):
+            self._note("cpu", "vad")
+        else:
+            self._note("cpu", "filtered")
         return text
 
     # v2 — Seuils de routage cascade « auto intelligent », CALIBRÉS sur la
@@ -1855,28 +1977,35 @@ class VlocalEngine:
             return "", "none"
         rms, peak = _audio_stats(audio_np)
         if _is_silent(rms, peak):
+            self._note("", "gate")
             return "", "none"
         # v23 — GPU MLX dispo : la cascade n'a plus de raison d'être (turbo y
         # est plus RAPIDE que small ET de qualité turbo). On fait turbo partout.
-        if mlx_engine.available():
+        # v1.4.4 — après un échec GPU, la cascade reste sur le CPU (use_gpu=False) :
+        # sur un GPU « occupé » (non suspendu), self.transcribe() le retentait et
+        # la dictée payait deux fois l'attente.
+        use_gpu = mlx_engine.available()
+        if use_gpu:
             try:
                 return self._mlx_text(audio_np, "dictee"), "mlx"
             except Exception as e:
                 print(f"[mlx] adaptive KO ({e}) -> cascade CPU.")
+                self._after_gpu_failure()
+                use_gpu = False
         # Audio long -> turbo DIRECT (on saute la passe small qui serait jetée à
         # l'escalade). Sortie identique à l'escalade, sans le double-travail.
         dur_s = len(audio_np) / float(SAMPLE_RATE)
         if dur_s > self.ADAPTIVE_DIRECT_TURBO_S:
             print(f"[cascade] audio {dur_s:.0f}s > {self.ADAPTIVE_DIRECT_TURBO_S:.0f}s "
                   "-> turbo direct (pas de small jeté).")
-            return self.transcribe(audio_np, mode="dictee"), "turbo"
+            return self.transcribe(audio_np, mode="dictee", use_gpu=use_gpu), "turbo"
         if not self._ensure_fast_model():
-            return self.transcribe(audio_np, mode="dictee"), "turbo"
+            return self.transcribe(audio_np, mode="dictee", use_gpu=use_gpu), "turbo"
         try:
             text_s, avg, frac03, frac05 = self._small_with_conf(audio_np)
         except Exception as e:
             print(f"[cascade] small KO ({e}) — turbo direct.")
-            return self.transcribe(audio_np, mode="dictee"), "turbo"
+            return self.transcribe(audio_np, mode="dictee", use_gpu=use_gpu), "turbo"
         # NB : _is_known_hallucination est un filet quasi mort post-strip
         # (cf. sa docstring) — text_s sort déjà strippé de _small_with_conf.
         if text_s and not _is_known_hallucination(text_s) \
@@ -1885,14 +2014,17 @@ class VlocalEngine:
                 and frac05 <= self.SMALL_FRAC05_MAX:
             print(f"[cascade] small suffit (avg={avg:.2f}, "
                   f"frac<.3={frac03:.2f}, frac<.5={frac05:.2f}).")
+            self._note("cpu", None)
             return text_s, "small"
         print(f"[cascade] escalade turbo (avg={avg:.2f}, "
               f"frac<.3={frac03:.2f}, frac<.5={frac05:.2f}).")
-        text_t = self.transcribe(audio_np, mode="dictee")
+        text_t = self.transcribe(audio_np, mode="dictee", use_gpu=use_gpu)
         if text_t:
             return text_t, "turbo"
         # turbo a renvoyé '' (échec avalé) : le texte rendu vient de small ->
         # on renvoie la VRAIE branche (last_model/overlay justes).
+        if text_s:
+            self._note("cpu", None)
         return text_s, "small"
 
     def stop_and_transcribe(self, fast: bool = False,
@@ -1914,7 +2046,22 @@ class VlocalEngine:
 
         v1.0.22 — `audio` : PCM déjà extrait par l'appelant (chaînage : la
         capture est fermée dès le relâchement, la transcription attend son tour
-        FIFO). `audio=None` = comportement historique (stop + transcribe)."""
+        FIFO). `audio=None` = comportement historique (stop + transcribe).
+
+        v1.4.4 — publie l'issue (last_backend / last_empty_reason), y compris
+        quand la transcription lève (TimeoutError du verrou moteur)."""
+        self._note("", None)
+        text = ""
+        try:
+            text = self._stop_and_transcribe(fast, adaptive, live_tail, audio)
+        except BaseException:
+            self._note("", "fail")
+            raise
+        finally:
+            self._publish_outcome(text)
+        return text
+
+    def _stop_and_transcribe(self, fast, adaptive, live_tail, audio) -> str:
         if audio is None:
             audio = self.stop_recording()
         rms, peak = _audio_stats(audio)
@@ -1924,6 +2071,7 @@ class VlocalEngine:
             print(f"[audio]   aucun son détecté (rms={rms:.4f}, peak={peak:.4f}). "
                   f"Device : {self.last_device_name}. "
                   "Vérifie permission micro + bon device d'entrée.")
+            self._note("", "gate")
             return ""
         if live_tail is not None and not fast:
             texts, tail_start = live_tail

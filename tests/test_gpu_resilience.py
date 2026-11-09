@@ -30,7 +30,9 @@ class DictationTimeoutTests(unittest.TestCase):
 class GpuStrikeTests(unittest.TestCase):
     def setUp(self):
         self._saved = {k: getattr(mlx_engine, k) for k in
-                       ("_available", "_gpu_suspended_until", "_gpu_strikes", "_diag")}
+                       ("_available", "_gpu_suspended_until", "_gpu_strikes", "_diag",
+                        "_final_state", "_state_reason", "_retry_at", "_retry_n",
+                        "_gpu_suspend_reason")}
         self._errors = sys.modules.get("errors")
         self.events = []
         fake = types.ModuleType("errors")
@@ -72,9 +74,11 @@ class GpuStrikeTests(unittest.TestCase):
         self.assertTrue(mlx_engine._available)
         self.assertEqual(len(mlx_engine._gpu_strikes), 1)
 
-    def test_unavailable_gpu_stays_unavailable(self):
-        mlx_engine._available = False
+    def test_definitive_verdict_stays_unavailable(self):
+        mlx_engine._set_unavailable("plateforme linux", final_state="unsupported")
+        mlx_engine._retry_at = 0.0
         self.assertFalse(mlx_engine.available())
+        self.assertEqual(mlx_engine.status()[0], "unsupported")
 
 
 if __name__ == "__main__":

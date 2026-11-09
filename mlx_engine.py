@@ -17,13 +17,14 @@ macOS Apple Silicon uniquement (MLX = Metal). Aucun appel réseau au runtime
 """
 import os
 import sys
+import time
 
 # Dépôt MLX officiel du turbo (poids fp16, ~1,5 Go) — utilisé en DEV (cache HF).
 # En production, on préfère le dossier bundlé dans l'app (cf. _model_ref).
 _HF_REPO = "mlx-community/whisper-large-v3-turbo"
 
 _available = None     # None = pas encore testé ; True/False ensuite (cache)
-_model_ref = None     # chemin du modèle (dossier bundlé) ou id du dépôt HF
+_model_ref = None     # chemin du modèle trouvé (dossier bundlé ou cache pointé par l'app)
 _last_use = 0.0       # horodatage de la dernière inférence (idle-unload)
 _kernels_warm = False  # True dès que les kernels Metal ont été compilés une fois
 
@@ -31,13 +32,51 @@ _kernels_warm = False  # True dès que les kernels Metal ont été compilés une
 # d'une bascule CPU définitive. Une session Vlocal dure des semaines (l'app ne
 # redémarre jamais) : condamner le GPU au premier dépassement de délai coûtait
 # x8 sur toutes les dictées suivantes (mesuré : 1,0 s GPU contre 8,0 s CPU) et
-# 1,5 Go de RAM. On suspend le GPU _GPU_COOLDOWN_S, puis on le retente ; il n'est
-# abandonné pour la session qu'après _GPU_MAX_STRIKES gels en _GPU_STRIKE_WINDOW_S.
+# 1,5 Go de RAM. On suspend le GPU _GPU_COOLDOWN_S, puis on le retente. Seuls les
+# gels de DICTÉE comptent pour la bascule (_GPU_MAX_STRIKES en _GPU_STRIKE_WINDOW_S).
 _GPU_COOLDOWN_S = 600.0
 _GPU_STRIKE_WINDOW_S = 3600.0
 _GPU_MAX_STRIKES = 3
 _gpu_suspended_until = 0.0
+_gpu_suspend_reason = ""
 _gpu_strikes = []
+
+# v1.4.4 — PLUS AUCUN VERDICT NÉGATIF PERMANENT SUR UNE CAUSE PASSAGÈRE. 12 Mac
+# sur 29 (dont M4 et M3 Pro) tournaient sur le CPU, ~7x plus lent, pour des
+# semaines : le verdict False était mémorisé à vie alors que sa cause passait
+# (modèle téléchargé APRÈS le 1er lancement, metallib « Interrupted system
+# call » une seule fois, bascule après des gels). Désormais :
+#   - causes DÉFINITIVES (plateforme, import MLX impossible, VLOCAL_NO_MLX) :
+#     verdict gardé pour la session, aucune sonde de plus ;
+#   - causes PASSAGÈRES (modèle absent, sonde Metal KO, préchauffe Metal KO) :
+#     nouvel essai après 1 min, 5 min, 15 min puis toutes les 30 min. 1 min
+#     rattrape l'aléa ponctuel ; le plafond de 30 min borne le coût d'une
+#     machine durablement cassée à une sonde (un kernel minuscule) par demi-heure ;
+#   - bascule après _GPU_MAX_STRIKES gels de dictée : au moins _FORCE_CPU_RETRY_S
+#     (30 min), plus longue qu'une suspension simple (10 min) puisque le GPU a
+#     déjà gelé plusieurs fois en une heure.
+# Entre deux essais, available() renvoie False sans rien sonder (coût nul).
+_RETRY_DELAYS_S = (60.0, 300.0, 900.0, 1800.0)
+_FORCE_CPU_RETRY_S = 1800.0
+_final_state = ""     # "unsupported" / "disabled" si le verdict négatif est définitif
+_state_reason = ""    # raison courte du verdict négatif courant (status)
+_retry_at = 0.0       # horodatage du prochain essai (verdict négatif passager)
+_retry_n = 0          # essais ratés consécutifs (indexe _RETRY_DELAYS_S)
+
+# Marqueurs d'une VRAIE erreur Metal à la préchauffe. Volontairement étroits :
+# « device » seul attrapait « No space left on device » (disque plein), et
+# « library » ou « gpu » n'importe quelle erreur de chargement Python.
+_METAL_ERROR_MARKERS = ("metal", "command buffer", "no stream")
+
+
+def _now() -> float:
+    """Horloge des délais de suspension et de nouvel essai (simulée en test)."""
+    return time.time()
+
+
+def _short(text: str, limit: int = 80) -> str:
+    text = str(text)
+    return text if len(text) <= limit else text[:limit - 1] + "…"
 
 # v23.1.2 — EXÉCUTEUR MONO-THREAD pour TOUTES les opérations GPU MLX.
 #
@@ -138,7 +177,10 @@ def _on_worker(fn, *args, _timeout=_MLX_JOB_TIMEOUT, _prio=PRIO_BACKGROUND, **kw
             _kernels_warm = False            # re-préchauffe propre au prochain usage
             # v1.1.0 : suspension temporaire (voir _gpu_strike), plus de bascule
             # définitive au premier dépassement. L'appelant a son repli CPU.
-            _gpu_strike(f"inférence MLX figée (>{_timeout:.0f}s)")
+            # v1.4.4 : seul un gel de DICTÉE compte pour la bascule (un gel de
+            # réunion ou de préchauffe ne fait que suspendre).
+            _gpu_strike(f"inférence MLX figée (>{_timeout:.0f}s)",
+                        dictation=(_prio == PRIO_DICTATION))
             raise TimeoutError(
                 "transcription MLX figée (>%.0fs) — worker réinitialisé" % _timeout)
         raise TimeoutError(
@@ -159,7 +201,6 @@ def _diag(msg: str) -> None:
     sans ça, impossible de savoir si le GPU s'active vraiment. Best-effort,
     ne lève jamais. Fichier : ~/Library/Logs/Vlocal/mlx.log."""
     try:
-        import time
         d = os.path.expanduser("~/Library/Logs/Vlocal")
         os.makedirs(d, exist_ok=True)
         ts = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -169,15 +210,37 @@ def _diag(msg: str) -> None:
         pass
 
 
-def _force_cpu(reason: str) -> None:
-    """v3.2.8 — Bascule DÉFINITIVE sur CPU pour la session. Un vrai échec Metal
-    (préchauffe KO, inférence figée) = GPU/metallib inutilisable : on ARRÊTE de
-    retenter le GPU à chaque dictée (coût + latence + risque de re-figeage) et on
-    rend la main au moteur CPU. Plug-and-play : le client garde une app qui marche."""
-    global _available
+def _set_unavailable(reason: str, final_state: str = "",
+                     min_delay: float = 0.0) -> None:
+    """Pose un verdict négatif. final_state ("unsupported" / "disabled") le rend
+    définitif pour la session ; sinon un nouvel essai est programmé selon
+    _RETRY_DELAYS_S (au moins min_delay)."""
+    global _available, _final_state, _state_reason, _retry_at, _retry_n
     _available = False
-    print(f"[mlx] bascule CPU définitive (session) : {reason}")
-    _diag(f"MLX -> bascule CPU définitive (session) : {reason}")
+    _final_state = final_state
+    _state_reason = reason
+    if final_state:
+        msg = f"MLX indisponible ({reason}) -> moteur CPU pour la session."
+    else:
+        delay = max(min_delay, _RETRY_DELAYS_S[min(_retry_n, len(_RETRY_DELAYS_S) - 1)])
+        _retry_n += 1
+        _retry_at = _now() + delay
+        msg = (f"MLX indisponible ({reason}) -> moteur CPU, "
+               f"nouvel essai dans {delay / 60:.0f} min.")
+    print(f"[mlx] {msg}")
+    _diag(msg)
+
+
+def _force_cpu(reason: str, min_delay: float = 0.0) -> None:
+    """v3.2.8 — Bascule sur CPU après un vrai échec Metal (préchauffe KO, gels
+    répétés) : on ARRÊTE de retenter le GPU à chaque dictée (coût + latence +
+    risque de re-figeage) et on rend la main au moteur CPU.
+    v1.4.4 — bascule TEMPORAIRE : le GPU est re-sondé après le délai de
+    _set_unavailable (au moins min_delay). Une metallib réellement cassée échoue
+    à la sonde et repart pour un délai plus long ; un aléa passager se rétablit."""
+    if _final_state:
+        return                          # déjà hors jeu pour la session
+    _set_unavailable(f"bascule CPU : {reason}", min_delay=min_delay)
     # v1.0.22 — TÉLÉMÉTRIE DU TROU NOIR. 7 gels GPU (>= 60 s d'attente chacun,
     # puis toute la session en CPU) sont survenus entre le 16/06 et le 10/08 :
     # AUCUN n'apparaît dans le journal d'événements, parce que le seul site
@@ -190,20 +253,28 @@ def _force_cpu(reason: str) -> None:
         pass
 
 
-def _gpu_strike(reason: str) -> None:
+def _gpu_strike(reason: str, *, dictation: bool = True) -> None:
     """v1.1.0 : enregistre un gel GPU. Suspend le GPU _GPU_COOLDOWN_S (le moteur
-    CPU prend le relais, l'utilisateur n'attend jamais) ; au-delà de
-    _GPU_MAX_STRIKES gels dans la fenêtre glissante, bascule définitive."""
-    global _gpu_suspended_until, _gpu_strikes
-    import time
-    now = time.time()
-    _gpu_strikes = [t for t in _gpu_strikes if now - t < _GPU_STRIKE_WINDOW_S] + [now]
-    if len(_gpu_strikes) >= _GPU_MAX_STRIKES:
-        _force_cpu(f"{reason}, {len(_gpu_strikes)} gels en moins d'une heure")
-        return
+    CPU prend le relais, l'utilisateur n'attend jamais).
+    v1.4.4 : seuls les gels de DICTÉE (dictation=True) entrent dans le décompte ;
+    au-delà de _GPU_MAX_STRIKES dans la fenêtre glissante, bascule CPU pour
+    _FORCE_CPU_RETRY_S. Un gel hors dictée (réunion, import, préchauffe sous
+    charge) suspend seulement : il ne dit rien de la fiabilité de la dictée et
+    faisait basculer des machines saines après une longue réunion."""
+    global _gpu_suspended_until, _gpu_strikes, _gpu_suspend_reason
+    now = _now()
+    if dictation:
+        _gpu_strikes = [t for t in _gpu_strikes if now - t < _GPU_STRIKE_WINDOW_S] + [now]
+        if len(_gpu_strikes) >= _GPU_MAX_STRIKES:
+            _force_cpu(f"{reason}, {len(_gpu_strikes)} gels de dictée en moins d'une heure",
+                       min_delay=_FORCE_CPU_RETRY_S)
+            return
+        tally = f"gel de dictée {len(_gpu_strikes)}/{_GPU_MAX_STRIKES}"
+    else:
+        tally = "gel hors dictée, non compté"
     _gpu_suspended_until = now + _GPU_COOLDOWN_S
-    msg = (f"GPU suspendu {_GPU_COOLDOWN_S / 60:.0f} min ({reason}), "
-           f"gel {len(_gpu_strikes)}/{_GPU_MAX_STRIKES}")
+    _gpu_suspend_reason = reason
+    msg = f"GPU suspendu {_GPU_COOLDOWN_S / 60:.0f} min ({reason}), {tally}"
     print(f"[mlx] {msg}")
     _diag(msg)
     try:
@@ -216,7 +287,8 @@ def _gpu_strike(reason: str) -> None:
 def model_ref():
     """Modèle MLX à charger : le dossier BUNDLÉ s'il existe (app empaquetée,
     100 % local), sinon l'id du dépôt HF (DEV : téléchargé une fois dans le
-    cache local ~/.cache/huggingface)."""
+    cache local ~/.cache/huggingface). L'app peut aussi pointer _model_ref sur le
+    modèle du cache (app._point_mlx_to_cache)."""
     global _model_ref
     if _model_ref is not None:
         return _model_ref
@@ -229,59 +301,118 @@ def model_ref():
         if os.path.exists(os.path.join(_d, "config.json")):
             _model_ref = _d
             return _model_ref
-    _model_ref = _HF_REPO
-    return _model_ref
+    # v1.4.4 : le repli dépôt HF n'est PLUS mémorisé. Mémorisé, il masquait à
+    # vie un modèle bundlé arrivé après coup : la sonde le jugeait absent pour
+    # toute la session. Le coût d'une nouvelle recherche est de deux stat().
+    return _HF_REPO
+
+
+def _metal_smoke() -> None:
+    """v3.2.8 — SMOKE-TEST GPU RÉEL (pas seulement l'import). Une metallib
+    incompatible (cible Metal trop récente pour ce macOS) charge à l'import mais
+    ÉCHOUE au 1er kernel : un kernel minuscule force le chargement de la metallib
+    + une exécution Metal. Lève si le GPU n'est pas utilisable."""
+    import mlx.core as mx
+    probe = float(mx.sum(mx.array([1.0, 2.0, 3.0])))
+    if probe != 6.0:
+        raise RuntimeError(f"probe GPU incohérent ({probe})")
+
+
+def _probe() -> tuple[str, str]:
+    """Sonde complète (env, plateforme, import, modèle, kernel Metal).
+    Renvoie (état, raison) : "ok", "disabled" / "unsupported" (définitifs) ou
+    "retry" (passager). Ne lève jamais."""
+    if os.environ.get("VLOCAL_NO_MLX"):
+        return "disabled", "désactivé par VLOCAL_NO_MLX"
+    if sys.platform != "darwin":
+        return "unsupported", f"plateforme {sys.platform}"
+    try:
+        import mlx.core as mx           # noqa: F401
+        import mlx_whisper              # noqa: F401
+    except ImportError as e:
+        # Paquet absent du build : rien ne le fera apparaître pendant la session.
+        return "unsupported", f"import MLX impossible ({e.name or e})"
+    except Exception as e:
+        # Le paquet est là mais son chargement a levé autre chose (dylib, Metal) :
+        # peut être passager, on retentera.
+        return "retry", f"chargement MLX KO ({type(e).__name__}: {e})"
+    # En frozen, on exige le modèle bundlé (pas de téléchargement runtime,
+    # promesse 100 % local). En dev, le cache HF est toléré.
+    if getattr(sys, "frozen", False) and not os.path.isdir(model_ref()):
+        return "retry", "modèle GPU pas encore présent"
+    try:
+        _metal_smoke()
+    except Exception as e:
+        return "retry", f"sonde Metal KO ({type(e).__name__}: {e})"
+    return "ok", ""
 
 
 def available() -> bool:
-    """True si le backend GPU MLX est utilisable. Cache le résultat. Repli
-    silencieux total : toute exception -> False -> moteur CPU."""
-    global _available, _gpu_suspended_until
-    if _available is not None:
-        if _available and _gpu_suspended_until:
-            import time
-            if time.time() < _gpu_suspended_until:
+    """True si le backend GPU MLX est utilisable. Repli silencieux total :
+    False -> moteur CPU. Verdict positif mis en cache ; verdict négatif
+    définitif ou re-sondé après délai (cf. _RETRY_DELAYS_S). Pendant une
+    suspension ou un délai d'attente, renvoie False sans rien sonder."""
+    global _available, _gpu_suspended_until, _retry_n, _state_reason
+    if _available:
+        if _gpu_suspended_until:
+            if _now() < _gpu_suspended_until:
                 return False
             _gpu_suspended_until = 0.0
             print("[mlx] fin de suspension : GPU réactivé.")
             _diag("fin de suspension : GPU réactivé.")
-        return _available
-    if os.environ.get("VLOCAL_NO_MLX"):
-        _available = False
-        _diag("MLX désactivé par VLOCAL_NO_MLX -> moteur CPU.")
+        return True
+    if _available is False:
+        if _final_state or _now() < _retry_at:
+            return False
+        _diag(f"nouvel essai GPU (précédent : {_state_reason}).")
+    state, reason = _probe()
+    if state != "ok":
+        _set_unavailable(reason, final_state="" if state == "retry" else state)
         return False
-    if sys.platform != "darwin":
-        _available = False
-        _diag(f"MLX indisponible (plateforme {sys.platform}) -> moteur CPU.")
-        return False
-    try:
-        import mlx.core as mx           # noqa: F401
-        import mlx_whisper              # noqa: F401
-        # En frozen, on exige le modèle bundlé (pas de téléchargement runtime,
-        # promesse 100 % local). En dev, le cache HF est toléré.
-        if getattr(sys, "frozen", False):
-            ref = model_ref()
-            if not os.path.isdir(ref):
-                _available = False
-                _diag(f"MLX KO : modèle bundlé absent ({ref}) -> moteur CPU.")
-                return False
-        # v3.2.8 — SMOKE-TEST GPU RÉEL (pas seulement l'import). Une metallib
-        # incompatible (cible Metal trop récente pour ce macOS) charge à l'import
-        # mais ÉCHOUE au 1er kernel : sans ce test, available() renvoyait True et la
-        # bascule CPU n'arrivait qu'à la 1re dictée du client (mauvaise surprise).
-        # Ici un kernel minuscule force le chargement de la metallib + une exécution
-        # Metal -> si KO, on bascule proprement sur CPU DÈS LE DÉMARRAGE.
-        import mlx.core as _mxp
-        _probe = float(_mxp.sum(_mxp.array([1.0, 2.0, 3.0])))
-        if _probe != 6.0:
-            raise RuntimeError(f"probe GPU incohérent ({_probe})")
-        _available = True
-        _diag(f"MLX DISPONIBLE (GPU Metal vérifié — probe OK). modèle={model_ref()}")
-    except Exception as e:
-        print(f"[mlx] indisponible ({e}) -> moteur CPU.")
-        _diag(f"MLX KO ({type(e).__name__}: {e}) -> moteur CPU.")
-        _available = False
-    return _available
+    _available = True
+    _retry_n = 0
+    _state_reason = ""
+    _diag(f"MLX DISPONIBLE (GPU Metal vérifié — probe OK). modèle={model_ref()}")
+    return True
+
+
+def status() -> tuple[str, str]:
+    """(état, raison courte <= 80 car.) du backend GPU, pour l'affichage et la
+    télémétrie. SANS EFFET DE BORD : ne sonde rien, ne charge rien, ne lève
+    pas la suspension. États : "ok", "suspended", "retry", "unsupported",
+    "disabled", "unknown" (jamais sondé)."""
+    now = _now()
+    if _available is None:
+        if os.environ.get("VLOCAL_NO_MLX"):
+            return "disabled", "désactivé par VLOCAL_NO_MLX"
+        return "unknown", "pas encore testé"
+    if _available:
+        if _gpu_suspended_until and now < _gpu_suspended_until:
+            left = int(_gpu_suspended_until - now)
+            return "suspended", _short(f"reprise dans {left} s ({_gpu_suspend_reason})")
+        return "ok", ""
+    if _final_state:
+        return _final_state, _short(_state_reason)
+    left = max(0, int(_retry_at - now))
+    return "retry", _short(f"nouvel essai dans {left} s ({_state_reason})")
+
+
+def reset_availability(reason: str) -> None:
+    """Oublie le verdict GPU (et le chemin du modèle) : la prochaine
+    available() re-sonde immédiatement. À appeler quand la cause d'un refus
+    a pu disparaître, typiquement après le téléchargement du modèle GPU.
+    Un _model_ref qui désigne un modèle PRÉSENT (pointé par l'app sur le
+    cache) est conservé : l'oublier ferait chercher le modèle dans le bundle
+    seulement, et le refus reviendrait."""
+    global _available, _final_state, _state_reason, _retry_at, _retry_n, _model_ref
+    if _model_ref is not None and not os.path.exists(os.path.join(_model_ref, "config.json")):
+        _model_ref = None
+    _available = None
+    _final_state = ""
+    _state_reason = ""
+    _retry_at = 0.0
+    _retry_n = 0
+    _diag(f"verdict GPU réinitialisé ({reason}) : nouvelle sonde au prochain usage.")
 
 
 def _warmup_impl() -> None:
@@ -314,14 +445,15 @@ def _warmup_impl() -> None:
     except Exception as e:
         print(f"[mlx] préchauffe KO (sans gravité) : {e}")
         # v3.2.8 — si l'échec est une VRAIE erreur Metal (GPU/metallib cassé), on ne
-        # retente pas le GPU à chaque dictée : bascule CPU définitive pour la session.
+        # retente pas le GPU à chaque dictée : bascule CPU (temporaire depuis v1.4.4).
+        # Toute autre erreur (disque plein, poids illisibles) n'accuse pas le GPU.
         _es = str(e).lower()
-        if any(k in _es for k in ("metal", "command buffer", "metallib",
-                                  "library", "no stream", "device", "gpu")):
+        if any(k in _es for k in _METAL_ERROR_MARKERS):
             _force_cpu(f"préchauffe Metal KO ({type(e).__name__})")
+        else:
+            _diag(f"préchauffe KO hors Metal, GPU conservé ({type(e).__name__}: {e})")
     finally:
-        import time as _t
-        _last_use = _t.time()
+        _last_use = time.time()
 
 
 def warmup() -> None:
@@ -336,7 +468,6 @@ def warmup() -> None:
 
 def _transcribe_impl(a, language, initial_prompt, word_timestamps,
                      hallucination_silence_threshold=None, temperature=None) -> dict:
-    import time
     import mlx_whisper
     global _last_use
     try:
@@ -391,7 +522,6 @@ def transcribe(audio_np, language: str = "fr", initial_prompt=None,
 
 def idle_seconds() -> float:
     """Secondes écoulées depuis la dernière inférence MLX (0 si rien chargé)."""
-    import time
     return (time.time() - _last_use) if (loaded() and _last_use) else 0.0
 
 
