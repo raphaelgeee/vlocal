@@ -261,9 +261,22 @@ def finalize_budget_s(audio_s: float, cpu_loaded: "bool | None" = None) -> float
 
 SILENCE_SEARCH_S = 8.0   # fenêtre de recherche d'un silence après la cible
 
-# Garde-fous anti-hallucination sur silence/bruit faible (RMS gate amont).
+# Garde-fous anti-hallucination sur silence/bruit faible (porte amont).
+# PEAK_GATE : pic du buffer entier (-40 dBFS), insensible à la dilution.
+# RMS_GATE : énergie d'une FENÊTRE (-50 dBFS) ; le bruit de fond d'une pièce
+# calme sur un micro de Mac tourne entre -70 et -60 dBFS, une voix même
+# lointaine ou en Bluetooth HFP dépasse -45 dBFS.
 PEAK_GATE = 0.01
 RMS_GATE = 0.003
+# v1.5 — porte par FENÊTRES : calculé sur tout le buffer, le RMS d'une phrase
+# courte noyée dans une longue dictée (1 s de voix dans 30 s de silence)
+# tombait sous RMS_GATE et la dictée était jetée comme « silence ». 30 ms =
+# l'échelle d'un phonème.
+SILENCE_WIN_S = 0.03
+# Parole présente si au moins 150 ms de fenêtres (une syllabe) dépassent
+# RMS_GATE : c'est un percentile haut dont le rang est fixé en DURÉE. Un p95
+# fixe exigerait 5 % du buffer de parole, et 1 s dans 30 s n'en fait que 3 %.
+SPEECH_MIN_S = 0.15
 
 
 _QOS_WARNED = False
@@ -509,11 +522,24 @@ def _audio_stats(audio: "np.ndarray") -> tuple:
     return rms, peak
 
 
-def _is_silent(rms: float, peak: float) -> bool:
-    """Gate amont anti-hallucination : True si le buffer est jugé silencieux.
-    Prédicat UNIQUE partagé par les 4 chemins de transcription. Signature
-    (rms, peak) dans l'ordre du dépaquetage de _audio_stats."""
-    return peak < PEAK_GATE or rms < RMS_GATE
+def _is_silent(audio: "np.ndarray") -> bool:
+    """Gate amont anti-hallucination : True si le buffer (float32 mono 16 kHz)
+    est jugé silencieux. Prédicat UNIQUE partagé par les 4 chemins de
+    transcription : pic global sous PEAK_GATE, ou moins de SPEECH_MIN_S de
+    fenêtres de SILENCE_WIN_S au-dessus de RMS_GATE."""
+    if audio is None or len(audio) == 0:
+        return True
+    a = np.asarray(audio, dtype=np.float32).reshape(-1)
+    if float(np.max(np.abs(a))) < PEAK_GATE:
+        return True
+    win = int(SAMPLE_RATE * SILENCE_WIN_S)
+    n = len(a) // win
+    if n == 0:
+        return float(np.sqrt(np.mean(a * a))) < RMS_GATE
+    frames = a[:n * win].reshape(n, win)
+    energy = np.sqrt(np.einsum("ij,ij->i", frames, frames) / win)
+    k = min(n, max(1, int(round(SPEECH_MIN_S / SILENCE_WIN_S))))
+    return float(np.partition(energy, n - k)[n - k]) < RMS_GATE
 
 
 # Ponctuation qui ne doit JAMAIS être précédée d'une espace (français simple).
@@ -1755,8 +1781,7 @@ class VlocalEngine:
         empty = {"text": "", "segments": [], "avg_conf": 1.0}
         if audio_np is None or len(audio_np) == 0:
             return empty
-        rms, peak = _audio_stats(audio_np)
-        if _is_silent(rms, peak):
+        if _is_silent(audio_np):
             return empty
         # v23 — GPU MLX si dispo (réunion live + import incrémental, ~7x). La
         # fenêtre passe au GPU avec word_timestamps ; repli CPU si le GPU lève.
@@ -1887,8 +1912,7 @@ class VlocalEngine:
         if audio_np is None or len(audio_np) == 0:
             self._note("", "gate")
             return ""
-        rms, peak = _audio_stats(audio_np)
-        if _is_silent(rms, peak):
+        if _is_silent(audio_np):
             self._note("", "gate")
             return ""  # silence -> pas de transcription (anti-Amara)
         if use_gpu and mlx_engine.available():
@@ -2004,8 +2028,7 @@ class VlocalEngine:
         Renvoie (texte, modele). Repli turbo si small indisponible."""
         if audio_np is None or len(audio_np) == 0:
             return "", "none"
-        rms, peak = _audio_stats(audio_np)
-        if _is_silent(rms, peak):
+        if _is_silent(audio_np):
             self._note("", "gate")
             return "", "none"
         # v23 — GPU MLX dispo : la cascade n'a plus de raison d'être (turbo y
@@ -2096,7 +2119,7 @@ class VlocalEngine:
         rms, peak = _audio_stats(audio)
         self.last_rms = rms
         self.last_peak = peak
-        if _is_silent(rms, peak):
+        if _is_silent(audio):
             print(f"[audio]   aucun son détecté (rms={rms:.4f}, peak={peak:.4f}). "
                   f"Device : {self.last_device_name}. "
                   "Vérifie permission micro + bon device d'entrée.")
