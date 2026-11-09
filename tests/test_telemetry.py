@@ -363,7 +363,8 @@ class IncidentCodeTests(unittest.TestCase):
         self.assertEqual(telemetry.incident_code({"ctx": {"where": "start"}}), "")
 
     def test_free_text_never_travels(self):
-        for where in ("MacBook de Raphael", "AirPods Pro", "../etc", "x" * 40, "Start", 3):
+        for where in ("MacBook de Raphael", "AirPods Pro", "../etc", "x" * 40, "Start",
+                      "unknown_step", 3, ["start"], {"a": 1}, None):
             code = telemetry.incident_code({"code": "mic_recovered", "ctx": {"where": where}})
             self.assertEqual(code, "mic_recovered")
 
@@ -377,6 +378,23 @@ class IncidentCodeTests(unittest.TestCase):
                 c = telemetry.incident_code({"code": code, "ctx": {"where": w}})
                 self.assertEqual(c, f"{code}:{w}")
                 self.assertRegex(c, self.SERVEUR_OK)
+
+    def test_known_steps_are_a_closed_list(self):
+        import errors
+        self.assertIn("fallback_exhausted", errors.WHERE_CODES)
+        for w in errors.WHERE_CODES:
+            self.assertRegex(w, r"^[a-z0-9_]+$")
+
+    def test_too_long_is_cut_cleanly(self):
+        """Jamais d'étape tronquée ni de « : » final : le code seul part."""
+        long_code = "c" * 30
+        self.assertEqual(telemetry.incident_code(
+            {"code": long_code, "ctx": {"where": "fallback_exhausted"}}), long_code)
+        tres_long = "d" * 45
+        self.assertEqual(telemetry.incident_code({"code": tres_long}), "d" * 40)
+        c = telemetry.incident_code({"code": "x" * 22, "ctx": {"where": "fallback_exhausted"}})
+        self.assertFalse(c.endswith(":"))
+        self.assertLessEqual(len(c), 40)
 
     def test_read_incidents_payload_keeps_the_cause(self):
         tmp = tempfile.TemporaryDirectory()

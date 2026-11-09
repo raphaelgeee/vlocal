@@ -42,6 +42,7 @@ import time
 import uuid
 import urllib.request
 
+from errors import WHERE_CODES
 from supabase_config import auth_headers, rest_url
 
 RPC_NAME = "vlocal_report_usage"
@@ -203,10 +204,9 @@ def machine_profile(ui_lang: str, hotkey: str, last_backend: str) -> dict:
 EVENTS_LOG = os.path.expanduser("~/Library/Application Support/Vlocal/events.jsonl")
 
 # Le serveur (vlocal_report_usage) ne garde d'un code que [a-zA-Z0-9_.:-], 40
-# caractères au plus. L'étape d'un incident n'est transmise que si c'est un
-# identifiant écrit dans le code (« start », « stream_dead ») : jamais un texte libre.
+# caractères au plus. L'étape d'un incident n'est transmise que si elle figure
+# dans la liste fermée errors.WHERE_CODES : jamais un texte libre.
 _CODE_MAX = 40
-_WHERE_RE = re.compile(r"^[a-z0-9_]{1,32}$")
 
 
 def incident_code(event: dict) -> str:
@@ -224,8 +224,11 @@ def incident_code(event: dict) -> str:
         return ""
     ctx = event.get("ctx")
     where = ctx.get("where") if isinstance(ctx, dict) else None
-    if isinstance(where, str) and _WHERE_RE.match(where):
-        code = f"{code}:{where}"
+    full = f"{code}:{where}"
+    # Trop long pour le serveur : on garde le code seul plutôt qu'une étape
+    # tronquée (ou un « : » orphelin).
+    if isinstance(where, str) and where in WHERE_CODES and len(full) <= _CODE_MAX:
+        return full
     return code[:_CODE_MAX]
 
 
