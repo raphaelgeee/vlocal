@@ -15,6 +15,7 @@ RACINE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FICHIERS = (
     "appstate.py",
     "texts.py",
+    "settings.py",
     "app.py",
 )
 
