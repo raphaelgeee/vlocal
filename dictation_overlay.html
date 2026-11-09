@@ -5,15 +5,22 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
 /* Vlocal : pilule de dictée, en bas de l'écran (overlay.py, NSPanel fixe de
-   PANEL_W x PANEL_H px, clics traversants).
+   360 x 132 px, clics traversants).
 
-   - Au repos, une petite pilule discrète, sans aucune animation en cours.
-   - À l'appui, elle s'étend en ressort (transition CSS, le panneau ne bouge pas)
-     et montre une onde qui suit la voix ; puis la transcription, le résultat
-     bref, ou une carte compacte pour les messages.
-   - Page autonome : police système, icônes en SVG en ligne, aucun accès réseau
-     ni fichier. Les jetons de marque sont recopiés de assets/brand.css
-     (égalité vérifiée par tests/test_brand_tokens.py). */
+   Le VERRE est natif : overlay.py pose sous cette page un NSGlassEffectView
+   (macOS 26), un NSVisualEffectView, ou une forme opaque si « Réduire la
+   transparence » est actif. Une page web transparente ne voit pas les fenêtres
+   derrière elle, backdrop-filter n'y floute rien. La page ne dessine donc que le
+   contenu (la bulle, l'onde, les textes) et calcule la forme voulue pour chaque
+   état ; elle l'envoie à overlay.py (canal « vlocal ») qui anime le verre avec
+   la même durée et la même courbe que ces transitions (GLASS_MS, GLASS_CURVE).
+   Sans verre natif (aperçu dans un navigateur), .shape le remplace en CSS.
+
+   La bulle, symbole de la marque, est le cœur de la pilule : seule au repos, à
+   gauche de l'onde pendant l'écoute, un reflet qui tourne pendant la
+   transcription, une coche au résultat. Page autonome : police système, SVG en
+   ligne, aucun accès réseau ni fichier. Jetons de marque recopiés de
+   assets/brand.css (égalité vérifiée par tests/test_brand_tokens.py). */
 :root{
   --vl-night:#11141F;
   --vl-night-rgb:17,20,31;
@@ -24,134 +31,134 @@
   --vl-accent-deep-rgb:92,104,222;
 }
 :root{
-  /* Thème sombre (défaut) : verre bleu nuit, encre blanche. */
-  --surface:rgba(var(--vl-night-rgb),.94);
-  --edge:rgba(255,255,255,.14);
+  /* Sombre (défaut) : verre teinté nuit, encre blanche. */
   --ink:var(--vl-white);
-  --ink-2:rgba(255,255,255,.74);       /* 10:1 sur la surface */
-  --rest:rgba(var(--vl-night-rgb),.42);
-  --rest-edge:rgba(255,255,255,.30);
+  --ink-2:rgba(255,255,255,.80);
   --accent:var(--vl-accent);
   --alert:#FF6961;
-  --shadow:0 10px 28px -10px rgba(0,0,0,.55),0 2px 6px rgba(0,0,0,.22);
+  --sim-fill:rgba(var(--vl-night-rgb),.80);
+  --sim-edge:rgba(255,255,255,.16);
+  --sim-light:rgba(255,255,255,.30);
   --font:-apple-system,BlinkMacSystemFont,'SF Pro Text',system-ui,sans-serif;
-  /* Ressort : léger dépassement, sous 250 ms. */
-  --spring:cubic-bezier(.34,1.45,.55,1);
-  --t-grow:240ms;
-  --t-fade:160ms;
+  /* Ressort amorti sans rebond (rien ne sautille), 260 ms : la même courbe
+     anime le verre natif (overlay.GLASS_CURVE, GLASS_MS). */
+  --curve:cubic-bezier(.2,.9,.25,1);
+  --t:260ms;
+  --t-fade:120ms;    /* sortie franche, puis entrée : jamais deux contenus superposés */
+  --w:36px;--h:22px;--r:11px;
 }
 html[data-theme="light"]{
-  /* Thème clair : verre blanc, encre bleu nuit. */
-  --surface:rgba(255,255,255,.96);
-  --edge:rgba(var(--vl-night-rgb),.12);
+  /* Clair : verre teinté blanc, encre bleu nuit. */
   --ink:var(--vl-night);
-  --ink-2:rgba(var(--vl-night-rgb),.70);   /* 5,6:1 sur blanc */
-  --rest:rgba(255,255,255,.55);
-  --rest-edge:rgba(var(--vl-night-rgb),.22);
+  --ink-2:rgba(var(--vl-night-rgb),.72);
   --accent:var(--vl-accent-deep);
   --alert:#D70015;
-  --shadow:0 10px 26px -12px rgba(var(--vl-night-rgb),.30),0 1px 4px rgba(var(--vl-night-rgb),.10);
+  --sim-fill:rgba(255,255,255,.82);
+  --sim-edge:rgba(var(--vl-night-rgb),.10);
+  --sim-light:rgba(255,255,255,.85);
 }
 *{box-sizing:border-box}
 html,body{height:100%;margin:0;background:transparent;overflow:hidden}
 body{font-family:var(--font);-webkit-font-smoothing:antialiased;color:var(--ink);
   -webkit-user-select:none;user-select:none;cursor:default}
 
-/* ---- La pilule : un seul élément qui change de taille selon l'état ---- */
-.pill{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);
-  width:40px;height:8px;border-radius:999px;
-  background:var(--rest);box-shadow:inset 0 0 0 .5px var(--rest-edge);
-  display:flex;align-items:center;justify-content:center;overflow:hidden;
-  transition:width var(--t-grow) var(--spring),height var(--t-grow) var(--spring),
-             background-color var(--t-fade) ease,box-shadow var(--t-fade) ease,opacity var(--t-fade) ease}
-body:not([data-state="idle"]) .pill{background:var(--surface);
-  box-shadow:inset 0 0 0 .5px var(--edge),var(--shadow)}
-body[data-state="recording"] .pill{width:136px;height:34px}
-body[data-locked="1"][data-state="recording"] .pill{width:156px}   /* place du point */
-body[data-state="transcribing"] .pill{width:76px;height:34px}
-body[data-state="result"] .pill{width:148px;height:34px}
-/* Messages : la pilule se replie, la carte prend la place. */
-body.card-on .pill{width:40px;height:8px;opacity:0}
+/* ---- Cadre commun : la forme (simulée) et le contenu partagent la même boîte ---- */
+.shape,.box{position:absolute;left:50%;bottom:14px;width:var(--w);height:var(--h);
+  transform:translateX(-50%);border-radius:var(--r);
+  transition:width var(--t) var(--curve),height var(--t) var(--curve),border-radius var(--t) var(--curve)}
+.shape{background:var(--sim-fill);
+  -webkit-backdrop-filter:blur(22px) saturate(1.7);backdrop-filter:blur(22px) saturate(1.7);
+  box-shadow:inset 0 1px 0 var(--sim-light),inset 0 0 0 .5px var(--sim-edge),
+             0 12px 30px -12px rgba(0,0,0,.45),0 2px 6px rgba(0,0,0,.16)}
+html[data-glass="native"] .shape{display:none}
+/* Le contenu ne déborde jamais de la forme pendant qu'elle grandit. */
+.box{overflow:hidden}
 
-.layer{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
-  gap:7px;opacity:0;transition:opacity var(--t-fade) ease}
-body[data-state="recording"] .l-wave,
-body[data-state="transcribing"] .l-work,
-body[data-state="result"] .l-done{opacity:1;transition-delay:60ms}
+/* ---- La bulle ---- */
+.mark{position:absolute;left:var(--mx,9.5px);top:var(--my,3.8px);width:17px;height:14.4px;color:var(--ink);
+  transform:scale(var(--ms,.7));transform-origin:50% 50%;
+  transition:left var(--t) var(--curve),top var(--t) var(--curve),transform var(--t) var(--curve),color var(--t-fade) ease}
+.mark svg{display:block;width:100%;height:100%;overflow:visible;shape-rendering:geometricPrecision}
+.mark .bub{transition:opacity var(--t-fade) ease,transform var(--t) var(--curve);transform-origin:57.7% 50%}
+.mark .sheen{opacity:0;transform-origin:78.57px 57.72px}
+.mark .tick{fill:none;stroke:var(--accent);stroke-width:15;stroke-linecap:round;stroke-linejoin:round;
+  stroke-dasharray:120;stroke-dashoffset:120;opacity:0}
+body[data-locked="1"] .mark,body[data-state="tooshort"] .mark,body[data-state="mic"] .mark,
+body[data-state="info"] .mark{color:var(--accent)}
+body[data-state="error"] .mark{color:var(--alert)}
+/* Transcription : le corps de la bulle s'efface à moitié, un reflet en fait le tour. */
+body[data-state="transcribing"] .mark .base{opacity:.42}
+body[data-state="transcribing"] .mark .sheen{opacity:1;animation:sweep 1.4s linear infinite}
+@keyframes sweep{to{transform:rotate(360deg)}}
+/* Résultat : la bulle se résorbe, la coche se trace à sa place. */
+body[data-state="result"] .mark .bub{opacity:0;transform:scale(.6)}
+body[data-state="result"] .mark .tick{opacity:1;stroke-dashoffset:0;
+  transition:stroke-dashoffset 280ms var(--curve) 80ms,opacity 1ms linear 80ms}
 
-/* Onde : barres mises à l'échelle (scaleY), donc composées sans relayout. */
-.wave{display:flex;align-items:center;gap:3px;height:20px}
-.wb{width:3px;height:20px;border-radius:2px;background:var(--ink);
-  transform:scaleY(.12);transform-origin:center}
+/* ---- Onde : barres mises à l'échelle (scaleY), composées sans relayout ---- */
+.wave{position:absolute;left:41px;top:9px;display:flex;align-items:center;gap:3px;height:18px;
+  opacity:0;transition:opacity var(--t-fade) ease}
+.wb{width:3px;height:18px;border-radius:1.5px;background:var(--ink);transform:scaleY(.12)}
+body[data-state="recording"] .wave{opacity:1;transition-delay:var(--t-fade)}
 
-/* Transcription : trois points qui respirent (uniquement dans cet état). */
-.dot{width:5px;height:5px;border-radius:50%;background:var(--ink);opacity:.35}
-body[data-state="transcribing"] .dot{animation:breathe 1.05s ease-in-out infinite}
-body[data-state="transcribing"] .dot:nth-child(2){animation-delay:.15s}
-body[data-state="transcribing"] .dot:nth-child(3){animation-delay:.3s}
-@keyframes breathe{0%,100%{opacity:.3;transform:scale(.85)}50%{opacity:1;transform:scale(1)}}
+/* ---- Libellé dans la pilule (mains libres, attente, résultat) ---- */
+.label{position:absolute;top:0;height:36px;line-height:36px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  font-size:13px;font-weight:600;letter-spacing:-.01em;opacity:0;transition:opacity var(--t-fade) ease}
+.label.on{opacity:1;transition-delay:var(--t-fade)}
 
-.l-done{font-size:13px;font-weight:600;letter-spacing:-.005em;white-space:nowrap}
-.l-done svg{flex:none;color:var(--accent)}
-
-/* Mains libres : point d'accent dans la pilule, consigne au-dessus. */
-.lockdot{position:absolute;left:12px;top:50%;width:6px;height:6px;margin-top:-3px;border-radius:50%;
-  background:var(--accent);opacity:0;transition:opacity var(--t-fade) ease}
-body[data-locked="1"][data-state="recording"] .lockdot{opacity:1}
-
-/* ---- Bulle de consigne (mains libres, attente longue) ---- */
-.hint{position:absolute;left:50%;bottom:56px;transform:translate(-50%,4px);max-width:320px;
-  padding:6px 12px;border-radius:999px;background:var(--surface);
-  box-shadow:inset 0 0 0 .5px var(--edge),var(--shadow);
-  font-size:12px;line-height:16px;font-weight:500;color:var(--ink);white-space:nowrap;
-  overflow:hidden;text-overflow:ellipsis;opacity:0;
-  transition:opacity var(--t-fade) ease,transform var(--t-grow) var(--spring)}
-body.hint-on .hint{opacity:1;transform:translate(-50%,0)}
-
-/* ---- Carte compacte (trop court, erreur, micro, information) ---- */
-.card{position:absolute;left:50%;bottom:14px;width:max-content;min-width:200px;max-width:320px;
-  padding:11px 16px 12px;border-radius:16px;background:var(--surface);
-  box-shadow:inset 0 0 0 .5px var(--edge),var(--shadow);
-  transform:translateX(-50%) scale(.92);transform-origin:50% 100%;opacity:0;
-  transition:opacity var(--t-fade) ease,transform var(--t-grow) var(--spring)}
-body.card-on .card{opacity:1;transform:translateX(-50%) scale(1)}
-.ctitle{display:flex;align-items:baseline;gap:8px;font-size:13.5px;line-height:18px;font-weight:600}
-.ctitle::before{content:"";flex:none;width:7px;height:7px;border-radius:50%;background:var(--accent);
-  transform:translateY(-1px)}
-body[data-state="error"] .ctitle::before{background:var(--alert)}
-.ctitle span,.csub{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-.csub{margin:3px 0 0 15px;font-size:12.5px;line-height:17px;color:var(--ink-2)}
+/* ---- Carte (trop court, erreur, micro, information) ---- */
+.ctext{position:absolute;left:41px;top:12px;width:max-content;max-width:263px;
+  opacity:0;transition:opacity var(--t-fade) ease}
+body.card-on .ctext{opacity:1;transition-delay:var(--t-fade)}
+.ctitle{font-size:13px;line-height:18px;font-weight:600;letter-spacing:-.01em}
+.csub{margin-top:2px;font-size:12px;line-height:16px;color:var(--ink-2)}
+.ctitle,.csub{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .csub:empty{display:none}
 
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 
 @media (prefers-reduced-motion: reduce){
-  :root{--t-grow:0ms;--t-fade:0ms}
-  body[data-state="transcribing"] .dot{animation:none;opacity:.8}
+  :root{--t:0ms;--t-fade:0ms}
+  body[data-state="transcribing"] .mark .sheen{animation:none;opacity:0}
+  body[data-state="transcribing"] .mark .base{opacity:.8}
+  body[data-state="result"] .mark .tick{transition:none}
 }
 </style>
 </head>
 <body data-state="idle">
-  <div class="hint" id="hint" aria-hidden="true"></div>
-  <div class="card" id="card" aria-hidden="true">
-    <div class="ctitle"><span id="ctitle"></span></div>
-    <div class="csub" id="csub"></div>
-  </div>
-  <div class="pill" aria-hidden="true">
-    <span class="lockdot"></span>
-    <div class="layer l-wave"><div class="wave" id="wave"></div></div>
-    <div class="layer l-work"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
-    <div class="layer l-done"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg><span id="done"></span></div>
+  <div class="shape" aria-hidden="true"></div>
+  <div class="box" aria-hidden="true">
+    <div class="mark" id="mark"><svg viewBox="0 0 136.29 115.44">
+      <defs>
+        <!-- Tracé de assets/vlocal-symbol.svg (identité vérifiée par test). -->
+        <path id="bubble" fill-rule="evenodd" d="M78.57 115.44C110.45 115.44 136.29 89.6 136.29 57.72C136.29 25.84 110.45 0 78.57 0C46.69 0 20.85 25.84 20.85 57.72L20.85 70.76C20.85 92.96 9.6 113.19 0 115.44ZM108.8 58.01C108.8 76.54 95.19 91.56 78.41 91.56C61.63 91.56 48.02 76.54 48.02 58.01C48.02 39.48 61.63 24.46 78.41 24.46C95.19 24.46 108.8 39.48 108.8 58.01Z"/>
+        <clipPath id="bubble-clip"><use href="#bubble"/></clipPath>
+        <linearGradient id="sheen-band" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0" stop-color="currentColor" stop-opacity="0"/>
+          <stop offset=".5" stop-color="currentColor" stop-opacity="1"/>
+          <stop offset="1" stop-color="currentColor" stop-opacity="0"/>
+        </linearGradient>
+      </defs>
+      <g class="bub">
+        <use class="base" href="#bubble" fill="currentColor"/>
+        <g clip-path="url(#bubble-clip)"><rect class="sheen" x="58.57" y="-30" width="40" height="88" fill="url(#sheen-band)"/></g>
+      </g>
+      <path class="tick" d="M38 60 L64 86 L106 30"/>
+    </svg></div>
+    <div class="wave" id="wave"></div>
+    <div class="label" id="label"></div>
+    <div class="ctext" id="ctext"><div class="ctitle" id="ctitle"></div><div class="csub" id="csub"></div></div>
   </div>
   <div class="sr" id="status" role="status"></div>
 
 <script>
 (function(){
   "use strict";
-  var body = document.body;
-  var hint = document.getElementById('hint');
+  var body = document.body, root = document.documentElement;
+  var mark = document.getElementById('mark'), label = document.getElementById('label');
+  var ctext = document.getElementById('ctext');
   var ctitle = document.getElementById('ctitle'), csub = document.getElementById('csub');
-  var done = document.getElementById('done'), status = document.getElementById('status');
+  var status = document.getElementById('status');
   var reduced = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
 
   // ---- Textes (fr/en), langue poussée par overlay.py via ovLang() ----
@@ -160,13 +167,13 @@ body[data-state="error"] .ctitle::before{background:var(--alert)}
          tooshort:'C’est un peu court.', tooshort_sub:'Maintenez le raccourci un peu plus longtemps.',
          error:'Une erreur est survenue.', retry_hk:'Réessayez : maintenez {0}', retry:'Réessayez quand vous voulez.',
          mic:'Micro requis.', mic_sub:'Autorisez le microphone dans Réglages.',
-         locked:'Micro ouvert · {0} pour terminer', locked_nohk:'Micro ouvert · rappuyez pour terminer',
+         mic_open:'Micro ouvert', locked:'{0} pour terminer', locked_nohk:'Rappuyez pour terminer',
          tap_sub:'Appuyez deux fois pour garder le micro ouvert.' },
     en:{ listen:'Listening', work:'Transcribing', wait:'One more moment…', inserted:'Text inserted', copied:'Text copied',
          tooshort:'That was a bit short.', tooshort_sub:'Hold the shortcut a little longer.',
          error:'Something went wrong.', retry_hk:'Try again: hold {0}', retry:'Try again whenever you like.',
          mic:'Microphone needed.', mic_sub:'Allow the microphone in Settings.',
-         locked:'Mic open · {0} to finish', locked_nohk:'Mic open · press again to finish',
+         mic_open:'Mic open', locked:'{0} to finish', locked_nohk:'Press again to finish',
          tap_sub:'Double-tap to keep the mic open.' }
   };
   var lang = 'fr', hotkey = null;
@@ -177,13 +184,64 @@ body[data-state="error"] .ctitle::before{background:var(--alert)}
     return a === undefined ? s : String(s).split('{0}').join(a);
   }
 
+  // ---- Géométrie : source unique de la forme de chaque état ----------------
+  // Tailles en px CSS, paires pour que le centrage dans le panneau (360 px)
+  // tombe sur des pixels entiers. La bulle mesure 17 x 14,4 px.
+  var GEOM = {"idle": {"w": 36, "h": 22, "r": 11},
+              "pill": {"h": 36, "r": 18, "pad": 12, "gap": 10, "wave": 93, "solo": 56},
+              "card": {"r": 18, "pad": 14, "gap": 10, "min": 220, "max": 320, "vpad": 12}};
+  var MARK_W = 17, MARK_H = 14.4;
+  var MAX_W = 340;          // panneau de 360 px moins l'ombre
+  function even(v){ return 2 * Math.ceil(v / 2); }
+  function half(v){ return Math.round(v * 2) / 2; }   // demi-pixel CSS = pixel entier en @2x
+
+  function geometry(state){
+    var p = GEOM.pill, c = GEOM.card, lab = label.textContent ? label.offsetWidth : 0;
+    if(state === 'idle') return {w: GEOM.idle.w, h: GEOM.idle.h, r: GEOM.idle.r};
+    if(state === 'recording'){
+      var w = p.pad + MARK_W + p.gap + p.wave + p.pad + 2;
+      if(lab) w += p.gap + 4 + lab;
+      return {w: even(w), h: p.h, r: p.r};
+    }
+    if(state === 'transcribing' && !lab) return {w: p.solo, h: p.h, r: p.r};
+    if(state === 'transcribing' || state === 'result')
+      return {w: even(p.pad + MARK_W + p.gap + lab + p.pad + 2), h: p.h, r: p.r};
+    var tw = ctext.offsetWidth, th = ctext.offsetHeight;          // carte
+    var cw = Math.max(c.min, Math.min(c.max, c.pad + MARK_W + c.gap + tw + c.pad + 2));
+    return {w: even(cw), h: even(th + 2 * c.vpad), r: c.r};
+  }
+
+  // Place le contenu dans la forme et prévient le verre natif.
+  function shape(state){
+    var p = GEOM.pill, c = GEOM.card;
+    // Le libellé ne peut pas pousser la pilule hors du panneau : il s'abrège.
+    var lx = p.pad + 2 + MARK_W + p.gap + (state === 'recording' ? p.wave + p.gap + 4 : 0);
+    label.style.left = lx + 'px';
+    label.style.maxWidth = (MAX_W - lx - p.pad - 2) + 'px';
+    var g = geometry(state);
+    var mx, my, ms = 1;
+    if(state === 'idle'){ mx = (g.w - MARK_W) / 2; my = (g.h - MARK_H) / 2; ms = .7; }
+    else if(state === 'transcribing' && !label.textContent){ mx = (g.w - MARK_W) / 2; my = (g.h - MARK_H) / 2; }
+    else if(body.classList.contains('card-on')){ mx = c.pad; my = c.vpad + 2; }
+    else { mx = p.pad + 2; my = (g.h - MARK_H) / 2; }
+    root.style.setProperty('--w', g.w + 'px');
+    root.style.setProperty('--h', g.h + 'px');
+    root.style.setProperty('--r', g.r + 'px');
+    mark.style.setProperty('--mx', half(mx) + 'px');
+    mark.style.setProperty('--my', half(my) + 'px');
+    mark.style.setProperty('--ms', String(ms));
+    var h = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.vlocal;
+    if(h) h.postMessage({state: state, w: g.w, h: g.h, r: g.r});
+    return g;
+  }
+
   // ---- Onde ----------------------------------------------------------------
   // Le niveau arrive à 10 Hz (ovLevel). La boucle d'images ne tourne QUE pendant
   // l'écoute : elle rapproche en douceur le niveau affiché du dernier niveau reçu
   // (filtre du premier ordre, indépendant de la cadence d'affichage), puis le
   // laisse retomber si plus rien n'arrive. Hors écoute, aucune image n'est
   // demandée : au repos l'overlay ne consomme rien.
-  var N = 18, bars = [], env = [], phase = [];
+  var N = 16, bars = [], env = [], phase = [];
   (function(){
     var w = document.getElementById('wave');
     for(var i = 0; i < N; i++){
@@ -228,16 +286,16 @@ body[data-state="error"] .ctitle::before{background:var(--alert)}
   // ---- États ----------------------------------------------------------------
   var waitTimer = 0;
   function clearWait(){ if(waitTimer){ clearTimeout(waitTimer); waitTimer = 0; } }
-  function setHint(text){
-    hint.textContent = text || '';
-    if(text) body.classList.add('hint-on'); else body.classList.remove('hint-on');
+  function setLabel(text){
+    label.textContent = text || '';
+    if(text) label.classList.add('on'); else label.classList.remove('on');
   }
-  function setState(s){
+  function setState(s, text){
     clearWait();
     body.setAttribute('data-state', s);
     if(s !== 'recording'){ stopWave(); body.removeAttribute('data-locked'); }
     body.classList.remove('card-on');
-    setHint('');
+    setLabel(text);
   }
   function showCard(state, title, sub){
     setState(state);
@@ -245,16 +303,20 @@ body[data-state="error"] .ctitle::before{background:var(--alert)}
     csub.textContent = sub || '';
     body.classList.add('card-on');
     status.textContent = (title || '') + (sub ? ' ' + sub : '');
+    shape(state);
   }
 
   // ---- API pilotée par overlay.py (noms et signatures figés) ----------------
-  window.ovLang = function(l){ if(l === 'fr' || l === 'en'){ lang = l; document.documentElement.setAttribute('lang', l); } };
-  window.ovTheme = function(th){ document.documentElement.setAttribute('data-theme', th === 'light' ? 'light' : 'dark'); };
+  window.ovLang = function(l){ if(l === 'fr' || l === 'en'){ lang = l; root.setAttribute('lang', l); } };
+  window.ovTheme = function(th){ root.setAttribute('data-theme', th === 'light' ? 'light' : 'dark'); };
   window.ovHotkey = function(label){ hotkey = label || null; };
+  // Le verre natif est en place : la forme simulée s'efface.
+  window.ovGlass = function(kind){ root.setAttribute('data-glass', kind === 'native' ? 'native' : 'css'); };
 
   window.ovRecording = function(){
     setState('recording');
     status.textContent = tt('listen');
+    shape('recording');
     startWave();
   };
   window.ovLevel = function(v){
@@ -264,20 +326,23 @@ body[data-state="error"] .ctitle::before{background:var(--alert)}
     lastLevelAt = now();
     if(reduced && body.getAttribute('data-state') === 'recording') paint(target, 0);
   };
-  window.ovLocked = function(label){
+  window.ovLocked = function(lbl){
     body.setAttribute('data-locked', '1');
-    setHint(label ? tt('locked', label) : tt('locked_nohk'));
+    setLabel(lbl ? tt('locked', lbl) : tt('locked_nohk'));
+    status.textContent = tt('mic_open') + ' · ' + label.textContent;
+    shape('recording');
   };
   window.ovTranscribing = function(rec_s){
     setState('transcribing');
     status.textContent = tt('work');
+    shape('transcribing');
     // Rassure si c'est anormalement long (avant le chien de garde de app.py).
-    waitTimer = setTimeout(function(){ waitTimer = 0; setHint(tt('wait')); }, 8000);
+    waitTimer = setTimeout(function(){ waitTimer = 0; setLabel(tt('wait')); shape('transcribing'); }, 8000);
   };
   window.ovResult = function(trans_s, inserted, branch, text){
-    setState('result');
-    done.textContent = inserted ? tt('inserted') : tt('copied');
-    status.textContent = done.textContent;
+    setState('result', inserted ? tt('inserted') : tt('copied'));
+    status.textContent = label.textContent;
+    shape('result');
   };
   window.ovTooShort = function(){ showCard('tooshort', tt('tooshort'), tt('tooshort_sub')); };
   window.ovTooShortTap = function(){ showCard('tooshort', tt('tooshort'), tt('tap_sub')); };
@@ -287,8 +352,8 @@ body[data-state="error"] .ctitle::before{background:var(--alert)}
   window.ovMicNeeded = function(){ showCard('mic', tt('mic'), tt('mic_sub')); };
   window.ovInfo = function(title, sub){ showCard('info', title, sub); };
   // Fin d'affichage : la pilule se replie au repos (c'est l'animation de sortie).
-  window.ovFadeOut = function(){ setState('idle'); };
-  window.ovReset = function(){ setState('idle'); status.textContent = ''; };
+  window.ovFadeOut = function(){ setState('idle'); shape('idle'); };
+  window.ovReset = function(){ setState('idle'); status.textContent = ''; shape('idle'); };
 })();
 </script>
 </body>

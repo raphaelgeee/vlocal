@@ -15,6 +15,15 @@ grande carte et son ombre : tous les changements de taille de la pilule sont
 des transitions CSS dans dictation_overlay.html, jamais un setFrame par image.
 Il n'est repositionné qu'une fois par appui (recording()).
 
+Le verre est natif, posé SOUS la page (qui ne dessine que le contenu) : une
+page web transparente ne voit pas les fenêtres derrière elle. Matériau choisi
+par choose_material() : NSGlassEffectView (Liquid Glass, macOS 26), sinon
+NSVisualEffectView, sinon une forme opaque bleu nuit, imposée aussi par le
+réglage « Réduire la transparence ». La page envoie la forme voulue à chaque
+changement d'état (canal « vlocal ») ; le verre s'y anime avec la même durée et
+la même courbe que le contenu (GLASS_MS, GLASS_CURVE), cadre et rayon calculés
+par glass_frame().
+
 Niveau de fenêtre : NSStatusWindowLevel (25), au-dessus du Dock (20). Le cadre
 utile (visibleFrame) exclut le Dock au repos, mais un Dock qui s'agrandit au
 survol ou qui sort alors qu'il est masqué déborde ce cadre : à un niveau
@@ -81,6 +90,38 @@ def pill_frame(mouse, screens, size=(PANEL_W, PANEL_H), gap=BOTTOM_GAP):
     return (x, y, w, h)
 
 
+# Verre : mêmes valeurs que --t et --curve de dictation_overlay.html (test).
+GLASS_MS = 260
+GLASS_CURVE = (0.2, 0.9, 0.25, 1.0)
+PILL_BOTTOM = 14.0     # bas de la pilule dans le panneau (CSS bottom:14px)
+GLASS_MARGIN = 8.0     # le verre ne touche jamais le bord : place de l'ombre
+
+
+def choose_material(glass_available, visual_available, reduce_transparency):
+    """Matériau du verre : "glass" (Liquid Glass), "visual" (NSVisualEffectView)
+    ou "opaque". « Réduire la transparence » impose l'opaque : c'est le réglage
+    d'accessibilité, il passe avant l'esthétique."""
+    if reduce_transparency:
+        return "opaque"
+    if glass_available:
+        return "glass"
+    if visual_available:
+        return "visual"
+    return "opaque"
+
+
+def glass_frame(geom, panel=(PANEL_W, PANEL_H), bottom=PILL_BOTTOM, margin=GLASS_MARGIN):
+    """Cadre (x, y, w, h) et rayon du verre dans le panneau (repère AppKit,
+    origine en bas à gauche) pour la forme envoyée par la page :
+    geom = {"w", "h", "r"} en px CSS. Centré, posé à `bottom` du bas, borné au
+    panneau ; le rayon ne dépasse jamais la demi-hauteur (capsule)."""
+    pw, ph = panel
+    w = max(0.0, min(float(geom["w"]), pw - 2 * margin))
+    h = max(0.0, min(float(geom["h"]), ph - bottom - margin))
+    r = max(0.0, min(float(geom["r"]), h / 2.0))
+    return ((pw - w) / 2.0, bottom, w, h, r)
+
+
 def set_anchor_provider(fn):
     """Sans effet : la pilule ne s'ancre plus sous l'icône de la barre des menus.
     Gardée parce que app.py l'appelle encore ; à retirer avec cet appel."""
@@ -108,7 +149,121 @@ if _IS_MAC:
         NSWindowCollectionBehaviorIgnoresCycle,
     )
     from Foundation import NSMakeRect, NSObject, NSURL, NSOperationQueue
+    from AppKit import (
+        NSView, NSVisualEffectView, NSAppearance, NSWorkspace, NSAnimationContext,
+        NSVisualEffectMaterialHUDWindow, NSVisualEffectMaterialPopover,
+        NSVisualEffectBlendingModeBehindWindow, NSVisualEffectStateActive,
+        NSViewWidthSizable, NSViewHeightSizable,
+    )
+    from Quartz import CAMediaTimingFunction, CABasicAnimation, CAGradientLayer
     import WebKit
+
+    def _glass_class():
+        """NSGlassEffectView si le système l'a (macOS 26), sinon None."""
+        try:
+            return objc.lookUpClass("NSGlassEffectView")
+        except objc.nosuchclass_error:
+            return None
+
+    def _reduce_motion():
+        return bool(NSWorkspace.sharedWorkspace().accessibilityDisplayShouldReduceMotion())
+
+    def _reduce_transparency():
+        return bool(NSWorkspace.sharedWorkspace().accessibilityDisplayShouldReduceTransparency())
+
+    def _rgba(rgb, a):
+        return NSColor.colorWithSRGBRed_green_blue_alpha_(rgb[0] / 255.0, rgb[1] / 255.0, rgb[2] / 255.0, a)
+
+    _NIGHT = (0x11, 0x14, 0x1F)     # --vl-night
+    _WHITE = (0xFF, 0xFF, 0xFF)
+
+    class _Glass:
+        """Le verre sous la page. `view` est la vue dont on anime le cadre ;
+        `rounded` les calques dont on anime le rayon."""
+
+        def __init__(self, material, theme, frame, radius):
+            self.material = material
+            self.theme = theme
+            light = theme == "light"
+            x, y, w, h = frame
+            rect = NSMakeRect(x, y, w, h)
+            self.rounded = []
+            if material == "glass":
+                v = _glass_class().alloc().initWithFrame_(rect)
+                v.setCornerRadius_(radius)
+                # Teinte : garde le texte lisible sur un fond blanc comme noir
+                # (même dosage que la simulation CSS, contrastes vérifiés).
+                v.setTintColor_(_rgba(_WHITE, 0.70) if light else _rgba(_NIGHT, 0.72))
+                self.view = v
+                return
+            # Visual effect ou opaque : un conteneur porte l'ombre ; dedans, le
+            # fond (arrondi, masqué) et un liseré spéculaire éclairé par le haut.
+            outer = NSView.alloc().initWithFrame_(rect)
+            outer.setWantsLayer_(True)
+            sh = outer.layer()
+            sh.setShadowColor_(NSColor.blackColor().CGColor())
+            sh.setShadowOpacity_(0.22 if light else 0.38)
+            sh.setShadowRadius_(14.0)
+            sh.setShadowOffset_((0.0, -6.0))
+            inner_rect = NSMakeRect(0, 0, w, h)
+            if material == "visual":
+                fill = NSVisualEffectView.alloc().initWithFrame_(inner_rect)
+                fill.setMaterial_(NSVisualEffectMaterialPopover if light else NSVisualEffectMaterialHUDWindow)
+                fill.setBlendingMode_(NSVisualEffectBlendingModeBehindWindow)
+                fill.setState_(NSVisualEffectStateActive)
+                fill.setAppearance_(NSAppearance.appearanceNamed_("NSAppearanceNameAqua" if light
+                                                                  else "NSAppearanceNameDarkAqua"))
+                fill.setWantsLayer_(True)
+            else:
+                fill = NSView.alloc().initWithFrame_(inner_rect)
+                fill.setWantsLayer_(True)
+                fill.layer().setBackgroundColor_((_rgba(_WHITE, 1.0) if light else _rgba(_NIGHT, 1.0)).CGColor())
+            rim = NSView.alloc().initWithFrame_(inner_rect)
+            rim.setWantsLayer_(True)
+            rl = rim.layer()
+            rl.setBorderWidth_(0.5)
+            rl.setBorderColor_((_rgba(_NIGHT, 0.10) if light else _rgba(_WHITE, 0.16)).CGColor())
+            sheen = CAGradientLayer.layer()
+            sheen.setColors_([_rgba(_WHITE, 0.30 if light else 0.14).CGColor(), _rgba(_WHITE, 0.0).CGColor()])
+            # AppKit compte y vers le haut : 1 = haut du calque.
+            sheen.setStartPoint_((0.5, 1.0))
+            sheen.setEndPoint_((0.5, 0.55))
+            sheen.setFrame_(rl.bounds())
+            sheen.setAutoresizingMask_(2 | 16)          # kCALayerWidthSizable | HeightSizable
+            rl.addSublayer_(sheen)
+            for sub in (fill, rim):
+                sub.setAutoresizingMask_(NSViewWidthSizable | NSViewHeightSizable)
+                sub.layer().setCornerRadius_(radius)
+                sub.layer().setMasksToBounds_(True)
+                outer.addSubview_(sub)
+                self.rounded.append(sub.layer())
+            self.view = outer
+
+        def animate(self, frame, radius, duration):
+            x, y, w, h = frame
+            timing = CAMediaTimingFunction.functionWithControlPoints____(*GLASS_CURVE)
+            view, rounded = self.view, self.rounded
+
+            def group(ctx):
+                ctx.setDuration_(duration)
+                ctx.setTimingFunction_(timing)
+                ctx.setAllowsImplicitAnimation_(True)
+                view.animator().setFrame_(NSMakeRect(x, y, w, h))
+                if self.material == "glass":
+                    view.animator().setCornerRadius_(radius)
+            NSAnimationContext.runAnimationGroup_completionHandler_(group, None)
+            # Les calques d'une vue n'animent pas leur rayon implicitement :
+            # animation explicite, même durée, même courbe.
+            for layer in rounded:
+                if duration > 0:
+                    anim = CABasicAnimation.animationWithKeyPath_("cornerRadius")
+                    anim.setFromValue_(layer.presentationLayer().cornerRadius()
+                                       if layer.presentationLayer() is not None else layer.cornerRadius())
+                    anim.setToValue_(radius)
+                    anim.setDuration_(duration)
+                    anim.setTimingFunction_(timing)
+                    layer.addAnimation_forKey_(anim, "cornerRadius")
+                layer.setCornerRadius_(radius)
 
     def _on_main(fn):
         """Exécute fn sur le main thread Cocoa (best-effort)."""
@@ -166,6 +321,25 @@ if _IS_MAC:
             except Exception:
                 pass
 
+    class _GeomHandler(NSObject, protocols=[objc.protocolNamed("WKScriptMessageHandler")]):
+        """Reçoit la forme voulue par la page (canal « vlocal »)."""
+
+        def initWithOwner_(self, owner):
+            self = objc.super(_GeomHandler, self).init()
+            if self is None:
+                return None
+            self._owner = owner      # réf forte, même cycle borné que _NavDelegate
+            return self
+
+        def userContentController_didReceiveScriptMessage_(self, ucc, message):
+            body = message.body()
+            try:
+                geom = {k: float(body[k]) for k in ("w", "h", "r")}
+            except (KeyError, TypeError, ValueError) as e:
+                print(f"[overlay] forme illisible ignorée : {e}")
+                return
+            self._owner._on_geometry(geom)
+
     class _Overlay:
         def __init__(self):
             html_path = _html_path()
@@ -195,6 +369,8 @@ if _IS_MAC:
             panel.setIgnoresMouseEvents_(True)
 
             cfg = WebKit.WKWebViewConfiguration.alloc().init()
+            self._geom_handler = _GeomHandler.alloc().initWithOwner_(self)   # réf forte
+            cfg.userContentController().addScriptMessageHandler_name_(self._geom_handler, "vlocal")
             web = WebKit.WKWebView.alloc().initWithFrame_configuration_(
                 NSMakeRect(0, 0, w, h), cfg)
             try:
@@ -211,18 +387,57 @@ if _IS_MAC:
             # singleton à durée de vie du processus, jamais détruit.
             self._nav = _NavDelegate.alloc().initWithOwner_(self)   # réf forte
             web.setNavigationDelegate_(self._nav)
-            panel.setContentView_(web)
+            # Conteneur : le verre dessous, la page (contenu seul) dessus.
+            content = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, w, h))
+            content.setWantsLayer_(True)
+            web.setAutoresizingMask_(NSViewWidthSizable | NSViewHeightSizable)
+            content.addSubview_(web)
+            panel.setContentView_(content)
+            self._content = content
+            self.panel = panel
+            self.web = web
+            self._geom = {"w": 36.0, "h": 22.0, "r": 11.0}       # repos (GEOM.idle de la page)
+            self._theme = _theme or "dark"
+            self._glass = None
+            self._install_glass()
             if os.path.exists(html_path):
                 url = NSURL.fileURLWithPath_(html_path)
                 base = NSURL.fileURLWithPath_(os.path.dirname(html_path))
                 web.loadFileURL_allowingReadAccessToURL_(url, base)
             else:
                 print(f"[overlay] HTML introuvable : {html_path}")
-            self.panel = panel
-            self.web = web
             # Panneau TOUJOURS présent (la pilule de repos y vit) : jamais
             # d'orderOut, qui rendait le ré-affichage capricieux.
             panel.orderFrontRegardless()
+
+        def _install_glass(self):
+            """(Re)pose le verre selon le matériau disponible et le thème ; sans
+            effet si rien n'a changé. Appelé à la création, à chaque appui (le
+            réglage « Réduire la transparence » peut avoir changé) et au
+            changement de thème."""
+            # NSVisualEffectView existe sur tout macOS pris en charge (11 et plus).
+            material = choose_material(_glass_class() is not None, True, _reduce_transparency())
+            if (self._glass is not None and self._glass.material == material
+                    and self._glass.theme == self._theme):
+                return
+            x, y, w, h, r = glass_frame(self._geom)
+            glass = _Glass(material, self._theme, (x, y, w, h), r)
+            if self._glass is not None:
+                self._glass.view.removeFromSuperview()
+            self._content.addSubview_positioned_relativeTo_(glass.view, -1, self.web)  # NSWindowBelow
+            self._glass = glass
+            self.js("ovGlass('native')")
+
+        def _on_geometry(self, geom):
+            self._geom = geom
+            x, y, w, h, r = glass_frame(geom)
+            self._glass.animate((x, y, w, h), r, 0.0 if _reduce_motion() else GLASS_MS / 1000.0)
+
+        def set_theme(self, theme):
+            def _run():
+                self._theme = theme
+                self._install_glass()
+            _on_main(_run)
 
         def _on_loaded(self):
             self._ready = True
@@ -265,6 +480,7 @@ if _IS_MAC:
                     fr = _current_frame()
                     if fr is not None:
                         self.panel.setFrame_display_(NSMakeRect(*fr), False)
+                    self._install_glass()
                 except Exception as e:
                     print(f"[overlay] placement impossible : {e}")
             _on_main(_run)
@@ -337,6 +553,8 @@ def set_theme(theme):
     global _theme
     _theme = "light" if theme == "light" else "dark"
     _js("ovTheme('light')" if _theme == "light" else "ovTheme('dark')")
+    if _overlay is not None:
+        _overlay.set_theme(_theme)
 
 
 def set_lang(lang):
