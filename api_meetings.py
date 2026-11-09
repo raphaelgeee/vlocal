@@ -500,6 +500,7 @@ class MeetingsApi:
         import wave as _wave
         if appstate.controller is None or appstate.store is None:
             return {"ok": False, "error": "Le moteur se prépare encore, un instant."}
+        mid = int(mid)   # la page envoie l'identifiant lu dans data-mid (texte)
         m = appstate.store.get_meeting(mid)
         if not m:
             return {"ok": False, "error": "Réunion introuvable."}

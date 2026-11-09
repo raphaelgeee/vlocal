@@ -178,5 +178,17 @@ class TestInterface(unittest.TestCase):
         self.assertIn("showToast", bloc)
 
 
+class TestReessaiDepuisLInterface(unittest.TestCase):
+    def test_identifiant_texte_de_la_page_accepte(self):
+        import api_meetings
+        store = mock.Mock()
+        store.get_meeting.return_value = None
+        with mock.patch.object(appstate, "controller", mock.Mock()), \
+                mock.patch.object(appstate, "store", store):
+            r = api_meetings.MeetingsApi().retry_meeting("12", None)
+        store.get_meeting.assert_called_once_with(12)
+        self.assertFalse(r["ok"])
+
+
 if __name__ == "__main__":
     unittest.main()
