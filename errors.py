@@ -36,8 +36,12 @@ class E:
     MIC_DENIED = "mic_denied"              # permission micro refusée
     MIC_DEVICE_FAIL = "mic_device_fail"    # périphérique audio indisponible/déconnecté
     MIC_RECOVERED = "mic_recovered"        # micro récupéré tout seul (repli périphérique explicite)
-    SILENCE = "silence"                    # son capté trop faible / vide
-    TRANSCRIBE_FAIL = "transcribe_fail"    # exception pendant la transcription
+    SILENCE = "silence"                    # son capté trop faible (porte d'énergie du moteur)
+    # v1.4.4 — le texte vide n'est plus rangé en bloc sous « silence » : une
+    # panne moteur rend aussi "", et le message « son très faible » mentait.
+    NO_SPEECH = "no_speech"                # signal présent, mais aucune parole retenue (VAD / filtre)
+    MIC_ZERO_SIGNAL = "mic_zero_signal"    # signal nul (micro non autorisé ou muet) : pas une panne de périphérique
+    TRANSCRIBE_FAIL = "transcribe_fail"    # la transcription a échoué (exception ou moteur en panne)
     INSERT_FAIL = "insert_fail"            # insertion clavier KO (repli presse-papier)
     CLIPBOARD_FAIL = "clipboard_fail"      # copie presse-papier KO
     MODEL_MISSING = "model_missing"        # modèle absent/corrompu
@@ -106,3 +110,67 @@ def summary(limit=4000):
         c = e.get("code", "?")
         out[c] = out.get(c, 0) + 1
     return out
+
+
+# Seuils du « signal nul » : en dessous, rien n'est arrivé du micro (permission
+# refusée, mauvais périphérique), quoi qu'en dise le moteur.
+ZERO_SIGNAL_RMS = 0.001
+ZERO_SIGNAL_PEAK = 0.005
+
+
+def empty_text_code(reason, rms, peak):
+    """v1.4.4 — Code d'incident d'une dictée qui rend un texte vide.
+
+    `reason` est engine.last_empty_reason() : "gate" | "vad" | "filtered" |
+    "fail" | None. Ordre de priorité : une panne moteur reste une panne même sur
+    un signal nul ; un signal nul passe avant le verdict du moteur, qui ne fait
+    alors que constater l'absence de son.
+        fail                 -> transcribe_fail
+        rms et pic ~ 0       -> mic_zero_signal
+        vad / filtered       -> no_speech
+        gate / None          -> silence
+    Pur : ni journal ni effet de bord."""
+    if reason == "fail":
+        return E.TRANSCRIBE_FAIL
+    if float(rms) < ZERO_SIGNAL_RMS and float(peak) < ZERO_SIGNAL_PEAK:
+        return E.MIC_ZERO_SIGNAL
+    if reason in ("vad", "filtered"):
+        return E.NO_SPEECH
+    return E.SILENCE
+
+
+class MicStartTrace:
+    """v1.4.4 — Escalade d'ouverture du micro pour UN appui.
+
+    L'escalade (ouverture, reset dur puis nouvel essai, micro intégré,
+    périphériques candidats) journalisait chaque étape en échec : un seul appui
+    raté comptait jusqu'à quatre `mic_device_fail`, et la console croyait voir
+    quatre pannes. On retient ici les étapes, et `log_outcome` n'émet qu'UN
+    événement, celui de l'issue finale :
+      - échec : mic_device_fail, where = dernière étape atteinte ;
+      - récupération : mic_recovered, where = le moyen qui a marché ;
+      - rien d'échoué : aucun événement.
+    `steps` garde la chaîne complète dans le journal local (jamais transmise)."""
+
+    def __init__(self):
+        self._failed = []   # [(étape, message d'erreur tronqué)]
+
+    def fail(self, where, err=None):
+        self._failed.append((str(where), str(err)[:120] if err is not None else None))
+
+    def outcome(self, ok, via=None):
+        """(code, niveau, contexte) de l'unique événement à journaliser, ou None."""
+        if not self._failed:
+            return None
+        steps = ",".join(w for w, _ in self._failed)
+        if ok:
+            return E.MIC_RECOVERED, "info", {"where": via, "after": steps}
+        where, err = self._failed[-1]
+        return E.MIC_DEVICE_FAIL, "error", {"where": where, "err": err, "steps": steps}
+
+    def log_outcome(self, ok, via=None, **extra):
+        o = self.outcome(ok, via)
+        if o is not None:
+            code, level, ctx = o
+            ctx.update(extra)
+            log(code, level, **ctx)

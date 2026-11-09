@@ -407,6 +407,23 @@ _BT = {
     "The dictation stalled. Please try again.",
   "La transcription a calé, réessayez.":
     "The transcription stalled. Please try again.",
+  # --- v1.4.4 : texte vide expliqué (_EMPTY_TEXT_MSG), dictée perdue ---
+  "Son trop faible. Réessayez.": "Sound too faint. Please try again.",
+  "Aucune parole n'a été reconnue. Parlez distinctement, près du micro, et réessayez.":
+    "No speech was recognised. Speak clearly, close to the microphone, and try again.",
+  "Aucune parole reconnue. Réessayez.": "No speech recognised. Please try again.",
+  "La transcription a échoué, réessayez. Si cela se répète, envoyez un diagnostic depuis les Réglages.":
+    "The transcription failed. Please try again. If it keeps happening, send a diagnostic from Settings.",
+  "La transcription a échoué, réessayez.": "The transcription failed. Please try again.",
+  "La dictée a pris trop de temps et n'a pas pu être transcrite : elle est perdue. Réessayez votre dictée.":
+    "The dictation took too long and could not be transcribed, so it was lost. Please try your dictation again.",
+  "Dictée perdue (transcription trop longue). Réessayez.":
+    "Dictation lost (transcription took too long). Please try again.",
+  "Dictée réparée": "Dictation repaired",
+  "La dernière dictée n'a pas abouti. Vous pouvez recommencer.":
+    "The last dictation did not go through. You can start again.",
+  "La dernière dictée n'a pas abouti. Vous pouvez recommencer, Vlocal est de nouveau prêt.":
+    "The last dictation did not go through. You can start again, Vlocal is ready.",
   "Vlocal démarre": "Vlocal is starting",
   "Raccourci indisponible": "Shortcut unavailable",
   "Utilisez le bouton Dicter. Envoyez un diagnostic depuis les Réglages : le problème nous sera signalé.":
@@ -501,6 +518,28 @@ def _te(s):
             if s.startswith(_fr):
                 return _en + s[len(_fr):]
     return s
+
+
+# v1.4.4 — Dictée sans texte : (toast détaillé, texte court de l'overlay) par
+# code d'incident (errors.empty_text_code). Les chaînes sont des clés de _BT.
+_EMPTY_TEXT_MSG = {
+    "silence": ("Le son était très faible. Rapprochez-vous du micro et réessayez.",
+                "Son trop faible. Réessayez."),
+    "no_speech": ("Aucune parole n'a été reconnue. Parlez distinctement, près du "
+                  "micro, et réessayez.",
+                  "Aucune parole reconnue. Réessayez."),
+    "transcribe_fail": ("La transcription a échoué, réessayez. Si cela se répète, "
+                        "envoyez un diagnostic depuis les Réglages.",
+                        "La transcription a échoué, réessayez."),
+    "mic_zero_signal": ("Aucun son n'a été capté. Vérifiez que le microphone est "
+                        "autorisé : menu Pomme > Réglages Système > Confidentialité "
+                        "et sécurité > Microphone, puis autorisez Vlocal et relancez.",
+                        "Aucun son capté. Réessayez."),
+}
+# v1.4.4 — chien de garde de finalisation déclenché : la dictée est perdue.
+_LOST_DICTATION_TOAST = ("La dictée a pris trop de temps et n'a pas pu être "
+                         "transcrite : elle est perdue. Réessayez votre dictée.")
+_LOST_DICTATION_OVERLAY = "Dictée perdue (transcription trop longue). Réessayez."
 
 
 def copy_to_clipboard(text: str) -> bool:
@@ -732,9 +771,15 @@ from livetail import DictationLiveTail as _DictationLiveTail  # noqa: E402
 
 # Plancher du budget de finalisation d'une dictée (live-tail + fusion + insertion
 # compris). Le budget réel est _finalize_budget_s(durée) : proportionnel à l'audio
-# depuis la v1.1.0, jamais sous ce plancher. Filet silencieux : il libère le
-# verrou si la finalisation ne rend pas la main, sans contredire le superviseur.
+# depuis la v1.1.0, jamais sous ce plancher. Quand il est dépassé, le chien de
+# garde libère le verrou et dit à l'utilisateur que la dictée est perdue.
 FINALIZE_WATCHDOG_S = 25.0
+# v1.4.4 — marge au-delà du budget de TRANSCRIPTION (GPU puis repli CPU, fixé
+# par engine.finalize_budget_s, qui ne couvre que le moteur) : fusion, filtres,
+# glossaire, copie presse-papier. Ces étapes prennent des millisecondes ; 3 s
+# absorbent un presse-papier ou un disque lent sans retarder le verdict d'une
+# vraie panne.
+FINALIZE_MARGIN_S = 3.0
 
 # --------------------------------------------------------------------------- #
 # v1.0.9 — SUPERVISEUR DE DICTÉE (auto-heal). Garantit qu'un utilisateur n'est
@@ -746,16 +791,19 @@ FINALIZE_WATCHDOG_S = 25.0
 #   2) si ça se recoince malgré plusieurs resets -> dernier recours : l'app se
 #      relance toute seule (garde-fou anti-boucle, l'utilisateur n'a rien à faire).
 # --------------------------------------------------------------------------- #
-from engine import dictation_gpu_timeout as _dictation_gpu_timeout  # noqa: E402
+import engine as _engine_mod  # noqa: E402
 
 
 def _finalize_budget_s(rec_dur_s: float) -> float:
-    """v1.1.0 : plafond de la finalisation d'une dictée de rec_dur_s secondes.
-    Plancher FINALIZE_WATCHDOG_S ; au-delà, suit le timeout GPU proportionnel
-    (engine.dictation_gpu_timeout) plus 3 s pour la fusion et l'insertion.
-    Le plafond fixe de 25 s coupait les dictées de plusieurs minutes (finalisation
-    légitime de 30 à 100 s) et les déclarait figées."""
-    return max(FINALIZE_WATCHDOG_S, _dictation_gpu_timeout(rec_dur_s) + 3.0)
+    """Plafond de la finalisation d'une dictée de rec_dur_s secondes.
+    v1.1.0 : proportionnel à l'audio (le plafond fixe de 25 s coupait les dictées
+    de plusieurs minutes et les déclarait figées). v1.4.4 : suit le budget de
+    transcription du moteur (engine.finalize_budget_s : GPU PUIS repli CPU) plus
+    FINALIZE_MARGIN_S. L'ancien « timeout GPU + 3 s » ne laissait rien au repli
+    CPU : une dictée sauvée par le processeur était coupée par ce chien de
+    garde. Plancher FINALIZE_WATCHDOG_S."""
+    return max(FINALIZE_WATCHDOG_S,
+               _engine_mod.finalize_budget_s(rec_dur_s) + FINALIZE_MARGIN_S)
 
 
 _DICT_RESET_MIN_S = 9.0       # v1.0.11 : 12 -> 9 s. PLANCHER SÛR : la formule garde +8 de base (marge au-dessus du pire cas de transcription LÉGITIME ~6-8 s : modèles rechargés + plancher turbo + ladder température) -> on ne descend PAS sous 9 sinon risque de couper une vraie dictée. Les dictées longues montent via durée×0.10+8.
@@ -870,7 +918,8 @@ def _dictation_supervisor():
             except Exception:
                 pass
             try:
-                overlay.info(_te("Dictée réparée"), _te("Vous pouvez recommencer."))
+                overlay.info(_te("Dictée réparée"),
+                             _te("La dernière dictée n'a pas abouti. Vous pouvez recommencer."))
                 _schedule_overlay_hide(4.0)
             except Exception:
                 pass
@@ -882,7 +931,8 @@ def _dictation_supervisor():
                 threading.Thread(
                     target=lambda: notifier.show(
                         _te("Dictée réparée"),
-                        _te("Vous pouvez recommencer, votre dictée est de nouveau prête."),
+                        _te("La dernière dictée n'a pas abouti. Vous pouvez "
+                            "recommencer, Vlocal est de nouveau prêt."),
                         subtitle=None),
                     name="heal-notify", daemon=True).start()
             except Exception:
@@ -948,10 +998,25 @@ def _start_auto_diag():
         pass
 
 
+class _DictationStop(threading.Event):
+    """Événement d'arrêt PROPRE À UNE dictée (v1.0.22), qui porte aussi ce que le
+    worker de niveau a constaté pendant l'enregistrement (v1.4.4) : un flux mort
+    déjà journalisé n'est pas compté une seconde fois à la finalisation."""
+
+    def __init__(self):
+        super().__init__()
+        self.stream_dead = False
+
+
 class DictationController:
     def __init__(self, engine: VlocalEngine):
         self.engine = engine
-        self._stop_evt = threading.Event()
+        self._stop_evt = _DictationStop()
+        # v1.4.4 — texte court de l'overlay quand la finalisation rend "" (silence,
+        # panne, dictée perdue...). Par THREAD : le raccourci lit, dans le thread
+        # qui a appelé stop_and_finalize, le verdict de SA dictée, pas celui
+        # d'une dictée enchaînée.
+        self._outcome = threading.local()
         self._audio_worker = None       # v13.1 — référence du worker audio_level
         self._active = False
         # v19 — VERROU ANTI-CHEVAUCHEMENT : True de start() jusqu'à la FIN de
@@ -1046,7 +1111,7 @@ class DictationController:
             # avec le chaînage, la finalisation de la dictée précédente a posé
             # set() sur SON event ; un clear() partagé pouvait le lui retirer
             # avant que son worker de niveau ne l'ait vu (worker zombie).
-            self._stop_evt = threading.Event()
+            self._stop_evt = _DictationStop()
             # P1-2 — micro indisponible / permission révoquée : start_recording LÈVE
             # (engine.py). v1.0.11 — AUTO-HEAL MICRO : un device CoreAudio coincé fait
             # échouer l'ouverture. Au lieu d'abandonner (et de forcer un redémarrage
@@ -1070,7 +1135,11 @@ class DictationController:
                     print("[dictée] capture précédente toujours ouverte (budget épuisé).")
             except Exception as e:
                 print(f"[dictée] micro indisponible : {e} -> reset dur + retry.")
-                if _EV: _EV.log(_EV.E.MIC_DEVICE_FAIL, where="start", err=str(e)[:120])
+                # v1.4.4 — UN incident par appui : chaque étape en échec est
+                # retenue, seule l'issue finale est journalisée (errors.MicStartTrace).
+                _trace = _EV.MicStartTrace() if _EV else None
+                _via, _dev_ok = None, None
+                if _trace: _trace.fail("start", e)
                 # v1.0.22 — ESCALADE BÉTON. Terrain 1.0.21 (diagnostics 24/07-10/08) :
                 # 28 échecs « start », CHAQUE retry en échec aussi, 0 mic_recovered —
                 # la ré-init in-process ne récupère JAMAIS un PortAudio corrompu dans
@@ -1081,18 +1150,17 @@ class DictationController:
                 #   2) retry après un délai (CoreAudio relâche le device) ;
                 #   3) repli micro INTÉGRÉ résolu CÔTÉ WORKER (l'énumération
                 #      in-process d'un parent coincé mentait) ;
-                #   4) CHAQUE étape journalisée — le trou qui a rendu la 1.0.21
+                #   4) CHAQUE étape tracée — le trou qui a rendu la 1.0.21
                 #      indiagnosticable (échec du repli 100% silencieux) est bouché.
+                #      v1.4.4 : la chaîne complète part dans UN seul événement.
                 # v1.0.22 — chaque étape est conditionnée au BUDGET RESTANT :
                 # mieux vaut rendre la main en 2 s et réparer en fond que faire
                 # patienter l'utilisateur (jusqu'à 134 s au pire cas théorique).
-                _reset_ok = False
                 if _time_left(_budget_dl) > 0.5:
                     try:
-                        _reset_ok = bool(self.engine.hard_mic_reset(
-                            timeout=min(1.2, _time_left(_budget_dl))))
-                    except Exception:
-                        pass
+                        self.engine.hard_mic_reset(timeout=min(1.2, _time_left(_budget_dl)))
+                    except Exception as e_reset:
+                        print(f"[dictée] reset dur du micro en échec : {e_reset}")
                     time.sleep(min(0.2, max(0.0, _time_left(_budget_dl))))  # CoreAudio relâche
                 try:
                     if _time_left(_budget_dl) <= 0.05:
@@ -1100,10 +1168,10 @@ class DictationController:
                     ok = self.engine.start_recording(deadline=_budget_dl)
                     if ok:
                         print("[dictée] micro récupéré après reset dur (worker neuf).")
-                        if _EV: _EV.log(_EV.E.MIC_RECOVERED, level="info", via="hard_reset")
+                        _via = "hard_reset"
                 except Exception as e2:
                     print(f"[dictée] micro toujours indisponible après reset dur : {e2}")
-                    if _EV: _EV.log(_EV.E.MIC_DEVICE_FAIL, where="start_retry", err=str(e2)[:120])
+                    if _trace: _trace.fail("start_retry", e2)
                     # Repli 1 : micro intégré, résolu dans le worker (process sain).
                     if _time_left(_budget_dl) > 0.05:
                         try:
@@ -1111,10 +1179,9 @@ class DictationController:
                                                              deadline=_budget_dl)
                             if ok:
                                 print("[dictée] micro récupéré sur le micro intégré (worker).")
-                                if _EV: _EV.log(_EV.E.MIC_RECOVERED, level="info", via="builtin")
+                                _via = "builtin"
                         except Exception as e3:
-                            if _EV: _EV.log(_EV.E.MIC_DEVICE_FAIL, where="fallback_builtin",
-                                            err=str(e3)[:120])
+                            if _trace: _trace.fail("fallback_builtin", e3)
                     # Repli 2 (dernier recours, chemin in-process historique) :
                     # candidats de l'énumération parent, tant que le budget tient.
                     if not ok:
@@ -1128,10 +1195,11 @@ class DictationController:
                                 continue
                             if ok:
                                 print(f"[dictée] micro récupéré sur le périphérique {_dev}.")
-                                if _EV: _EV.log(_EV.E.MIC_RECOVERED, level="info", device=_dev)
+                                _via, _dev_ok = "device", _dev
                                 break
-                        if not ok and _EV:
-                            _EV.log(_EV.E.MIC_DEVICE_FAIL, where="fallback_exhausted")
+                        if not ok and _trace:
+                            _trace.fail("fallback_exhausted")
+                if _trace: _trace.log_outcome(ok, _via, device=_dev_ok)
                 if not ok:
                     _mic_fail_count[0] += 1
                     _grab = _mic_grabber_name()
@@ -1240,6 +1308,7 @@ class DictationController:
                 if not _warned_no_audio and self.engine.seconds_since_audio() > 3.0:
                     _warned_no_audio = True
                     self._mic_lost = True
+                    stop_evt.stream_dead = True
                     if _EV: _EV.log(_EV.E.MIC_DEVICE_FAIL, where="stream_dead")
                     try:
                         overlay.info(_te("Aucun son"),
@@ -1337,6 +1406,12 @@ class DictationController:
         except Exception:
             pass
 
+    def empty_overlay_text(self):
+        """Texte court (FR, à passer par _te) qui explique pourquoi la dernière
+        finalisation lancée par CE thread n'a rendu aucun texte ; None si elle
+        n'a rien précisé."""
+        return getattr(self._outcome, "overlay", None)
+
     def stop_and_finalize(self, notify_ui: bool = True) -> str:
         """Arrête tout, produit le texte FINAL propre, le copie, renvoie le texte.
         notify_ui=False : ne touche PAS la fenêtre principale (chemin raccourci ->
@@ -1347,6 +1422,7 @@ class DictationController:
         # micro (verrou tenu), le relâchement ne doit PAS attendre derrière lui —
         # c'était le scénario « je parle, je relâche, rien ne se passe, je dois
         # relancer l'appli ». Au-delà de 2 s, on déclenche l'auto-réparation.
+        self._outcome.overlay = None
         if not self._lock.acquire(timeout=2.0):
             print("[dictée] verrou de démarrage figé -> auto-réparation forcée.")
             if _EV: _EV.log(_EV.E.MIC_DEVICE_FAIL, where="start_lock_stuck")
@@ -1406,24 +1482,30 @@ class DictationController:
         def _finalize_watchdog():
             if _fin_done.wait(_wd_s):
                 return
-            print(f"[dictée] finalisation FIGÉE > {_wd_s:.0f}s -> "
-                  "récupération forcée (watchdog).")
-            if _EV: _EV.log(_EV.E.FINALIZE_TIMEOUT, s=round(_wd_s))
             # v1.0.22 — chaînage : libère le compteur + AVANCE la file FIFO
             # (une finalisation figée ne doit jamais retenir la suivante).
             with self._fin_cv:
                 if _fin_done.is_set():
-                    return   # la finalisation vient de finir (course au 25e s pile)
+                    return   # la finalisation vient de finir (course à la seconde pile)
                 _wd_fired[0] = True
                 self._fin_inflight = max(0, self._fin_inflight - 1)
                 self._fin_serving = max(self._fin_serving, _my_ticket + 1)
                 self._busy = self._fin_inflight > 0
                 self._fin_cv.notify_all()
             _end_activity(_my_act)
-            # v1.0.9 — message confié au SUPERVISEUR de dictée (« Dictée réparée »,
-            # qui agit plus tôt, ~12 s) : ce watchdog reste un filet SILENCIEUX
-            # (il libère juste le verrou) pour ne JAMAIS contredire « réparée » par
-            # « a calé » quelques secondes plus tard.
+            print(f"[dictée] finalisation FIGÉE > {_wd_s:.0f}s -> "
+                  "récupération forcée (watchdog), dictée perdue.")
+            if _EV: _EV.log(_EV.E.FINALIZE_TIMEOUT, s=round(_wd_s), audio_s=round(_my_dur, 1))
+            # v1.4.4 — la dictée est PERDUE (son résultat tardif est jeté, voir
+            # plus bas) : on le dit. Le battement couvre tout le budget, donc le
+            # superviseur n'intervient qu'après ce chien de garde et ne peut plus
+            # annoncer « Dictée réparée » sur cette dictée-là.
+            try:
+                overlay.error(_te(_LOST_DICTATION_OVERLAY))
+                _schedule_overlay_hide(4.0)
+            except Exception as e_ov:
+                print(f"[dictée] overlay indisponible : {e_ov}")
+            _toast(_LOST_DICTATION_TOAST, kind="error")
         threading.Thread(target=_finalize_watchdog, name="finalize-watchdog",
                          daemon=True).start()
         # v1.0.22 — BATTEUR BORNÉ. La transcription est un appel ATOMIQUE (GPU) :
@@ -1442,8 +1524,9 @@ class DictationController:
                 self._fin_beat = time.time()
         threading.Thread(target=_fin_heartbeat, name="finalize-beat",
                          daemon=True).start()
+        _lost = False
         try:
-            return self._do_finalize(notify_ui, _my_evt, _my_worker, _my_tail,
+            text = self._do_finalize(notify_ui, _my_evt, _my_worker, _my_tail,
                                      _my_ticket, _my_epoch)
         finally:
             _fin_done.set()
@@ -1451,13 +1534,22 @@ class DictationController:
             # rendu (finalisation qui se réveille tardivement), on n'avance que
             # la file (max idempotent), sans re-décrémenter le compteur.
             with self._fin_cv:
-                if not _wd_fired[0]:
+                _lost = _wd_fired[0]
+                if not _lost:
                     self._fin_inflight = max(0, self._fin_inflight - 1)
                 self._fin_serving = max(self._fin_serving, _my_ticket + 1)
                 self._busy = self._fin_inflight > 0
                 self._fin_cv.notify_all()
             # v21 — fin de l'assertion anti-App Nap (succès OU échec).
             _end_activity(_my_act)
+        if _lost:
+            # v1.4.4 — l'utilisateur a déjà lu « dictée perdue » : un texte qui
+            # arrive après coup n'est pas inséré au curseur (il tomberait, sans
+            # prévenir, dans ce qu'il fait maintenant).
+            print("[dictée] résultat arrivé après le chien de garde -> non inséré.")
+            self._outcome.overlay = _LOST_DICTATION_OVERLAY
+            return ""
+        return text
 
     def _do_finalize(self, notify_ui: bool = True, my_evt=None, my_worker=None,
                      my_tail=None, my_ticket: int = 0, my_epoch: int = 0) -> str:
@@ -1465,7 +1557,8 @@ class DictationController:
         # (my_evt/my_worker/my_tail, détachés sous verrou par stop_and_finalize) —
         # les champs self.* peuvent déjà appartenir à la dictée suivante.
         # Signale l'arrêt au worker de niveau audio (le NÔTRE).
-        (my_evt or self._stop_evt).set()
+        my_evt = my_evt or self._stop_evt
+        my_evt.set()
         # v13.1 — On joint le worker audio_level (sinon thread zombie
         # qui continue à appeler _ui("setAudioLevel(...)") jusqu'à l'extinction
         # du process, et qui se cumule avec le worker de la dictée suivante
@@ -1542,6 +1635,7 @@ class DictationController:
             if _EV: _EV.log(_EV.E.GPU_TIMEOUT)
             # v29.2 — et on NETTOIE l'overlay (sinon il restait coincé en
             # « transcription… » et chevauchait l'UI -> panneau fantôme).
+            self._outcome.overlay = "La transcription a calé, réessayez."
             try:
                 overlay.error(_te("La transcription a calé, réessayez."))
                 _schedule_overlay_hide(3.0)
@@ -1564,24 +1658,21 @@ class DictationController:
         # v9 TOP-5 #2 / v11 — Feedback explicite micro non autorisé / silence.
         # Aucun emoji (cf. brief V11). Texte clair sans jargon.
         if not raw:
-            try:
-                rms = getattr(self.engine, "last_rms", 0.0)
-                peak = getattr(self.engine, "last_peak", 0.0)
-                if rms < 0.001 and peak < 0.005:
-                    # Aucun signal du tout = micro non autorisé ou mauvais
-                    # périphérique. Message clair + chemin exact, sans jargon.
-                    if _EV: _EV.log(_EV.E.MIC_DEVICE_FAIL, rms=round(float(rms), 5))
-                    _toast(
-                        "Aucun son n'a été capté. Vérifiez que le microphone "
-                        "est autorisé : menu Pomme > Réglages Système > "
-                        "Confidentialité et sécurité > Microphone, puis "
-                        "autorisez Vlocal et relancez.", kind="error")
-                else:
-                    if _EV: _EV.log(_EV.E.SILENCE, rms=round(float(rms), 5))
-                    _toast("Le son était très faible. Rapprochez-vous du "
-                           "micro et réessayez.", kind="error")
-            except Exception:
-                pass
+            # v1.4.4 — texte vide : on dit POURQUOI, d'après le moteur
+            # (engine.last_empty_reason) et le signal capté. Avant, tout ce
+            # qui n'était pas un signal nul devenait « silence », panne moteur
+            # comprise, avec un « son très faible » qui mentait.
+            rms = float(getattr(self.engine, "last_rms", 0.0))
+            peak = float(getattr(self.engine, "last_peak", 0.0))
+            reason = self.engine.last_empty_reason()
+            code = (_EV.empty_text_code(reason, rms, peak) if _EV
+                    else ("transcribe_fail" if reason == "fail" else "silence"))
+            # Un flux mort a déjà été journalisé pendant l'enregistrement
+            # (mic_device_fail:stream_dead) : même appui, même cause, un seul incident.
+            if _EV and not (code == _EV.E.MIC_ZERO_SIGNAL and my_evt.stream_dead):
+                _EV.log(code, reason=reason, rms=round(rms, 5), peak=round(peak, 5))
+            toast_msg, self._outcome.overlay = _EMPTY_TEXT_MSG[code]
+            _toast(toast_msg, kind="error")
             return raw
 
         # v3.2.8 — FILTRE anti-hallucination POST-moteur (en plus de celui d'engine.py,
@@ -5290,9 +5381,11 @@ def start_global_hotkey():
                     _schedule_overlay_hide(4.0)
                 return
             if not text:
-                # Silence / micro muet : stop_and_finalize a déjà toasté le détail.
+                # Silence, panne, dictée perdue... : stop_and_finalize a déjà
+                # toasté le détail et donne ici le texte court de SA dictée.
                 if _own():
-                    overlay.error(_te("Aucun son capté. Réessayez."))
+                    overlay.error(_te(_controller.empty_overlay_text()
+                                      or "Aucun son capté. Réessayez."))
                     _schedule_overlay_hide(4.0)
                 return
             # CONC-5 / v29.2 / v1.0.22 — GARDE-FOU D'INSERTION, réécrit pour le
@@ -5721,6 +5814,11 @@ def _finish_model_download():
     global _engine_load_params
     _resolve_model_dirs()
     _point_mlx_to_cache()
+    # v1.4.4 — un verdict GPU rendu AVANT le téléchargement (modèle absent) est
+    # caduc : on l'oublie, la prochaine dictée re-sonde. Après le repointage :
+    # reset_availability garde une référence de modèle qui existe (le cache).
+    import mlx_engine as _mlx_reset
+    _mlx_reset.reset_availability("modèle téléchargé")
     _wd = None
     if os.path.exists(os.path.join(MODEL_DIR, "model.bin")):
         _wd = MODEL_DIR
