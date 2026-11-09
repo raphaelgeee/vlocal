@@ -403,7 +403,8 @@ class _FinalizeWatch:
 # réunion, jamais à la dictée (on y dicterait le son de l'ordinateur).
 _LOOPBACK_KW = ("blackhole", "aggregate", "multi-output", "loopback",
                 "stereo mix", "soundflower", "vb-audio", "voicemeeter",
-                "what u hear", "wave out")
+                "what u hear", "wave out", "microsoft teams", "zoomaudio",
+                "zoom audio")
 
 
 class DictationController:
@@ -570,7 +571,11 @@ class DictationController:
                 # v1.0.22 — chaque étape est conditionnée au BUDGET RESTANT :
                 # mieux vaut rendre la main en 2 s et réparer en fond que faire
                 # patienter l'utilisateur (jusqu'à 134 s au pire cas théorique).
-                if _time_left(_budget_dl) > 0.5:
+                # v1.5 — le respawn est réservé à un worker indisponible : un
+                # refus du périphérique (engine.MicRefused, micro intégré déjà
+                # tenté) laisse le worker sain, le tuer coûtait 1,3 s.
+                if (not getattr(e, "worker_healthy", False)
+                        and _time_left(_budget_dl) > 0.5):
                     try:
                         self.engine.hard_mic_reset(timeout=min(1.2, _time_left(_budget_dl)))
                     except Exception as e_reset:
