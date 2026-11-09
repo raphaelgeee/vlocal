@@ -512,7 +512,11 @@ class DictationOutcomeTests(unittest.TestCase):
         self.gpu.update(available=True, status=("suspended", "gel"),
                         result=TimeoutError("transcription MLX figée"))
         self.eng.model = None               # GPU actif : turbo CPU jamais chargé
-        with mock.patch.object(self.eng, "load_model") as load:
+        # v1.6 : préchargement soumis à la mémoire disponible ; ici, on teste
+        # le déclenchement, pas la mémoire de la machine qui lance les tests.
+        with mock.patch.object(engine.memory_policy, "cpu_preload_allowed",
+                               return_value=True), \
+                mock.patch.object(self.eng, "load_model") as load:
             self.eng.transcribe_window(self.LOUD)
             for t in threading.enumerate():
                 if t.name == "cpu-fallback-preload":

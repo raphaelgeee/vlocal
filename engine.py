@@ -28,6 +28,7 @@ import weakref
 import numpy as np
 
 import errors       # journal d'événements (codes stables, best-effort)
+import memory_policy
 import mlx_engine   # backend GPU optionnel (repli CPU auto si indisponible)
 
 
@@ -841,8 +842,15 @@ class VlocalEngine:
         CPU en ARRIÈRE-PLAN : les dictées suivantes, envoyées au CPU pendant la
         suspension, n'ont plus à payer son chargement (1,6 Go) dans le budget du
         chien de garde. Rien à faire si le GPU reste disponible (simple attente
-        de file) ou si le modèle CPU est déjà là."""
+        de file) ou si le modèle CPU est déjà là.
+        v1.6 — seulement si la mémoire le permet (memory_policy.
+        cpu_preload_allowed : pas de pression, >= 3,3 Go disponibles pour un pic
+        mesuré de 2,25 Go). Sinon rien : imposer 2,2 Go à une machine serrée la
+        ferait swapper ; une dictée qui en a besoin le charge à la demande."""
         if self.model is not None or mlx_engine.status()[0] == "ok":
+            return
+        if not memory_policy.cpu_preload_allowed():
+            print("[whisper] repli CPU non préchargé : mémoire insuffisante.")
             return
         with self._cpu_preload_lock:
             if self._cpu_preloading:

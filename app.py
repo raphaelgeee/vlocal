@@ -14,9 +14,9 @@ Déclencheurs :
   - Bouton « Dicter » / barre Espace (fenêtre au premier plan)
   - Raccourci GLOBAL Ctrl+Espace (push-to-talk, même hors focus)
 
-Le modèle Whisper est chargé PARESSEUSEMENT au 1er usage puis DÉCHARGÉ après
-inactivité (idle-unload, délai _IDLE_UNLOAD_S) pour tenir sur 8 Go ; rechargé
-tout seul au prochain usage (~0,7 s). Voir _start_idle_unloader.
+Le modèle Whisper est chargé PARESSEUSEMENT au 1er usage puis DÉCHARGÉ sous
+pression mémoire (memory_policy.py) pour tenir sur 8 Go ; rechargé tout seul au
+prochain usage, pendant la parole. Voir _start_idle_unloader.
 
 Lancement :   ./venv/bin/python app.py
 Auto-test  :   ./venv/bin/python app.py --selftest   (sans fenêtre ni micro)
@@ -5901,14 +5901,11 @@ _api_instance = None        # v3.3 — handle de l'instance Api (re-vérif licen
 _engine_ready = threading.Event()
 
 
-# Phase 2 (RAM) — DÉCHARGEMENT À L'INACTIVITÉ : Whisper turbo (~1,6 Go) est le
-# poids lourd. On le libère après quelques minutes sans usage (RAM au repos
-# ~0,2 Go au lieu de ~1,6) ; la prochaine dictée/transcription le recharge tout
-# seul (chargement paresseux). Décisif pour tenir sur 8 Go sans swap.
-# 90 s : audit RAM v18 — le rechargement mesuré coûte 0,74 s (sub-seconde), donc
-# libérer turbo plus tôt est sans coût UX perceptible. Ne pas descendre sous ~60 s.
-_IDLE_UNLOAD_S = 60        # turbo : plancher quand la RAM est SERRÉE (8 Go chargé)
-_IDLE_UNLOAD_FAST_S = 45   # small : délai de grâce avant déchargement séparé
+# Phase 2 (RAM), v1.6 — DÉCHARGEMENT SOUS PRESSION MÉMOIRE : les modèles
+# restent résidents tant que macOS n'est pas sous pression (plus de rechargement
+# ni de transition Metal à chaque pause) ; sous pression, le modèle CPU part
+# d'abord, puis le modèle GPU. Politique et seuils : memory_policy.py.
+_MEMORY_POLL_S = 5.0       # sysctl + psutil : ~0,2 ms par passage
 
 
 def _total_ram_gb():
@@ -5929,95 +5926,57 @@ def _total_ram_gb():
             return 8.0   # hypothèse PRUDENTE (cible basse) si indéterminé
 
 
-def _idle_thresholds():
-    """v21 — Délais d'éco-RAM ADAPTATIFS à la mémoire DISPONIBLE : décharger
-    turbo après 60 s n'a de sens que quand la RAM manque. Sur une machine à
-    l'aise, ça créait LA variance de latence (rechargement + dictée suivante
-    plus lente, « la 1re dictée est toujours plus lente »). RAM abondante ->
-    on garde les modèles chauds bien plus longtemps ; RAM serrée (la cible
-    8 Go avec Chrome/Slack) -> comportement frugal inchangé."""
-    try:
-        import psutil as _ps
-        avail_gb = _ps.virtual_memory().available / 2 ** 30
-    except Exception:
-        avail_gb = 0.0
-    if avail_gb >= 8.0:
-        return 900, 900       # 15 min : machine à l'aise, latence stable prime
-    if avail_gb >= 4.0:
-        return 240, 180
-    return _IDLE_UNLOAD_S, _IDLE_UNLOAD_FAST_S
+def _apply_memory_plan(eng, actions) -> None:
+    """Exécute les déchargements décidés par memory_policy.plan, dans l'ordre."""
+    import mlx_engine as _mlx
+    for action in actions:
+        try:
+            if action == "cpu":
+                eng.unload_model()
+                print("[mémoire] modèle CPU déchargé (rechargé au prochain usage).")
+            elif action == "gpu":
+                _mlx.unload()
+                print("[mémoire] modèle GPU déchargé (rechargé dès le début de "
+                      "la prochaine dictée).")
+        except Exception as e:
+            print(f"[mémoire] déchargement « {action} » KO : {type(e).__name__}: {e}")
+
+
+def _memory_tick() -> None:
+    """Un passage de la politique mémoire : lit la pression, décide, exécute."""
+    import time as _t
+    import memory_policy as _mp
+    import mlx_engine as _mlx
+    eng = _controller.engine if _controller is not None else None
+    if eng is None:
+        return
+    busy = bool(_meeting_state.get("recording")
+                or _meeting_state.get("pipeline_busy")
+                or _meeting_state.get("file_busy")
+                or _controller.recording_active())
+    now = _t.time()
+    cpu_last = max(getattr(eng, "last_use", 0.0), getattr(eng, "_fast_last_use", 0.0))
+    level = _mp.pressure_level()
+    actions = _mp.plan(
+        level, busy=busy,
+        gpu_loaded=_mlx.loaded(), gpu_idle_s=_mlx.idle_seconds(),
+        cpu_loaded=(eng.model is not None or eng._fast_model is not None),
+        cpu_idle_s=now - cpu_last,
+        cpu_is_fallback=(_mlx.status()[0] == "ok"))
+    if actions:
+        print(f"[mémoire] pression {_mp.LEVEL_NAMES[level]} -> "
+              f"déchargement : {', '.join(actions)}.")
+        _apply_memory_plan(eng, actions)
 
 
 def _start_idle_unloader():
-    import time as _t
-
     def _check():
         try:
-            eng = _controller.engine if _controller is not None else None
-            if eng is not None:
-                busy = (_meeting_state.get("recording")
-                        or _meeting_state.get("pipeline_busy")
-                        or _meeting_state.get("file_busy")
-                        or _controller.recording_active())
-                idle_turbo_s, idle_fast_s = _idle_thresholds()
-                # turbo (le poids lourd ~1,6 Go)
-                if getattr(eng, "model", None) is not None and not busy:
-                    idle = _t.time() - getattr(eng, "last_use", 0)
-                    if idle > idle_turbo_s:
-                        eng.unload_model()
-                        print(f"[whisper] turbo déchargé après {idle:.0f}s "
-                              f"d'inactivité (rechargement auto au prochain usage).")
-                # small (~480 Mo) : déchargé SÉPARÉMENT après un délai de grâce
-                # (évite de re-payer le cold-start sur des dictées rapprochées).
-                if getattr(eng, "_fast_model", None) is not None and not busy:
-                    idle_f = _t.time() - getattr(eng, "_fast_last_use", 0)
-                    if idle_f > idle_fast_s:
-                        eng.unload_fast_model()
-                # v23 — modèle GPU MLX (~1,5 Go) : MÊME logique d'idle-unload.
-                # Restaure la « redescente de RAM » à l'arrêt sur la cible 8 Go
-                # (sinon le modèle GPU restait résident à vie). Rechargé
-                # paresseusement (cold ~1,2 s, masqué par le préchauffe).
-                try:
-                    import mlx_engine as _mlx
-                    # v23.1 — seuil GPU DÉDIÉ, bien plus court que le turbo CPU :
-                    # le rechargement GPU (~1 s) est MASQUÉ par le prewarm au
-                    # début de la parole (engine.py), donc décharger vite ne coûte
-                    # aucune latence perceptible, mais rend ~1,5 Go à l'OS. La
-                    # « redescente de RAM » devient quasi immédiate après l'arrêt.
-                    try:
-                        import psutil as _ps2
-                        _avail_gb = _ps2.virtual_memory().available / 2 ** 30
-                    except Exception:
-                        _avail_gb = 0.0
-                    # v29.1 — seuils RELEVÉS pour casser le CHURN Metal : décharger
-                    # /recharger le modèle GPU à ~25 s entre des dictées rapprochées
-                    # multipliait les transitions Metal et finissait par FIGER une
-                    # inférence (ralentissement progressif puis « dictée infinie »
-                    # sous usage intensif). On garde le modèle chaud tant que les
-                    # dictées s'enchaînent ; la RAM n'est rendue qu'après une vraie
-                    # pause. (mlx_engine borne en plus toute inférence figée à 60 s.)
-                    # v1.0.6 — seuils RELEVÉS (compromis ~2 min validé) : casse encore
-                    # plus le churn Metal, cause prouvée du gel de finalisation sous usage
-                    # intensif (logs finalize_timeout : décharge à ~60 s entre rafales de
-                    # dictées -> rechargements GPU répétés -> command buffer figé). On garde
-                    # le GPU chaud ~2 min ; la RAM n'est rendue qu'après une vraie pause.
-                    if _avail_gb >= 8.0:
-                        _mlx_idle_s = 150
-                    elif _avail_gb >= 4.0:
-                        _mlx_idle_s = 120       # ~2 min (était 60 s) — réduit fortement le churn
-                    else:
-                        _mlx_idle_s = 60        # RAM serrée : churn réduit, RAM rendue après 1 min
-                    _idle_mlx = _mlx.idle_seconds()
-                    if not busy and _mlx.loaded() and _idle_mlx > _mlx_idle_s:
-                        _mlx.unload()
-                        print(f"[mlx] modèle GPU déchargé après "
-                              f"{_idle_mlx:.0f}s d'inactivité (RAM rendue).")
-                except Exception:
-                    pass
-        except Exception:
-            pass
+            _memory_tick()
+        except Exception as e:
+            print(f"[mémoire] passage KO : {type(e).__name__}: {e}")
         finally:
-            t = threading.Timer(12.0, _check)   # v23.1.1 — poll 12 s : redescente RAM rapide
+            t = threading.Timer(_MEMORY_POLL_S, _check)
             t.daemon = True
             t.start()
     t = threading.Timer(60.0, _check)
