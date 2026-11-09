@@ -940,7 +940,7 @@ class DictationController:
             # v1.0.22 — chaînage : libère le compteur + AVANCE la file FIFO
             # (une finalisation figée ne doit jamais retenir la suivante).
             with self._fin_cv:
-                self._fin_inflight = max(0, self._fin_inflight - 1)
+                self._release_inflight(_my_epoch)
                 self._fin_serving = max(self._fin_serving, _my_ticket + 1)
                 self._busy = self._fin_inflight > 0
                 self._fin_cv.notify_all()
@@ -976,12 +976,20 @@ class DictationController:
             # la file (max idempotent), sans re-décrémenter le compteur.
             with self._fin_cv:
                 if not watch.fired:
-                    self._fin_inflight = max(0, self._fin_inflight - 1)
+                    self._release_inflight(_my_epoch)
                 self._fin_serving = max(self._fin_serving, _my_ticket + 1)
                 self._busy = self._fin_inflight > 0
                 self._fin_cv.notify_all()
             # v21 — fin de l'assertion anti-App Nap (succès OU échec).
             _end_activity(_my_act)
+
+    def _release_inflight(self, epoch: int) -> None:
+        """Rend la place « en vol » d'une finalisation (sous _fin_cv). v1.5 —
+        une finalisation d'avant force_reset n'est plus comptée (le reset a
+        remis le compteur à zéro) : la décompter retirait la place d'une
+        dictée lancée depuis, et _busy tombait pendant sa transcription."""
+        if epoch == self._epoch:
+            self._fin_inflight = max(0, self._fin_inflight - 1)
 
     def _late_dictation(self, raw: str) -> str:
         """v1.4.4 — Résultat arrivé APRÈS le chien de garde : l'utilisateur a déjà
