@@ -81,6 +81,14 @@ def _api_safe(default=None):
     return deco
 
 
+def _msg(fr: str, en: str) -> str:
+    """Message FIXE destiné à l'utilisateur, dans la langue de l'interface.
+
+    Règle : aucun texte d'exception n'est montré à l'utilisateur. Le détail
+    technique va au journal ; l'interface reçoit l'une de ces deux phrases."""
+    return en if appstate.ui_lang == "en" else fr
+
+
 def _toast(message: str, kind: str = "info"):
     """v15.1 — Affiche un toast clair à l'utilisateur. Helper centralisé :
     une seule façon de parler à l'utilisateur, vouvoiement cohérent.
