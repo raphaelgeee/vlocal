@@ -59,8 +59,8 @@ _BT = {
     "This meeting's audio is no longer available, so speaker identification cannot be run again.",
   "La dictée a calé, réessayez.":
     "The dictation stalled. Please try again.",
-  "La transcription a calé, réessayez.":
-    "The transcription stalled. Please try again.",
+  "La transcription a calé.":
+    "The transcription stalled.",
   # --- v1.4.4 : texte vide expliqué (_EMPTY_TEXT_MSG), dictée perdue ---
   "Son trop faible. Réessayez.": "Sound too faint. Please try again.",
   "Aucune parole n'a été reconnue. Parlez distinctement, près du micro, et réessayez.":

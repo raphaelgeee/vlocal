@@ -51,7 +51,7 @@ def start_global_hotkey():
     hotkey_mode = "tap" if _settings_now.get("hotkey_mode") == "tap" else "hold"
     if hotkey_name == "none":
         appstate.hotkey_label = ""   # raccourci désactivé -> pas de libellé (toast/UI)
-        print("[hotkey] désactivé via VLOCAL_HOTKEY=none — utilise le bouton Dicter.")
+        print("[hotkey] désactivé via VLOCAL_HOTKEY=none — utilisez le bouton Dicter.")
         return None
 
     # Configs : nom -> (modificateurs requis, vk de la touche déclencheur,
@@ -349,8 +349,8 @@ def start_global_hotkey():
                          max_seconds=600.0, chord_vk=chord_vk,
                          mode=hotkey_mode, on_cancel=_cancel_safe, on_lock=_lock_safe)
     if t is None:
-        print("[hotkey] raccourci inactif — accorde l'Accessibilité à Vlocal, "
-              "ou utilise le bouton Dicter.")
+        print("[hotkey] raccourci inactif — accordez l'Accessibilité à Vlocal, "
+              "ou utilisez le bouton Dicter.")
     else:
         print(f"[hotkey] mode de déclenchement : {hotkey_mode}")
     _hotkey_state = t

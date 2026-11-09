@@ -979,7 +979,7 @@ try{if(localStorage.getItem('vlocal_theme')==='light')document.documentElement.s
             <div class="set-row"><div class="si"><div class="sl" data-i18n="set.reunion.on">Activer le mode réunion</div><div class="sd" data-i18n="set.reunion.on.d">Enregistrement et transcription des conversations.</div></div><div class="tog" data-setting="reunion_enabled"></div></div>
             <div class="set-row"><div class="si"><div class="sl" data-i18n="set.diar">Identifier les locuteurs</div><div class="sd" data-i18n="set.diar.d">Qui parle quand, en local (WhoTalks).</div></div><div class="tog" data-setting="diarization_enabled"></div></div>
             <div class="set-row"><div class="si"><div class="sl" data-i18n="set.voice">Mémoriser les voix</div><div class="sd" data-i18n="set.voice.d">Reconnaît automatiquement les personnes déjà nommées.</div></div><div class="tog" data-setting="voice_memory_enabled"></div></div>
-            <div class="set-row" style="border-bottom:none"><div class="si"><div class="sl" data-i18n="set.mic">Micro de la réunion</div><div class="sd" data-i18n="set.mic.d">Entrée audio pour l'enregistrement. Par défaut = micro système.</div></div></div>
+            <div class="set-row" style="border-bottom:none"><div class="si"><div class="sl" data-i18n="set.mic">Micro</div><div class="sd" data-i18n="set.mic.d">Entrée audio de la dictée et des réunions. Par défaut = micro système.</div></div></div>
             <select class="sel" id="set-mic" style="width:100%;margin-top:2px"></select>
           </div>
           <div class="card sec" id="set-obsidian-card">
@@ -1000,7 +1000,7 @@ try{if(localStorage.getItem('vlocal_theme')==='light')document.documentElement.s
           </div>
           <div class="card sec" id="set-share-card">
             <div class="st" data-i18n="set.share">Données partagées</div>
-            <div class="sh" data-i18n="set.share.d">Vlocal est gratuit et open source. Pour savoir qui l'utilise, le temps qu'il fait gagner et sur quel matériel il tourne mal, l'app peut envoyer une fois par jour : votre prénom, votre nom, votre e-mail si vous en donnez un, les versions, le modèle de votre Mac, la langue, le raccourci et le moteur utilisés, puis par jour vos compteurs d'usage et le nombre d'incidents techniques. Jamais de texte, jamais d'audio, jamais le détail d'un incident.</div>
+            <div class="sh" data-i18n="set.share.d">Vlocal est gratuit et open source. Pour savoir qui l'utilise, le temps qu'il fait gagner et sur quel matériel il tourne mal, l'app peut envoyer une fois par jour : votre prénom, votre nom, votre e-mail si vous en donnez un, les versions, le modèle de votre Mac, la langue, le raccourci et le moteur utilisés, puis par jour vos compteurs d'usage et le nombre d'incidents techniques, avec leur cause technique (une étape prise dans une liste fermée, comme « ouverture du micro »). Jamais de texte, jamais d'audio, jamais le contexte d'un incident.</div>
             <div class="set-row"><div class="si"><div class="sl" data-i18n="set.share.on">Partager mon usage</div><div class="sd" data-i18n="set.share.on.d">Désactivable à tout moment. Sans effet sur le fonctionnement de l'app.</div></div><div class="tog" data-setting="telemetry_enabled"></div></div>
             <div class="field" style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap"><input class="inp" id="share-first" style="flex:1;min-width:140px" placeholder="Prénom" data-i18n-ph="set.share.first" autocomplete="given-name"/><input class="inp" id="share-last" style="flex:1;min-width:140px" placeholder="Nom" data-i18n-ph="set.share.lastname" autocomplete="family-name"/></div>
             <div class="field" style="margin-top:8px"><input class="inp" id="share-email" style="width:100%" type="email" placeholder="Adresse e-mail" data-i18n-ph="set.share.email" autocomplete="email"/></div>
@@ -1186,7 +1186,7 @@ try{if(localStorage.getItem('vlocal_theme')==='light')document.documentElement.s
       "set.reunion":"Mode Réunion","set.reunion.on":"Activer le mode réunion","set.reunion.on.d":"Enregistrement et transcription des conversations.",
       "set.diar":"Identifier les locuteurs","set.diar.d":"Qui parle quand, en local (WhoTalks).",
       "set.voice":"Mémoriser les voix","set.voice.d":"Reconnaît automatiquement les personnes déjà nommées.",
-      "set.mic":"Micro de la réunion","set.mic.d":"Entrée audio pour l'enregistrement. Par défaut = micro système.","set.mic.default":"Micro système (par défaut)","set.mic.loopback":"son système",
+      "set.mic":"Micro","set.mic.d":"Entrée audio de la dictée et des réunions. Par défaut = micro système.","set.mic.default":"Micro système (par défaut)","set.mic.loopback":"son système",
       "set.data":"Données & stockage","set.data.d":"Tout reste sur votre Mac. Les réunions (avec audio) pèsent le plus.",
       "set.reset":"Réinitialiser les statistiques",
       "set.reset.d":"« Réinitialiser » remet les compteurs du tableau de bord à zéro sans supprimer vos transcriptions.",
@@ -1371,7 +1371,7 @@ try{if(localStorage.getItem('vlocal_theme')==='light')document.documentElement.s
       "js.unit.mb":" Mo",
       "set.obs":"Connexion Obsidian","set.obs.d":"Rangez vos dictées, vos réunions et vos rappels dans un coffre Obsidian, en local. Rien ne quitte votre Mac.","set.obs.create":"Créer le coffre « Vlocal, ma voix »","set.obs.create.d":"Le coffre « Vlocal, ma voix » range tout ce que vous dites dans Vlocal : dictées par jour, réunions par locuteur, rappels. Un fichier CLAUDE.md à sa racine explique la structure à un assistant qui travaille sur vos fichiers.","toast.obs-created":"Coffre « Vlocal, ma voix » créé dans Documents et connecté.","set.obs.on":"Activer la capture Obsidian","set.obs.on.d":"Chaque dictée est rangée au bon endroit de votre coffre.","set.obs.connect":"Détecter mon coffre","set.obs.pick":"Choisir manuellement","status.obs.on":"Coffre connecté · {0}","status.obs.off":"Aucun coffre connecté.","toast.obs-connected":"Coffre Obsidian connecté.","toast.obs-fail":"Connexion impossible. Réessayez.",
       "side.free":"Gratuit et open source","side.local":"100 % local · sur votre Mac",
-      "set.share":"Données partagées","set.share.d":"Vlocal est gratuit et open source. Pour savoir qui l'utilise, le temps qu'il fait gagner et sur quel matériel il tourne mal, l'app peut envoyer une fois par jour : votre prénom, votre nom, votre e-mail si vous en donnez un, les versions, le modèle de votre Mac, la langue, le raccourci et le moteur utilisés, puis par jour vos compteurs d'usage et le nombre d'incidents techniques. Jamais de texte, jamais d'audio, jamais le détail d'un incident.",
+      "set.share":"Données partagées","set.share.d":"Vlocal est gratuit et open source. Pour savoir qui l'utilise, le temps qu'il fait gagner et sur quel matériel il tourne mal, l'app peut envoyer une fois par jour : votre prénom, votre nom, votre e-mail si vous en donnez un, les versions, le modèle de votre Mac, la langue, le raccourci et le moteur utilisés, puis par jour vos compteurs d'usage et le nombre d'incidents techniques, avec leur cause technique (une étape prise dans une liste fermée, comme « ouverture du micro »). Jamais de texte, jamais d'audio, jamais le contexte d'un incident.",
       "set.share.on":"Partager mon usage","set.share.on.d":"Désactivable à tout moment. Sans effet sur le fonctionnement de l'app.",
       "set.share.first":"Prénom","set.share.lastname":"Nom","set.share.last":"Dernier envoi : {0}",
       "onb.2.lead":"Vlocal est <b>gratuit et open source</b>. Pour savoir qui l'utilise et l'aider quand il tourne mal, l'app envoie une fois par jour votre prénom, votre nom, vos compteurs d'usage et des caractéristiques techniques de votre Mac. <b>Jamais de texte, jamais d'audio.</b> Le détail est dans les Réglages, et vous pouvez refuser.",
@@ -1419,7 +1419,7 @@ try{if(localStorage.getItem('vlocal_theme')==='light')document.documentElement.s
       "set.reunion":"Meeting mode","set.reunion.on":"Enable meeting mode","set.reunion.on.d":"Recording and transcription of conversations.",
       "set.diar":"Identify speakers","set.diar.d":"Who speaks when, on-device (WhoTalks).",
       "set.voice":"Remember voices","set.voice.d":"Automatically recognizes people you have already named.",
-      "set.mic":"Meeting microphone","set.mic.d":"Audio input for recording. Default = system microphone.","set.mic.default":"System microphone (default)","set.mic.loopback":"system audio",
+      "set.mic":"Microphone","set.mic.d":"Audio input for dictation and meetings. Default = system microphone.","set.mic.default":"System microphone (default)","set.mic.loopback":"system audio",
       "set.data":"Data & storage","set.data.d":"Everything stays on your Mac. Meetings (with audio) take the most space.",
       "set.reset":"Reset statistics",
       "set.reset.d":"\"Reset\" sets the dashboard counters back to zero without deleting your transcriptions.",
@@ -1604,7 +1604,7 @@ try{if(localStorage.getItem('vlocal_theme')==='light')document.documentElement.s
       "js.unit.mb":" MB",
       "set.obs":"Obsidian connection","set.obs.d":"Save your dictations, meetings and reminders to an Obsidian vault, locally. Nothing leaves your Mac.","set.obs.create":"Create the \"Vlocal, my voice\" vault","set.obs.create.d":"The \"Vlocal, my voice\" vault keeps everything you say in Vlocal: dictations by day, meetings by speaker, reminders. A CLAUDE.md file at its root explains the structure to an assistant working on your files.","toast.obs-created":"\"Vlocal, my voice\" vault created in Documents and connected.","set.obs.on":"Enable Obsidian capture","set.obs.on.d":"Each dictation is filed in the right place in your vault.","set.obs.connect":"Detect my vault","set.obs.pick":"Choose manually","status.obs.on":"Vault connected · {0}","status.obs.off":"No vault connected.","toast.obs-connected":"Obsidian vault connected.","toast.obs-fail":"Connection failed. Try again.",
       "side.free":"Free and open source","side.local":"100% local · on your Mac",
-      "set.share":"Shared data","set.share.d":"Vlocal is free and open source. To know who uses it, how much time it saves and where it runs badly, the app can send once a day: your first and last name, your email if you give one, the versions, your Mac model, the language, the shortcut and the engine in use, then your daily usage counters and a count of technical incidents. Never any text, never any audio, never the detail of an incident.",
+      "set.share":"Shared data","set.share.d":"Vlocal is free and open source. To know who uses it, how much time it saves and where it runs badly, the app can send once a day: your first and last name, your email if you give one, the versions, your Mac model, the language, the shortcut and the engine in use, then your daily usage counters and a count of technical incidents, with their technical cause (a step from a closed list, such as opening the microphone). Never any text, never any audio, never the context of an incident.",
       "set.share.on":"Share my usage","set.share.on.d":"Can be turned off at any time. Has no effect on how the app works.",
       "set.share.first":"First name","set.share.lastname":"Last name","set.share.last":"Last sent: {0}",
       "onb.2.lead":"Vlocal is <b>free and open source</b>. To know who uses it and to help when it runs badly, the app sends once a day your first and last name, your usage counters and technical characteristics of your Mac. <b>Never any text, never any audio.</b> The detail is in Settings, and you can decline.",
@@ -2606,7 +2606,7 @@ try{if(localStorage.getItem('vlocal_theme')==='light')document.documentElement.s
     // Touche Fn : macOS lui donne une action par défaut, on le dit à l'écran.
     var hkNote = document.getElementById('set-hotkey-note');
     if(hkNote){ hkNote.textContent = (s.hotkey === 'fn') ? t('set.hotkey.fn') : ''; }
-    // micro de la réunion (v1.0.1) : liste les entrées audio réelles + sélection courante
+    // micro de la dictée et des réunions (v1.0.1) : liste les entrées audio réelles + sélection courante
     var micSel = document.getElementById('set-mic');
     if(micSel){
       try{

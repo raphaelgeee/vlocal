@@ -1095,9 +1095,11 @@ class DictationController:
             if _EV: _EV.log(_EV.E.GPU_TIMEOUT)
             # v29.2 — et on NETTOIE l'overlay (sinon il restait coincé en
             # « transcription… » et chevauchait l'UI -> panneau fantôme).
-            self._outcome.overlay = "La transcription a calé, réessayez."
+            # La carte d'erreur de la pilule ajoute d'elle-même l'invitation à
+            # réessayer (« Réessayez : maintenez … ») : le titre ne la répète pas.
+            self._outcome.overlay = "La transcription a calé."
             try:
-                overlay.error(_te("La transcription a calé, réessayez."))
+                overlay.error(_te("La transcription a calé."))
                 _schedule_overlay_hide(3.0)
             except Exception:
                 pass

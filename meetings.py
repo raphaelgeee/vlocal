@@ -210,11 +210,11 @@ def _visio_relabel_blocks(blocks, dom_path):
     """v1.0.12 — VISIO : réétiquette les blocs par SOURCE plutôt que de diariser
     le mix (la diarisation du mix donne des frontières fausses / labels qui
     swappent en plein milieu — CHECK 3). Le sidecar .dom contient (mic_rms,
-    sys_rms) par bloc de 50 ms : micro dominant -> « Toi », système dominant ->
+    sys_rms) par bloc de 50 ms : micro dominant -> « Vous », système dominant ->
     « Interlocuteur ». On fusionne ensuite les blocs voisins du même locuteur
     (recolle les phrases coupées). Réservé à la visio (sidecar présent).
     Best-effort : renvoie les blocs inchangés si quoi que ce soit échoue.
-    NB v1 : optimisé 1:1 (toi vs interlocuteur). Le multi-locuteurs (séparer les
+    NB v1 : optimisé 1:1 (vous vs interlocuteur). Le multi-locuteurs (séparer les
     différents participants système) reste à brancher (diarisation système-seul)."""
     import numpy as _np
     try:
@@ -237,7 +237,7 @@ def _visio_relabel_blocks(blocks, dom_path):
             mic_e = sys_e = 0.0
         nb = dict(b)
         # Ids au format SPEAKER_NN (l'UI les reconnaît : couleur stable + renommage).
-        # Le nom affiché « Toi »/« Interlocuteur » est fourni via `names` (cf. pipeline).
+        # Le nom affiché « Vous »/« Interlocuteur » est fourni via `names` (cf. pipeline).
         nb["speaker"] = "SPEAKER_00" if mic_e > sys_e else "SPEAKER_01"
         relabeled.append(nb)
     # Fusion des blocs voisins du même locuteur (recolle les phrases coupées).
@@ -605,7 +605,7 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
     _visio_dom = (wav_path or "") + ".dom"
     if os.path.exists(_visio_dom):
         # v1.0.12 — VISIO : diarisation par SOURCE (dominance micro/système),
-        # CAM++ NON chargé (RAM ↓, sous 2,10 Go). « Toi » = micro, « Interlocuteur »
+        # CAM++ NON chargé (RAM ↓, sous 2,10 Go). « Vous » = micro, « Interlocuteur »
         # = système. Présentiel (pas de sidecar .dom) garde CAM++ -> branche elif.
         _ui("setMeetingStage(%s)" % json.dumps("diarizing"))
         try:
@@ -616,7 +616,7 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
             if _vb:
                 speaker_blocks_json = json.dumps(
                     {"blocks": _vb,
-                     "names": {"SPEAKER_00": "Toi", "SPEAKER_01": "Interlocuteur"},
+                     "names": {"SPEAKER_00": "Vous", "SPEAKER_01": "Interlocuteur"},
                      "voices": {}}, ensure_ascii=False)
                 print(f"[visio] diarisation par source (sans CAM++) -> {len(_vb)} blocs")
         except Exception as _e:
@@ -803,7 +803,7 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
                         # replis successifs : cf. _attribute_blocks.
                         blocks = _attribute_blocks(diar_obj, units, wav_path,
                                                    spk_segs)
-                        # v1.0.12 — VISIO : réétiquetage par SOURCE (micro=Toi,
+                        # v1.0.12 — VISIO : réétiquetage par SOURCE (micro=Vous,
                         # système=interlocuteur) au lieu de la diarisation du mix
                         # (CHECK 3). Détecté par le sidecar dominance .dom ->
                         # visio UNIQUEMENT, présentiel strictement intact.
@@ -824,7 +824,7 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
                         # WhoTalks v1.2 — RECONNAISSANCE des voix connues (SAUTÉE en
                         # visio : centroïdes du mix non fiables ; cf. _recognize_voices,
                         # log=True : seul ce chemin imprime le détail).
-                        auto_names = ({"SPEAKER_00": "Toi", "SPEAKER_01": "Interlocuteur"}
+                        auto_names = ({"SPEAKER_00": "Vous", "SPEAKER_01": "Interlocuteur"}
                                       if _is_visio
                                       else _recognize_voices(voices_map, log=True))
                         # v1.0.23 — FIABILITÉ D'ATTRIBUTION, distincte de la

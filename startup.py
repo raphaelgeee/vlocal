@@ -149,7 +149,7 @@ def _start_hotkey_or_warn():
     # le reste du démarrage continue.
     try:
         if start_global_hotkey() is not None:
-            print("[hotkey]  actif : maintiens ton raccourci global pour dicter.")
+            print("[hotkey]  actif : maintenez votre raccourci global pour dicter.")
     except Exception as _hk_err:
         import traceback as _tb
         _tb.print_exc()
