@@ -73,14 +73,25 @@ modules is silent (`tests/test_modules_app.py`).
 1. The global shortcut (`hotkey_mac.py`, NSEvent monitors) or the UI calls
    `start()` on the dictation controller in `dictation.py`. Capture starts in the mic
    worker; the overlay shows the level.
-2. While the user speaks, `livetail.py` watches the buffer. Past 29 s of audio it
-   looks for a real silence (0.4 s under the engine's RMS threshold) after a
-   24 s target and transcribes each completed window in the background. Cutting
-   at silences only keeps the text identical to a single-pass transcription.
+2. While the user speaks, `livetail.py` (the dictation splitter: the former
+   live-tail and the pause anticipation are one mechanism) classifies the
+   buffer by 30 ms windows, voice or quiet (the engine's `SILENCE_RMS`). After
+   2 s of speech, each 0.4 s of quiet sends everything said since the last cut
+   to a background GPU job, cut inside the quiet. That result becomes the
+   final text if the key is released without the voice coming back; it
+   becomes a committed chunk if the voice comes back after a real pause
+   (0.7 s) and the chunk holds at least 4 s of speech; otherwise it is
+   dropped and the job interrupted. Each chunk gets the end of the committed
+   text as context (`engine.dictation_context`, 120 characters), which keeps
+   the language, the case and the sentence going. Speculative jobs only run
+   on the GPU without memory pressure; otherwise only the historical long
+   windows remain (24 s target, armed at 29 s). Measured on 24 dictations
+   with pauses: word error rate equal to the single pass.
 3. On release, `stop_and_finalize()` closes the microphone first (the next
-   dictation can start right away), collects the live-tail windows, and
-   transcribes the remainder. Chained dictations are serialized with FIFO
-   tickets so text is inserted in the order of the releases.
+   dictation can start right away), collects the committed chunks (waiting
+   only for a job that yields the final text, interrupting any other), and
+   transcribes the remainder, if any. Chained dictations are serialized with
+   FIFO tickets so text is inserted in the order of the releases.
 4. The text goes through the glossary and deterministic formatting
    (`processor.py`), is copied to the clipboard and inserted at the cursor
    through the Accessibility API (`inserter.py`). Reminders are detected and
@@ -102,7 +113,10 @@ Apple GPU is available. Both run the same model: measured text output is
 identical, the GPU is about seven times faster.
 
 `mlx_engine.py` runs every GPU operation on a single worker thread because MLX
-streams are per thread. A job that started and does not return within its
+streams are per thread. Jobs are ordered by priority (dictation first), and a
+background job may carry a `Cancel` token: it then stops at the next encoder
+layer or decoder step (measured under 30 ms), and queuing a dictation
+interrupts it, so a final transcription never waits for speculative work. A job that started and does not return within its
 timeout is a Metal freeze: the worker is abandoned, a fresh one is created on
 the next call, and the GPU is suspended for ten minutes while the CPU engine
 takes over. Three freezes within an hour disable the GPU for the session. A

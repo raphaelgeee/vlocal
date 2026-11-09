@@ -432,6 +432,43 @@ class TestFinalisationReelle(unittest.TestCase):
             self.assertEqual(c.empty_overlay_text(),
                              self.ns["_EMPTY_TEXT_MSG"]["transcribe_fail"][1])
 
+    def _avec_decoupeur(self, c, morceaux, pos):
+        """Découpeur simulé (livetail.py) : morceaux validés pendant la parole."""
+        vu = {}
+
+        class _Decoupeur:
+            stats = {"lances": 1, "valides": 1, "jetes": 0, "final": 0}
+
+            def stop_and_collect(self, audio=None):
+                vu["audio"] = audio
+                return list(morceaux), pos
+        c._tail = _Decoupeur()
+        recu = {}
+        orig = c.engine.stop_and_transcribe
+
+        def stop_and_transcribe(**kw):
+            recu.update(kw)
+            return orig(**kw)
+        c.engine.stop_and_transcribe = stop_and_transcribe
+        return vu, recu
+
+    def test_decoupeur_recoit_l_audio_et_ses_morceaux_sont_finalises(self):
+        c = self._monte([(0.05, "début. fin.", None)])
+        vu, recu = self._avec_decoupeur(c, ["début."], 16000)
+        self.assertEqual(self._relache(c), "début. fin.")
+        self.assertEqual(len(vu["audio"]), 3 * 16000)        # PCM complet, micro fermé
+        self.assertEqual(recu["live_tail"], (["début."], 16000))
+        self.assertIs(recu["audio"], vu["audio"])
+
+    def test_morceaux_anticipes_tardifs_jamais_inseres(self):
+        # Course entre l'anticipation et le chien de garde : le texte, même
+        # anticipé, ne passe que par claim() ; en retard, il n'est pas inséré.
+        c = self._monte([(self.BUDGET + 0.4, "début. fin.", None)])
+        self._avec_decoupeur(c, ["début."], 16000)
+        self.assertEqual(self._relache(c), "")
+        self.assertEqual(self.copies, [])
+        self.assertEqual(self.evts, [E.FINALIZE_TIMEOUT])
+
     def test_dictee_enchainee_derriere_une_lente_n_est_pas_perdue(self):
         # A prend presque tout son budget ; B, relâchée juste après, attend A
         # puis se transcrit dans le sien. Compté depuis le relâchement, B

@@ -102,7 +102,7 @@ def _mic_grabber_name():
 
 
 # v1.1.0 : le live-tail vit dans son module (livetail.py), testable sans
-# charger l'app. Alias conservé pour les appelants historiques.
+# charger l'app. v1.7 : c'est le découpeur unique (pauses et fenêtres longues).
 from livetail import DictationLiveTail as _DictationLiveTail  # noqa: E402
 
 
@@ -411,8 +411,8 @@ class DictationController:
     # disputaient le CPU et le lecteur du worker dans les premières centaines
     # de millisecondes (bascule HFP, premiers blocs CoreAudio) : trous et faux
     # flux mort. On laisse la capture s'installer d'abord ; le chargement reste
-    # masqué par la parole, qui dure toujours bien plus. (Le live-tail ne
-    # transcrit rien avant livetail.ARM_S = 29 s : il n'a pas besoin de ce délai.)
+    # masqué par la parole, qui dure toujours bien plus. (Le découpeur ne
+    # transcrit rien avant 2 s de parole : il n'a pas besoin de ce délai.)
     CAPTURE_SETTLE_S = 0.3
 
     def __init__(self, engine: VlocalEngine):
@@ -684,8 +684,9 @@ class DictationController:
             #    parle (si l'éco-RAM les avait déchargés, le rechargement est
             #    masqué par la parole au lieu de s'ajouter à l'attente), une
             #    fois la capture installée (CAPTURE_SETTLE_S) ;
-            # 3) live-tail (dictées longues, modes auto/fidèle) : fenêtres
-            #    transcrites PENDANT la parole, reliquat seul à la relâche.
+            # 3) découpeur (livetail.py, modes auto/fidèle) : morceaux
+            #    transcrits PENDANT la parole, à chaque vraie pause ; seule la
+            #    fin reste à transcrire au relâchement.
             speed = "auto"
             try:
                 speed = _load_settings().get("dictation_speed", "auto")
@@ -1058,7 +1059,9 @@ class DictationController:
         lt = None
         tail = my_tail
         if tail is not None:
-            texts, tpos = tail.stop_and_collect()
+            # v1.7 : le découpeur reçoit l'audio complet ; il interrompt tout
+            # calcul de fond qui ne rend pas le texte final.
+            texts, tpos = tail.stop_and_collect(audio)
             if texts and tpos > 0:
                 lt = (texts, tpos)
         self._fin_beat = time.time()      # v1.0.22 : battement (live-tail collecté)
@@ -1119,7 +1122,8 @@ class DictationController:
         log.info(f"[diag] dictée {_rec_dur:.1f}s -> transcription "
               f"{time.perf_counter() - _tt0:.2f}s "
               f"(branche {getattr(self.engine, 'last_model', '?')}"
-              f"{', live-tail ' + str(len(lt[0])) + ' fen.' if lt else ''})")
+              f"{', live-tail ' + str(len(lt[0])) + ' fen.' if lt else ''}"
+              f"{'; découpeur ' + str(tail.stats) if tail is not None else ''})")
 
         # --- CHEMIN BRUT : instantané, prioritaire ---
         # Le texte brut nettoyé EST le produit garanti : copié IMMÉDIATEMENT.
