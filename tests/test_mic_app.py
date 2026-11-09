@@ -9,6 +9,7 @@ avant l'ouverture et préchargement différé (E), réglage de micro appliqué �
 la dictée.
 """
 import sys
+import logging
 import threading
 import time
 import types
@@ -261,8 +262,9 @@ class TestReveilEtFluxMort(_Base):
         appkit.NSWorkspaceDidWakeNotification = "NSWorkspaceDidWakeNotification"
         appkit.NSWorkspace = types.SimpleNamespace(sharedWorkspace=lambda: types.SimpleNamespace(
             notificationCenter=lambda: _Centre()))
-        ns = {"threading": threading}
-        _charge_depuis_app({"WAKE_SETTLE_S", "_wake_observers", "_watch_system_wake"}, ns)
+        ns = {"threading": threading, "log": logging.getLogger("vlocal.lifecycle")}
+        _charge_depuis_app({"WAKE_SETTLE_S", "_wake_observers", "_watch_system_wake",
+                            "_renew_mic_after_wake"}, ns)
         ns["WAKE_SETTLE_S"] = 0.05
         with mock.patch.dict(sys.modules, {"AppKit": appkit}):
             ns["_watch_system_wake"](self.eng)

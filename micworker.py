@@ -48,7 +48,7 @@ v1.5 — LOT MICRO (« ça se coupe sous tension ») :
 PROTOCOLE (volontairement minuscule) :
   parent -> worker : une commande JSON par ligne sur stdin
       {"cmd":"start","device":<nom|null>,"prefer":"builtin"|null,"sr":16000}
-      {"cmd":"stop"} {"cmd":"ping"} {"cmd":"devices"} {"cmd":"quit"}
+      {"cmd":"stop"} {"cmd":"ping"} {"cmd":"devices"} {"cmd":"volume"} {"cmd":"quit"}
   worker -> parent : messages cadrés sur stdout : 1 octet type + longueur
       uint32 big-endian + payload
       b"A" = chunk audio brut (float32 mono, à la fréquence demandée)
@@ -58,7 +58,15 @@ PROTOCOLE (volontairement minuscule) :
       {"ev":"started","device":nom,"open_s":s,"sr_native":hz|null,"fallback":bool}
       {"ev":"stopped","xruns":n,"dropped":n}
       {"ev":"devices","names":[...]} {"ev":"refreshed","reason":"..."}
+      {"ev":"volume","value":0.0..1.0|null}   (réponse à {"cmd":"volume"})
       {"ev":"warn","msg":"..."}
+      {"ev":"error","src":"resample","err":"..."} : erreur de FLUX (pas une
+        réponse de commande), signalée une fois par flux, la capture continue
+      {"ev":"rerouted","device":nom,"gap_s":s,"reason":"stalled"|"default_changed"}
+        (v1.5 — capture rouverte SUR PLACE après la perte du périphérique : le
+        flux audio continue dans la même capture, seul le trou gap_s manque)
+  Le ping n'est rendu que si PortAudio est libre (verrou acquis en temps
+  borné) : une réinitialisation figée rend le worker « malade » au healthcheck.
 """
 
 import collections
@@ -114,6 +122,8 @@ _K_SCOPE_GLOBAL = _fourcc("glob")
 _K_DEVICE_UID = _fourcc("uid ")
 _K_NAME = _fourcc("lnam")
 _K_TRANSPORT = _fourcc("tran")
+_K_VOLUME = _fourcc("volm")          # kAudioDevicePropertyVolumeScalar
+_K_SCOPE_INPUT = _fourcc("inpt")
 _K_CF_UTF8 = 0x08000100
 
 # Transports CoreAudio (kAudioDeviceTransportType*) ramenés à un mot stable.
@@ -160,8 +170,8 @@ class CoreAudio:
         self._cf.CFRelease.argtypes = [ctypes.c_void_p]
         self._listeners = []   # garde les trampolines ctypes en vie
 
-    def _get(self, obj, selector, ctype):
-        addr = _PropAddr(selector, _K_SCOPE_GLOBAL, 0)
+    def _get(self, obj, selector, ctype, scope=_K_SCOPE_GLOBAL, element=0):
+        addr = _PropAddr(selector, scope, element)
         val = ctype()
         sz = ctypes.c_uint32(ctypes.sizeof(val))
         err = self._ca.AudioObjectGetPropertyData(obj, ctypes.byref(addr), 0, None,
@@ -202,6 +212,19 @@ class CoreAudio:
         """{"uid","name","transport"} du micro par défaut, ou None."""
         dev = self._get(_K_SYSTEM_OBJECT, _K_DEFAULT_INPUT, ctypes.c_uint32)
         return self._describe(dev) if dev else None
+
+    def input_volume(self):
+        """Volume d'entrée du micro par défaut (0.0 à 1.0), ou None s'il est
+        illisible ou sans réglage de volume. Élément principal d'abord, puis
+        le canal 1 (beaucoup de micros USB n'ont pas d'élément principal)."""
+        dev = self._get(_K_SYSTEM_OBJECT, _K_DEFAULT_INPUT, ctypes.c_uint32)
+        if not dev:
+            return None
+        for element in (0, 1):
+            v = self._get(dev, _K_VOLUME, ctypes.c_float, _K_SCOPE_INPUT, element)
+            if v is not None:
+                return max(0.0, min(1.0, float(v)))
+        return None
 
     def transport_of(self, name):
         """Transport du périphérique nommé `name` (PortAudio lit ses noms dans
@@ -272,6 +295,10 @@ class StreamResampler:
     def process(self, x):
         np = self._np
         x = np.asarray(x, dtype=np.float32).reshape(-1)
+        if not len(x):
+            # Bloc vide : rien à produire, et surtout ne pas réémettre le
+            # dernier échantillon (un échantillon parasite par bloc vide).
+            return np.zeros(0, dtype=np.float32)
         if self._h is not None:
             buf = np.concatenate((self._hist, x))
             self._hist = buf[-(self.TAPS - 1):]
@@ -324,6 +351,7 @@ class _Outbox:
         self._q = collections.deque()
         self._wake = threading.Event()
         self.dead = False      # pipe cassé : parent mort, plus rien ne sort
+        self._failed_transform = None   # dernier transform en échec (signalé une fois)
         self._thr = threading.Thread(target=self._run, name="mic-out", daemon=True)
         self._thr.start()
 
@@ -361,7 +389,20 @@ class _Outbox:
             if self.dead:
                 continue
             if transform is not None:
-                payload = transform(payload)
+                try:
+                    payload = transform(payload)
+                except Exception as e:
+                    # Un bloc impossible à rééchantillonner est perdu, pas le
+                    # thread d'écriture (sinon plus rien ne sort, « stopped »
+                    # compris). Signalé une fois par flux.
+                    if transform is not self._failed_transform:
+                        self._failed_transform = transform
+                        payload = json.dumps({"ev": "error", "src": "resample",
+                                              "err": f"rééchantillonnage : {e}"[:300]}
+                                             ).encode("utf-8")
+                        typ = b"J"
+                    else:
+                        continue
             try:
                 _write_all(self._fd, _frame(typ, payload))
             except OSError:
@@ -404,6 +445,14 @@ class MicWorker:
     # affamé plus longtemps que ça a un problème qu'aucune file ne réglera.
     QUEUE_MAX_S = 10.0
     REFRESH_DEBOUNCE_S = 0.3   # une bascule AirPods émet plusieurs notifications
+    # v1.5 — chien de garde de capture (micro #1). Un flux sain rappelle toutes
+    # les 50 ms : 0,5 s sans rappel = périphérique perdu (AirPods partis sur
+    # l'iPhone, USB débranché). On rouvre alors DANS LA MÊME CAPTURE.
+    STALL_S = 0.5
+    WATCH_TICK_S = 0.1
+    MAX_REROUTES = 10          # par capture : au-delà, le parent prend la main
+    CLOSE_TIMEOUT_S = 1.0      # fermeture d'un flux mort : au-delà, PortAudio est figé
+    PING_LOCK_S = 0.5          # le ping prouve que PortAudio est libre (< PING_TIMEOUT)
 
     def __init__(self, sd, out_fd: int, coreaudio=None, queue_max_s: float = None):
         self.sd = sd
@@ -416,6 +465,13 @@ class MicWorker:
         self._dropped = 0
         self._dirty = threading.Event()    # le défaut a changé depuis la dernière init
         self._closing = False
+        self._wedged = False     # une fermeture a figé : PortAudio n'est plus fiable
+        # Capture voulue {"gen","device","prefer","sr"} ; None au repos. Lue sans
+        # verrou par le chien de garde, revalidée sous _pa_lock avant d'agir.
+        self._cap = None
+        self._cap_gen = 0
+        self._last_cb = 0.0      # dernier rappel du flux (0 = pas encore armé)
+        self._reroutes = 0
         self._pa_uid = self._default_uid()
         if self.ca is not None and self.ca.on_change(self._dirty.set):
             threading.Thread(target=self._refresh_loop, name="mic-refresh",
@@ -519,6 +575,7 @@ class MicWorker:
 
         def _cb(indata, frames, t, status):  # noqa: ANN001
             # Temps réel : un dépôt, deux compteurs, rien qui puisse attendre.
+            self._last_cb = time.monotonic()
             if status:
                 self._xruns += 1
             if not out.audio(bytes(indata), transform):
@@ -536,20 +593,112 @@ class MicWorker:
             raise
         return s
 
-    def _close_locked(self):
+    def _close_locked(self, timeout=None) -> bool:
+        """Ferme le flux courant. `timeout` (s) : fermeture BORNÉE, faite dans
+        un thread jetable (un flux dont le périphérique a disparu peut figer
+        dans CoreAudio) ; False si elle n'a pas abouti à temps : PortAudio est
+        alors marqué figé (le ping cesse de répondre, le parent respawne)."""
         s, self._stream = self._stream, None
         if s is None:
-            return
-        for step in (s.stop, s.close):
+            return True
+
+        def _steps():
+            for step in (s.stop, s.close):
+                try:
+                    step()
+                except Exception as e:
+                    self.out.event(ev="warn", msg=f"fermeture du flux : {e}"[:300])
+
+        if timeout is None:
+            _steps()
+            return True
+        thr = threading.Thread(target=_steps, name="mic-close", daemon=True)
+        thr.start()
+        thr.join(timeout)
+        if thr.is_alive():
+            self._wedged = True
+            return False
+        return True
+
+    # -- chien de garde de capture (micro #1) -------------------------------
+
+    def _reroute_reason(self, cap):
+        """"stalled" | "default_changed" | None pour la capture `cap`."""
+        last = self._last_cb
+        if last and time.monotonic() - last >= self.STALL_S:
+            return "stalled"
+        # Seule une capture sur le DÉFAUT suit le défaut ; un micro choisi ou
+        # l'intégré demandé restent ouverts tant qu'ils livrent.
+        if not cap["device"] and not cap["prefer"] and self._dirty.is_set():
+            uid = self._default_uid()
+            if uid and self._pa_uid and uid != self._pa_uid:
+                return "default_changed"
+        return None
+
+    def _watch(self, gen: int) -> None:
+        """Thread de la capture `gen` : surveille le flux et le rouvre sur
+        place. Sort dès que la capture change (stop, nouveau start)."""
+        warned = False
+        while True:
+            time.sleep(self.WATCH_TICK_S)
+            cap = self._cap
+            if cap is None or cap["gen"] != gen:
+                return
+            if self._reroute_reason(cap) is None:
+                continue
+            if self._reroutes >= self.MAX_REROUTES or self._wedged:
+                if not warned:
+                    warned = True
+                    self.out.event(ev="warn", msg="micro perdu : réouvertures épuisées")
+                continue
+            if not self._pa_lock.acquire(timeout=self.STALL_S):
+                continue
             try:
-                step()
-            except Exception as e:
-                self.out.event(ev="warn", msg=f"fermeture du flux : {e}"[:300])
+                cap = self._cap
+                if cap is None or cap["gen"] != gen:
+                    return
+                reason = self._reroute_reason(cap)
+                if reason is not None:
+                    self._reroute_locked(cap, reason)
+            finally:
+                self._pa_lock.release()
+
+    def _reroute_locked(self, cap, reason: str) -> None:
+        """Ferme le flux perdu, réinitialise PortAudio (nouvelle liste, nouveau
+        défaut) et rouvre : micro demandé s'il est encore là, sinon défaut,
+        sinon intégré. Les blocs repartent dans la même file : le parent ne
+        voit qu'un trou, jamais une fin de capture."""
+        t_lost = self._last_cb or time.monotonic()
+        self._reroutes += 1
+        if not self._close_locked(timeout=self.CLOSE_TIMEOUT_S):
+            self.out.event(ev="warn", msg="micro perdu : fermeture du flux figée")
+            return
+        try:
+            self._reinit_locked(reason)
+            idx, name, _fallback = self._resolve_locked(cap["device"], cap["prefer"])
+            try:
+                self._stream, _native = self._open_locked(idx, cap["sr"])
+            except Exception:
+                b = _pick_builtin(list(self.sd.query_devices()))
+                if b is None or b == idx:
+                    raise
+                idx, name = b, self.sd.query_devices(b).get("name")
+                self._stream, _native = self._open_locked(idx, cap["sr"])
+        except Exception as e:
+            self.out.event(ev="warn", msg=f"réouverture du micro : {e}"[:300])
+            return
+        finally:
+            # Réarmé à l'instant de la réouverture : un flux neuf muet sera
+            # détecté à son tour au bout de STALL_S.
+            self._last_cb = time.monotonic()
+        self.out.event(ev="rerouted", device=name, reason=reason,
+                       gap_s=round(time.monotonic() - t_lost, 3))
 
     # -- commandes ---------------------------------------------------------
 
     def _start(self, cmd):
         sr = int(cmd.get("sr") or 16000)
+        self._cap = None   # l'éventuel chien de garde précédent s'arrête
         with self._pa_lock:
             self._close_locked()   # jamais deux flux (re-start après stop raté)
             try:
@@ -559,6 +708,8 @@ class MicWorker:
                 transport = self.ca.transport_of(name) if (self.ca and name) else None
                 self.out.event(ev="opening", device=name, transport=transport)
                 self._xruns = self._dropped = 0
+                self._last_cb = 0.0   # chien de garde armé au premier bloc
+                self._reroutes = 0
                 t0 = time.monotonic()
                 self._stream, native = self._open_locked(idx, sr)
                 self.out.event(ev="started", device=name, fallback=fallback,
@@ -566,12 +717,37 @@ class MicWorker:
             except Exception as e:
                 self._close_locked()
                 self.out.event(ev="error", err=str(e)[:300])
+                return
+            self._cap_gen += 1
+            self._cap = {"gen": self._cap_gen, "device": cmd.get("device"),
+                         "prefer": cmd.get("prefer"), "sr": sr}
+            threading.Thread(target=self._watch, args=(self._cap_gen,),
+                             name="mic-watch", daemon=True).start()
 
     def _stop(self):
+        self._cap = None   # avant le verrou : le chien de garde ne rouvre plus
         with self._pa_lock:
             self._close_locked()
             # Après stop(), plus aucun callback : les compteurs sont définitifs.
             self.out.event(ev="stopped", xruns=self._xruns, dropped=self._dropped)
+
+    def _ping_ok(self) -> bool:
+        """PortAudio utilisable ? Une réinitialisation de fond figée tient
+        _pa_lock pour toujours : le process répond, mais l'appui suivant
+        resterait bloqué. Le ping ne doit donc pas répondre (micro #6)."""
+        if self._wedged or not self._pa_lock.acquire(timeout=self.PING_LOCK_S):
+            return False
+        self._pa_lock.release()
+        return True
+
+    def _volume(self):
+        """Lecture seule CoreAudio (aucun flux, pas de verrou PortAudio)."""
+        try:
+            value = self.ca.input_volume() if self.ca is not None else None
+        except Exception as e:
+            self.out.event(ev="warn", msg=f"volume d'entrée illisible : {e}"[:300])
+            value = None
+        self.out.event(ev="volume", value=value)
 
     def _devices(self):
         with self._pa_lock:
@@ -595,15 +771,19 @@ class MicWorker:
                 continue
             c = cmd.get("cmd")
             if c == "ping":
-                self.out.event(ev="pong")
+                if self._ping_ok():
+                    self.out.event(ev="pong")
             elif c == "start":
                 self._start(cmd)
             elif c == "stop":
                 self._stop()
             elif c == "devices":
                 self._devices()
+            elif c == "volume":
+                self._volume()
             elif c == "quit":
                 break
+        self._cap = None
         with self._pa_lock:
             self._close_locked()
         self._closing = True
@@ -706,7 +886,12 @@ class RemoteMic:
     # est imperceptible et un changement d'état ferait clignoter la pilule.
     CONNECTING_UI_S = 0.5
     SPAWN_JOIN_MAX = 1.5   # un spawn gelé sain répond en ~1 s ; au-delà il est muet
-    STOP_TIMEOUT = 1.5     # stop : au-delà = kill (les frames sont déjà chez le parent)
+    STOP_TIMEOUT = 1.5     # stop : attente du « stopped » tant que rien ne progresse
+    # v1.5 (micro #7) — un parent affamé reçoit la fin de phrase en retard : tant
+    # que des blocs arrivent encore (dernier il y a < STOP_PROGRESS_S), on attend,
+    # jusqu'à STOP_MAX ; au-delà seulement le worker est tué.
+    STOP_PROGRESS_S = 0.5
+    STOP_MAX = 10.0
     PING_TIMEOUT = 0.8     # détection d'un worker vivant mais figé (healthcheck)
     QUERY_TIMEOUT = 1.0    # liste des périphériques
     _SLICE = 0.05
@@ -729,6 +914,16 @@ class RemoteMic:
         self._slow_devices = {}    # nom -> dernière durée d'ouverture (s)
         self.last_open = None      # dernier "started"
         self.last_stats = None     # {"xruns","dropped"} de la dernière capture
+        # Contrat exposé (lecture seule, sans verrou) :
+        #   last_chunk_at : horloge monotone du dernier bloc audio reçu (0 = aucun)
+        #   last_reroute  : dernier événement « rerouted » de la capture en cours
+        #                   ({"device","reason","gap_s"}), None sinon
+        #   rerouted_at   : horloge monotone du dernier « rerouted » (0 = aucun) ;
+        #                   lu par l'engine pour ne pas prendre une bascule pour
+        #                   un flux mort
+        self.last_chunk_at = 0.0
+        self.last_reroute = None
+        self.rerouted_at = 0.0
 
     # -- appui -------------------------------------------------------------
 
@@ -889,6 +1084,7 @@ class RemoteMic:
                 if self._proc is not proc:
                     continue   # génération périmée : on draine sans rien livrer
                 if typ == b"A":
+                    self.last_chunk_at = time.monotonic()
                     self._deliver(payload)
                 elif typ == b"J":
                     try:
@@ -920,8 +1116,20 @@ class RemoteMic:
         if name == "ready":
             ready.set()
             return
+        if name == "error" and ev.get("src"):
+            # Erreur de FLUX (rééchantillonnage), pas la réponse à une
+            # commande : journalisée, elle ne doit faire échouer ni une
+            # ouverture en cours ni une liste des micros.
+            print(f"[micworker] {ev.get('err')}")
+            self._payloads["stream_error"] = ev
+            return
         if name == "error":
             self._last_error = ev.get("err") or "?"
+        elif name == "rerouted":
+            self.rerouted_at = time.monotonic()
+            self.last_reroute = {k: ev.get(k) for k in ("device", "reason", "gap_s")}
+            print(f"[micworker] micro perdu en dictée -> rouvert sur « {ev.get('device')} » "
+                  f"({ev.get('reason')}, trou {ev.get('gap_s')} s).")
         elif name == "refreshed":
             print(f"[micworker] PortAudio réinitialisé ({ev.get('reason')}).")
         elif name == "warn":
@@ -1036,6 +1244,24 @@ class RemoteMic:
                 raise WorkerUnavailable("liste des micros sans réponse")
             return list(self._payloads.get("devices", {}).get("names") or [])
 
+    def input_volume(self, timeout: float = None):
+        """Volume d'entrée du micro par défaut (0.0 à 1.0) lu PAR LE WORKER,
+        ou None (illisible, sans réglage, worker indisponible). Ne lève pas :
+        c'est une aide au diagnostic (« volume du micro à 0 % »)."""
+        t_end = time.monotonic() + (timeout or self.QUERY_TIMEOUT)
+        try:
+            self.ensure(t_end - time.monotonic())
+            with self._locked_until(t_end):
+                self._arm("volume", "error")
+                self._send({"cmd": "volume"})
+                if self._await("volume", max(self._SLICE, t_end - time.monotonic())) != "ok":
+                    return None
+                v = (self._payloads.get("volume") or {}).get("value")
+        except WorkerUnavailable as e:
+            print(f"[micworker] volume d'entrée non lu : {e}")
+            return None
+        return None if v is None else float(v)
+
     def _is_slow(self, opening: dict) -> bool:
         if opening.get("transport") == "bluetooth":
             return True
@@ -1071,6 +1297,7 @@ class RemoteMic:
     def _open_locked(self, on_chunk, device, prefer, wait_s, on_connecting):
         self._on_chunk = on_chunk
         self._last_error = None
+        self.last_reroute = None
         self._capturing = True
         self._arm("started", "error", "opening")
         try:
@@ -1104,6 +1331,12 @@ class RemoteMic:
         self._capturing = False
         if r == "error":
             raise MicStartError(self._last_error)
+        # Micro #5 — un périphérique annoncé (« opening ») qui dépasse la borne
+        # est appris LENT même sur cet échec : l'appui suivant lui accorde
+        # START_TIMEOUT_SLOW au lieu d'être tué à chaque fois.
+        opening = self._payloads.get("opening") or {}
+        if opening_seen and opening.get("device"):
+            self._slow_devices[opening["device"]] = round(time.monotonic() - t_send, 3)
         # Ni started ni error dans la borne = worker FIGÉ (open CoreAudio
         # gelé). On le tue : l'appelant respawne et réessaie, borné et
         # toujours efficace, l'état corrompu meurt avec le process.
@@ -1129,6 +1362,23 @@ class RemoteMic:
                 print(f"[micworker] affichage « connexion » en échec : {e}")
         return True
 
+    def _await_stopped(self) -> str:
+        """"ok" | "timeout". Attente du « stopped » fondée sur la progression : STOP_TIMEOUT sans
+        bloc reçu = worker figé ; des blocs qui arrivent encore prolongent
+        l'attente jusqu'à STOP_MAX (le « stopped » suit le dernier bloc)."""
+        t0 = time.monotonic()
+        while True:
+            # Un « error » ici ne vient que du rééchantillonnage (le stop du
+            # worker n'en émet pas) : il n'arrête pas l'attente de la fin.
+            if self._await("stopped", self._SLICE) == "ok":
+                return "ok"
+            now = time.monotonic()
+            if now - t0 >= self.STOP_MAX:
+                return "timeout"
+            if (now - t0 >= self.STOP_TIMEOUT
+                    and now - self.last_chunk_at >= self.STOP_PROGRESS_S):
+                return "timeout"
+
     def stop(self) -> None:
         """Ferme le micro côté worker et attend le « stopped », qui suit le
         dernier chunk : la fin de la phrase n'est plus coupée. Un stop figé ->
@@ -1144,7 +1394,7 @@ class RemoteMic:
                     self._send({"cmd": "stop"})
                 except WorkerUnavailable:
                     return
-                if self._await("stopped", self.STOP_TIMEOUT) == "ok":
+                if self._await_stopped() == "ok":
                     ev = self._payloads.get("stopped") or {}
                     self.last_stats = {"xruns": int(ev.get("xruns") or 0),
                                        "dropped": int(ev.get("dropped") or 0)}

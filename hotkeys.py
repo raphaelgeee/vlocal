@@ -14,6 +14,8 @@ import applog
 import appstate
 import errors as _EV
 import hotkey_mac
+import inserter
+import notifier
 import overlay
 import permissions
 from dictation import _insert_serial_lock
@@ -139,7 +141,16 @@ def start_global_hotkey():
             overlay.mic_needed()
             _schedule_overlay_hide(4.0)
             return
-        if not started:
+        if started:
+            # Fiabilité #10 — presse-papier d'origine capturé à l'APPUI (avant que
+            # la dictée n'y copie son texte), gardé sur toute une chaîne de dictées
+            # et rendu à la fin par inserter (image et fichiers compris).
+            try:
+                if _load_settings().get("insert_at_cursor", True):
+                    inserter.begin_chain()
+            except Exception:
+                log.warning("[hotkey] capture du presse-papier KO", exc_info=True)
+        else:
             # v1.0.22 — le refus « transcription précédente en cours » n'existe
             # plus (dictée enchaînée) : si start() rend False, c'est que le micro
             # n'a pas pu s'ouvrir dans le budget de 2 s. Il est en cours de remise
@@ -195,14 +206,6 @@ def start_global_hotkey():
                 # nouvelle dictée a démarré -> on ne touche plus l'overlay).
                 return my_gen == getattr(appstate.controller, "_gen", my_gen)
 
-            # INS-1 — on capture le presse-papier ORIGINAL AVANT stop_and_finalize
-            # (qui va y copier le texte dicté) -> restauration correcte ensuite.
-            try:
-                import clipboard as _clip
-                _orig_clip = _clip.get_clipboard()
-            except Exception:
-                log.debug("import clipboard : échec ignoré", exc_info=True)
-                _orig_clip = None
             try:
                 # notify_ui=False : la fenêtre principale ne réagit pas (overlay seul).
                 text = appstate.controller.stop_and_finalize(notify_ui=False)
@@ -239,10 +242,10 @@ def start_global_hotkey():
             _insert_guided = False   # une invite d'échec est-elle affichée via l'overlay ?
             try:
                 if _load_settings().get("insert_at_cursor", True):
-                    import inserter
                     # v1.0.22 — chaînage : collages sérialisés (jamais entrelacés).
+                    # Le presse-papier d'origine vient de begin_chain() (INS-1).
                     with _insert_serial_lock:
-                        inserted = bool(inserter.insert_at_cursor(text, original=_orig_clip))
+                        inserted = bool(inserter.insert_at_cursor(text))
                     if not inserted:
                         # v1.0.6 — OBSERVABILITÉ (tour de contrôle) : on compte les
                         # échecs d'insertion, friction n°1 connue (Accessibilité non
@@ -336,6 +339,20 @@ def start_global_hotkey():
         except Exception as e:
             log.warning(f"[hotkey] lock KO (ignoré) : {e}")
 
+    # Micro #12 — mains libres : prévenir une minute avant l'arrêt automatique.
+    # Notification système (et non l'overlay) : la pilule garde sa waveform.
+    # Sans son, pour ne pas l'enregistrer dans la dictée. Thread démon : la
+    # notification ne retient jamais le pump du raccourci.
+    def _limit_warning_safe():
+        def _show():
+            try:
+                notifier.show(_te("Encore une minute"),
+                              _te("La dictée mains libres s'arrêtera dans une minute."),
+                              subtitle=None, sound=False)
+            except Exception:
+                log.warning("[hotkey] avertissement de fin KO", exc_info=True)
+        threading.Thread(target=_show, name="hk-limit-warning", daemon=True).start()
+
     # Raccourci global via moniteurs NSEvent natifs (hotkey_mac), PLUS de
     # pynput : pynput crashait l'app (résolution TSM du caractère hors main
     # thread -> SIGTRAP). Les moniteurs ne lisent que les modificateurs /
@@ -348,13 +365,14 @@ def start_global_hotkey():
         # Les sondes de permission passent par pyobjc : un échec ne doit pas
         # empêcher le raccourci de démarrer.
         log.debug("sondes de permission : échec ignoré", exc_info=True)
-    # max_seconds = garde-fou anti-runaway SI le relâchement est perdu, PAS un
-    # plafond de dictée. 600 s (10 min) : on n'interrompt plus une vraie dictée
-    # longue, tout en restant protégé contre une touche bloquée.
+    # max_seconds = limite des dictées MAINS LIBRES seulement (10 min, annoncée
+    # à 9 min) : un micro verrouillé oublié ne reste jamais ouvert. Le maintien
+    # n'a pas de limite (Micro #12) : on ne coupe pas quelqu'un qui parle.
     t = hotkey_mac.start(_begin_safe, _end_safe,
                          mods=tuple(required), trigger_vk=trigger_vk,
                          max_seconds=600.0, chord_vk=chord_vk,
-                         mode=hotkey_mode, on_cancel=_cancel_safe, on_lock=_lock_safe)
+                         mode=hotkey_mode, on_cancel=_cancel_safe, on_lock=_lock_safe,
+                         on_limit_warning=_limit_warning_safe, warn_before_s=60.0)
     if t is None:
         log.warning("[hotkey] raccourci inactif — accordez l'Accessibilité à Vlocal, "
               "ou utilisez le bouton Dicter.")
