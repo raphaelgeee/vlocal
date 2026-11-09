@@ -80,7 +80,8 @@ import os
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
 
-import appstate  # noqa: E402  (après le verrou hors-ligne, comme tout ce qui suit)
+import applog  # noqa: E402  (après le verrou hors-ligne, comme tout ce qui suit)
+import appstate  # noqa: E402
 import telemetry  # noqa: E402
 from api import Api  # noqa: E402
 from engine_runtime import (  # noqa: E402
@@ -96,7 +97,7 @@ from lifecycle import (  # noqa: E402
     _install_lifecycle_delegate_class,
     _start_auto_diag,
 )
-from settings import _load_settings, _save_settings, _setup_file_logging  # noqa: E402
+from settings import _load_settings, _save_settings  # noqa: E402
 from startup import after_start, on_main_window_loaded, settle_pending_update  # noqa: E402
 from storage import Store  # noqa: E402
 from window_mac import (  # noqa: E402
@@ -144,7 +145,7 @@ def main():
         pass
     _set_dock_visible(True)           # process principal + fenêtre visible -> Regular (icône Dock)
 
-    _setup_file_logging()
+    applog.setup()
 
     if "--selftest" in sys.argv:
         # Le selftest a besoin du moteur synchrone.

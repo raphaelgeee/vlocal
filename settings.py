@@ -6,7 +6,6 @@ drapeaux d'environnement (VLOCAL_REUNION, VLOCAL_VISIO) sont lus à l'import.
 """
 import json
 import os
-import sys
 import threading
 
 import appstate
@@ -17,33 +16,7 @@ import appstate
 _APP_SUPPORT = os.path.expanduser("~/Library/Application Support/Vlocal")
 _MODE_FILE = os.path.join(_APP_SUPPORT, "mode.txt")
 _SETTINGS_FILE = os.path.join(_APP_SUPPORT, "settings.json")
-_LOG_FILE = os.path.join(_APP_SUPPORT, "vlocal.log")
 _SHOW_REQUEST = os.path.join(_APP_SUPPORT, ".show_request")
-
-
-def _setup_file_logging():
-    """En .app empaqueté, stdout/stderr partent dans /dev/null (console=False) :
-    impossible de diagnostiquer. On redirige les descripteurs 1 et 2 vers un
-    fichier log (capture aussi les messages C natifs, ex. avertissements
-    d'Accessibilité). Tronqué à chaque démarrage. En dev (non frozen), on
-    laisse la console."""
-    try:
-        os.makedirs(_APP_SUPPORT, exist_ok=True)
-        if getattr(sys, "frozen", False):
-            fd = os.open(_LOG_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
-            os.dup2(fd, 1)
-            os.dup2(fd, 2)
-            os.close(fd)
-            # Flush à chaque ligne (sinon les print() Python restent en tampon
-            # et le journal n'affiche que les messages C non bufferisés).
-            try:
-                sys.stdout.reconfigure(line_buffering=True)
-                sys.stderr.reconfigure(line_buffering=True)
-            except Exception:
-                pass
-            print("[log] Vlocal démarre — journal de diagnostic actif.")
-    except Exception:
-        pass
 _GLOSSARY_FILE = os.path.join(_APP_SUPPORT, "glossary.txt")
 _VALID_MODES = ("DICTEE", "REUNION")
 
