@@ -24,6 +24,7 @@ from engine_runtime import _load_engine_async, _post_startup_model_checks
 from hotkeys import start_global_hotkey
 from lifecycle import _arm_freeze_watchdog, _lifecycle_show, _register_quit_hook
 from meetings import _meeting_state
+from recorder import repair_wav_header
 from reminder_flow import _rearm_pending_reminders
 from settings import _SHOW_REQUEST, _load_settings, _onboarding_done
 from texts import _te
@@ -90,6 +91,9 @@ def on_main_window_loaded():
 
 def after_start():
     """Étapes du démarrage, chacune isolée : un échec n'empêche pas les suivantes."""
+    # AVANT le moteur : aucune réunion ne peut être en traitement à cet instant,
+    # donc tout statut transitoire en base vient d'un processus interrompu.
+    _recover_interrupted_meetings()
     # v2 — Charge le moteur Whisper en tâche de fond TOUT DE SUITE (la
     # fenêtre est déjà affichée -> démarrage instantané).
     threading.Thread(target=_load_engine_async, daemon=True).start()
@@ -132,6 +136,33 @@ def after_start():
     threading.Timer(0.5, _refresh_lists_ui).start()
 
     threading.Thread(target=_update_watch, name="update-watch", daemon=True).start()
+
+
+def _recover_interrupted_meetings():
+    """Réunions interrompues (arrêt brutal pendant l'enregistrement ou le
+    traitement) : passées en « error », récupérables par « Réessayer », et
+    en-tête de leur WAV réparé pour que le réessai lise tout l'audio capté."""
+    if appstate.store is None:
+        return
+    try:
+        recovered = appstate.store.recover_interrupted_meetings()
+    except Exception:
+        log.warning("[réunion] récupération des réunions interrompues KO",
+                    exc_info=True)
+        return
+    for m in recovered:
+        wav = m.get("wav_path")
+        if not wav or not os.path.exists(wav):
+            continue
+        try:
+            if repair_wav_header(wav):
+                log.info(f"[réunion] en-tête WAV réparé (réunion {m['id']}).")
+        except Exception:
+            log.warning(f"[réunion] en-tête WAV non réparé (réunion {m['id']})",
+                        exc_info=True)
+    if recovered:
+        log.info(f"[réunion] {len(recovered)} réunion(s) interrompue(s) passée(s) "
+                 "en erreur récupérable.")
 
 
 def _on_main_thread(fn, tag):

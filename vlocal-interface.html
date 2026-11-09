@@ -1327,6 +1327,7 @@ try{if(localStorage.getItem('vlocal_theme')==='light')document.documentElement.s
       "label.status.error":"Erreur",
       "label.status.failed":"Échec",
       "label.status.recording":"Enregistrement",
+      "label.status.transcribing":"Transcription en cours","label.status.formatting":"Mise en forme",
       "label.scope.dictees":"les dictées",
       "label.scope.reunions":"les réunions",
       "label.scope.tout":"tout l'historique",
@@ -1355,7 +1356,7 @@ try{if(localStorage.getItem('vlocal_theme')==='light')document.documentElement.s
       "js.meeting.voice":"Voix {0}",
       "js.meeting.rename-hint":"Cliquer pour renommer ce locuteur",
       "btn.export":"Exporter",
-      "btn.rediarize":"Ré-identifier",
+      "btn.rediarize":"Ré-identifier","btn.retry":"Réessayer","toast.retry-running":"Nouveau traitement de la réunion en cours.","toast.retry-fail":"Le nouveau traitement n'a pas pu démarrer. Réessayez.",
       "btn.rediarize-running":"Analyse en cours…",
       "btn.rediarize-progress":"Analyse {0} %",
       "toast.nothing-to-copy":"Rien à copier.",
@@ -1560,6 +1561,7 @@ try{if(localStorage.getItem('vlocal_theme')==='light')document.documentElement.s
       "label.status.error":"Error",
       "label.status.failed":"Failed",
       "label.status.recording":"Recording",
+      "label.status.transcribing":"Transcribing","label.status.formatting":"Formatting",
       "label.scope.dictees":"dictations",
       "label.scope.reunions":"meetings",
       "label.scope.tout":"all history",
@@ -1588,7 +1590,7 @@ try{if(localStorage.getItem('vlocal_theme')==='light')document.documentElement.s
       "js.meeting.voice":"Speaker {0}",
       "js.meeting.rename-hint":"Click to rename this speaker",
       "btn.export":"Export",
-      "btn.rediarize":"Re-identify",
+      "btn.rediarize":"Re-identify","btn.retry":"Retry","toast.retry-running":"Processing the meeting again.","toast.retry-fail":"Processing could not start again. Try again.",
       "btn.rediarize-running":"Analyzing…",
       "btn.rediarize-progress":"Analyzing {0}%",
       "toast.nothing-to-copy":"Nothing to copy.",
@@ -2082,6 +2084,7 @@ try{if(localStorage.getItem('vlocal_theme')==='light')document.documentElement.s
       actions += '<button class="btn" id="mtg-export">'+t('btn.export')+'</button>';
       actions += '<button class="btn" id="mtg-rediar">'+t('btn.rediarize')+'</button>';
     }
+    if(m.status==='error') actions += '<button class="btn" id="mtg-retry">'+t('btn.retry')+'</button>';
     actions += '<button class="btn" id="mtg-del">'+t('btn.delete')+'</button>';
     actions += '<button class="btn" id="mtg-close">'+t('btn.close')+'</button>';
 
@@ -2143,6 +2146,16 @@ try{if(localStorage.getItem('vlocal_theme')==='light')document.documentElement.s
         rediar.style.removeProperty('--p');
         rediar.disabled = false; rediar.textContent = _lbl;
       }
+    });
+
+    // Réunion interrompue ou en échec : nouveau traitement depuis le WAV gardé.
+    var retry = document.getElementById('mtg-retry');
+    if(retry) retry.addEventListener('click', async function(){
+      if(!hasApi()){ showToast(t('toast.engine-preview'), 'info'); return; }
+      retry.disabled = true;
+      var r = await call('retry_meeting', [mid, null], {ok:false});
+      if(r && r.ok){ showToast(t('toast.retry-running'), 'info'); host.innerHTML=''; loadReunions(); }
+      else { retry.disabled = false; showToast((r && r.error) || t('toast.retry-fail'), 'error'); }
     });
 
     var del = document.getElementById('mtg-del');
@@ -2899,9 +2912,16 @@ try{if(localStorage.getItem('vlocal_theme')==='light')document.documentElement.s
       if(inst) inst.addEventListener('click', async function(){
         inst.style.display = 'none';
         var rd = document.getElementById('upd-ready-d');
+        var _rdText = rd ? rd.textContent : '';
         if(rd) rd.textContent = t('upd.installing');
-        await call('update_apply', [], {ok:false});
-        // l'app va se fermer puis se rouvrir : rien d'autre à faire ici.
+        var r = await call('update_apply', [], {ok:false});
+        // OK : l'app va se fermer puis se rouvrir. Refus (réunion en cours,
+        // installation impossible) : le bouton revient avec le message.
+        if(!r || !r.ok){
+          inst.style.display = '';
+          if(rd) rd.textContent = _rdText;
+          showToast((r && r.error) || t('upd.err.generic'), 'error');
+        }
       });
       bindTaps(notesBody);
     }

@@ -43,6 +43,14 @@ _meeting_state = {
 _meeting_lock = threading.RLock()
 
 
+def meeting_in_progress() -> bool:
+    """Une réunion est-elle en enregistrement ou en traitement (pipeline,
+    import, réessai) ? Lu sous verrou : état cohérent avec les transitions."""
+    with _meeting_lock:
+        return bool(_meeting_state.get("recording")
+                    or _meeting_state.get("pipeline_busy"))
+
+
 def _obsidian_meeting_sync(meeting_id):
     """v1.1.0 — Écrit (ou met à jour) la note Obsidian d'une réunion si un coffre
     est connecté. Appelé à la fin du pipeline, après une ré-analyse et après un
