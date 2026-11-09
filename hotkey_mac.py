@@ -21,7 +21,9 @@ Accessibilité requise (pour le moniteur GLOBAL). Auto-réparation : si l'utilis
 accorde l'Accessibilité APRÈS le lancement, on RÉINSTALLE les moniteurs tout seul
 (surveillance d'AXIsProcessTrusted) -> pas besoin de relancer l'app.
 
-Sécurité : arrêt auto si le relâchement n'est jamais reçu (jamais de dictée infinie).
+Sécurité : en mains libres, arrêt auto après max_seconds, annoncé warn_before_s
+avant (jamais de dictée infinie). En maintien, aucune limite : on n'interrompt
+pas quelqu'un qui tient la touche (la réconciliation rattrape un relâchement perdu).
 macOS uniquement.
 """
 
@@ -152,6 +154,92 @@ class TapMachine:
         self._swallow_release = False
 
 
+PUMP_JOB_MAX_S = 8.0    # au-delà, le job courant est déclaré figé
+
+
+class _SerialPump:
+    """CONC-1 — begin/end SÉRIALISÉS via une file FIFO à UN seul consommateur.
+    Sinon begin() et end() partaient sur deux threads indépendants pouvant se
+    réordonner -> end() pouvait s'exécuter avant que begin()->start() ait ouvert
+    le micro -> dictée fantôme micro-ouvert.
+
+    v1.0.9 — si un job se fige (ex. start micro bloqué), check_stall() (appelé
+    par le chien de garde) passe la main à un consommateur de SECOURS qui
+    draine la file : le raccourci ne meurt jamais.
+
+    Fiabilité #12 — un seul consommateur PREND des jobs à la fois : le
+    propriétaire. Le consommateur figé, quand il repart, termine son job puis
+    s'efface au lieu de reprendre la file en parallèle du secours (deux
+    consommateurs pouvaient livrer une « fin » avant son « début »). Testable
+    sans Cocoa : horloge injectable."""
+
+    def __init__(self, job_max_s=PUMP_JOB_MAX_S, clock=time.time):
+        import queue
+        self._q = queue.Queue()
+        self._lock = threading.Lock()
+        self._owner = 0           # seul consommateur autorisé à prendre un job
+        self._busy_since = 0.0    # début du job du propriétaire (0.0 = au repos)
+        self._alive = 0
+        self.job_max_s = float(job_max_s)
+        self._clock = clock
+        self._spawn(0)
+
+    @property
+    def consumers(self):
+        with self._lock:
+            return self._alive
+
+    def _spawn(self, ident):
+        with self._lock:
+            self._alive += 1
+        name = "hk-pump" if ident == 0 else f"hk-pump-relief-{ident}"
+        threading.Thread(target=self._run, args=(ident,), name=name, daemon=True).start()
+
+    def put(self, fn, label):
+        self._q.put((fn, label))
+
+    def stop(self):
+        self._q.put((None, "stop"))
+
+    def _run(self, me):
+        try:
+            while True:
+                with self._lock:
+                    if self._owner != me:
+                        print("[hotkey] consommateur figé reparti -> il s'efface.")
+                        return
+                fn, label = self._q.get()
+                if fn is None:             # sentinelle posée par stop()
+                    return
+                with self._lock:
+                    self._busy_since = self._clock()
+                try:
+                    fn()
+                except Exception as e:
+                    print(f"[hotkey] {label} KO (ignoré) : {e}")
+                finally:
+                    with self._lock:
+                        if self._owner == me:
+                            self._busy_since = 0.0
+        finally:
+            with self._lock:
+                self._alive -= 1
+
+    def check_stall(self):
+        """Job du propriétaire figé depuis plus de job_max_s -> consommateur de
+        secours, une seule fois par job. True si un secours a été lancé."""
+        with self._lock:
+            since = self._busy_since
+            if since <= 0.0 or (self._clock() - since) <= self.job_max_s:
+                return False
+            self._owner += 1
+            self._busy_since = 0.0
+            ident = self._owner
+        print(f"[hotkey] pump figé (>{self.job_max_s:.0f}s) -> consommateur de secours.")
+        self._spawn(ident)
+        return True
+
+
 def stop(st):
     """v1.3.3 — Arrête un raccourci démarré par start() : moniteurs retirés,
     minuteurs annulés, threads libérés. Permet de RÉARMER à chaud quand la
@@ -168,7 +256,11 @@ def stop(st):
 
 
 def start(on_begin, on_end, mods=("ctrl", "cmd"), trigger_vk=None, max_seconds=600.0,
-          chord_vk=None, mode="hold", on_cancel=None, on_lock=None):
+          chord_vk=None, mode="hold", on_cancel=None, on_lock=None,
+          on_limit_warning=None, warn_before_s=60.0):
+    """Pose le raccourci. `max_seconds` borne une dictée MAINS LIBRES (micro
+    verrouillé par double appui) ; `on_limit_warning` est appelé `warn_before_s`
+    avant cet arrêt. Le maintien (hold) n'a pas de limite."""
     if not _IS_MAC:
         return None
     try:
@@ -193,61 +285,26 @@ def start(on_begin, on_end, mods=("ctrl", "cmd"), trigger_vk=None, max_seconds=6
         want |= FLAG.get(m, 0)
     chord = trigger_vk is None
     MAX = float(max_seconds)
-    st = {"active": False, "safety": None, "monitors": [], "stopped": False,
+    WARN_AT = MAX - float(warn_before_s)
+    st = {"active": False, "safety": None, "warn": None, "monitors": [], "stopped": False,
           "mode": "tap" if mode == "tap" else "hold", "locked": False}
     _st_lock = threading.Lock()        # CONC-2 : protège st["active"] (run loop + Timer)
     machine = TapMachine(st["mode"])
     tap_timer = [None]                 # minuteur de l'attente d'un second appui
 
-    # CONC-1 : begin/end SÉRIALISÉS via une file FIFO à UN seul consommateur.
-    # Sinon begin() et end() partaient sur deux threads indépendants pouvant se
-    # réordonner -> end() pouvait s'exécuter avant que begin()->start() ait ouvert
-    # le micro -> dictée fantôme micro-ouvert. La file garantit l'ordre begin->end.
-    import queue as _queue
-    _q = _queue.Queue()
-
-    # v1.0.9 — PUMP WATCHDOG : si un job (begin/end) se fige (ex. start micro
-    # bloqué), le consommateur unique mourrait -> plus aucune dictée possible
-    # (« je n'arrive pas à redémarrer »). On surveille la durée du job courant ;
-    # au-delà de PUMP_JOB_MAX, on lance un consommateur de SECOURS qui draine la
-    # file (le job figé est abandonné en daemon). Le raccourci ne meurt jamais.
-    _pump_job_since = [0.0]      # début du job courant (0.0 = inactif)
-    _pump_jlock = threading.Lock()
-
-    def _pump():
-        while True:
-            fn, label = _q.get()
-            if fn is None:             # sentinelle posée par stop()
-                return
-            with _pump_jlock:
-                _pump_job_since[0] = time.time()
-            try:
-                fn()
-            except Exception as e:
-                print(f"[hotkey] {label} KO (ignoré) : {e}")
-            finally:
-                with _pump_jlock:
-                    _pump_job_since[0] = 0.0
-    threading.Thread(target=_pump, name="hk-pump", daemon=True).start()
+    pump = _SerialPump()
 
     def _pump_watchdog():
-        PUMP_JOB_MAX = 8.0
-        replaced_for = 0.0
         while not st["stopped"]:
             time.sleep(1.0)
             try:
-                with _pump_jlock:
-                    since = _pump_job_since[0]
-                if since > 0.0 and (time.time() - since) > PUMP_JOB_MAX and since != replaced_for:
-                    replaced_for = since
-                    print(f"[hotkey] pump figé (>{PUMP_JOB_MAX:.0f}s) -> consommateur de secours.")
-                    threading.Thread(target=_pump, name="hk-pump-relief", daemon=True).start()
-            except Exception:
-                pass
+                pump.check_stall()
+            except Exception as e:
+                print(f"[hotkey] chien de garde du pump KO : {e}")
     threading.Thread(target=_pump_watchdog, name="hk-pump-wd", daemon=True).start()
 
     def _async(fn, label):
-        _q.put((fn, label))
+        pump.put(fn, label)
 
     def _safety():
         with _st_lock:
@@ -256,26 +313,34 @@ def start(on_begin, on_end, mods=("ctrl", "cmd"), trigger_vk=None, max_seconds=6
             st["active"] = False
             st["locked"] = False
             machine.force_idle()
-        print(f"[hotkey] sécurité : arrêt auto après {MAX:.0f}s (relâchement non reçu).")
+        print(f"[hotkey] sécurité : arrêt auto des mains libres après {MAX:.0f}s.")
         _async(on_end, "end(safety)")
 
+    def _limit_warning():
+        with _st_lock:
+            if not (st["active"] and st["locked"]):
+                return
+        print(f"[hotkey] mains libres : arrêt auto dans {MAX - WARN_AT:.0f}s.")
+        _async(on_limit_warning, "limit_warning")
+
     def _arm_safety_locked():
-        try:
-            if st["safety"] is not None:
-                st["safety"].cancel()
-            st["safety"] = threading.Timer(MAX, _safety)
-            st["safety"].daemon = True
-            st["safety"].start()
-        except Exception:
-            pass
+        """Mains libres : arrêt auto à MAX, avertissement à WARN_AT."""
+        _disarm_safety_locked()
+        timers = [("safety", MAX, _safety)]
+        if on_limit_warning is not None and WARN_AT > 0.0:
+            timers.append(("warn", WARN_AT, _limit_warning))
+        for key, delay, fn in timers:
+            t = threading.Timer(delay, fn)
+            t.daemon = True
+            st[key] = t
+            t.start()
 
     def _disarm_safety_locked():
-        try:
-            if st["safety"] is not None:
-                st["safety"].cancel()
-                st["safety"] = None
-        except Exception:
-            pass
+        for key in ("safety", "warn"):
+            t = st[key]
+            st[key] = None
+            if t is not None:
+                t.cancel()
 
     def _cancel_tap_timer_locked():
         t = tap_timer[0]
@@ -298,7 +363,6 @@ def start(on_begin, on_end, mods=("ctrl", "cmd"), trigger_vk=None, max_seconds=6
                 t.start()
             elif a == "begin":
                 st["active"] = True
-                _arm_safety_locked()
                 _async(on_begin, "begin")
             elif a == "end":
                 st["active"] = False
@@ -314,11 +378,13 @@ def start(on_begin, on_end, mods=("ctrl", "cmd"), trigger_vk=None, max_seconds=6
             elif a == "lock":
                 st["locked"] = True
                 _cancel_tap_timer_locked()
+                _arm_safety_locked()
                 print("[hotkey] double appui : micro maintenu ouvert (mains libres).")
                 if on_lock is not None:
                     _async(on_lock, "lock")
             elif a == "unlock":
                 st["locked"] = False
+                _disarm_safety_locked()
 
     def _tap_deadline():
         with _st_lock:
@@ -372,7 +438,7 @@ def start(on_begin, on_end, mods=("ctrl", "cmd"), trigger_vk=None, max_seconds=6
         # ANTI MICRO-BLOQUÉ — recale l'état sur la RÉALITÉ des modificateurs.
         # Un _begin() sans _end() (relâchement du chord PERDU pendant la fenêtre
         # retrait->ré-ajout des moniteurs lors d'un _install, ou événement manqué)
-        # laisserait le micro OUVERT jusqu'au filet de sécurité (600 s). Ici : si on
+        # laisserait le micro OUVERT (le maintien n'a pas de limite de durée). Ici : si on
         # se croit actif mais que les modificateurs ne sont plus tenus, on COUPE tout
         # de suite. N'affecte JAMAIS une vraie dictée : pendant celle-ci le chord est
         # maintenu, donc `held` reste vrai. Chord uniquement (combo à touche : le
@@ -443,7 +509,7 @@ def start(on_begin, on_end, mods=("ctrl", "cmd"), trigger_vk=None, max_seconds=6
                 last = cur
                 # Réconciliation périodique : borne un micro-bloqué à ~1 s même si
                 # le relâchement a été perdu HORS de toute réinstallation (filet
-                # rapide vs le garde-fou 600 s, sans jamais couper une vraie dictée).
+                # unique du maintien, qui n'a pas de limite de durée).
                 _reconcile()
             except Exception:
                 pass
@@ -468,7 +534,7 @@ def start(on_begin, on_end, mods=("ctrl", "cmd"), trigger_vk=None, max_seconds=6
             _cancel_tap_timer_locked()
             _disarm_safety_locked()
             machine.force_idle()
-        _q.put((None, "stop"))
+        pump.stop()
         print(f"[hotkey] raccourci arrêté (mode {st['mode']}).")
     st["_stop"] = _stop
 
