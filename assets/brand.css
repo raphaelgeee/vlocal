@@ -1,0 +1,14 @@
+/* Jetons de la marque Vlocal : source unique.
+   Le tableau de bord charge ce fichier. L'overlay de dictée (page autonome,
+   sans accès garanti à assets/) et le courriel de version (styles en ligne,
+   sans variables CSS) en reprennent les valeurs à l'identique ;
+   tests/test_brand_tokens.py vérifie l'égalité. */
+:root{
+  --vl-night:#11141F;            /* bleu nuit du logo, mesuré sur la référence */
+  --vl-night-rgb:17,20,31;
+  --vl-white:#FFFFFF;
+  --vl-accent:#AEB8FF;           /* accent sur fond nuit : 9,7:1 */
+  --vl-accent-rgb:174,184,255;
+  --vl-accent-deep:#5C68DE;      /* même accent sur fond blanc : 4,7:1 */
+  --vl-accent-deep-rgb:92,104,222;
+}

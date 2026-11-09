@@ -35,8 +35,9 @@ else:
 
 
 def _load_template_image_from_pngs(pt: int = 18):
-    """v10 — Charge le glyphe V depuis 2 PNG pré-rastérisés (assets/) en NSImage
-    template multi-rep (Retina @1x + @2x).
+    """Charge le symbole de la marque (la bulle) depuis 2 PNG pré-rastérisés
+    (assets/vlocal-menubar-18.png et -36.png, produits par tools/make_icon.py)
+    en NSImage template multi-rep (Retina @1x + @2x).
 
     Diagnostic v9 → v10 :
       - v9 : `_NSSVGImageRep` ne rend pas dans NSStatusItem à petite taille
@@ -47,8 +48,8 @@ def _load_template_image_from_pngs(pt: int = 18):
       - v10 (final) : on PRÉ-rastérise les PNG hors NSApp (une fois, au build)
         et on charge des bitmap statiques au runtime — aucun risque thread."""
     base = os.path.join(_BASE, "assets")
-    p1x = os.path.join(base, f"vocal-glyph-v-{pt}.png")
-    p2x = os.path.join(base, f"vocal-glyph-v-{pt*2}.png")
+    p1x = os.path.join(base, f"vlocal-menubar-{pt}.png")
+    p2x = os.path.join(base, f"vlocal-menubar-{pt*2}.png")
     if not os.path.exists(p1x):
         return None
     img = NSImage.alloc().initWithContentsOfFile_(p1x)
@@ -112,13 +113,13 @@ class MenuBar:
             NSVariableStatusItemLength
         )
         btn = self._item.button()
-        # v10 — Glyphe V chargé depuis PNG pré-rastérisés (pas de lockFocus runtime).
+        # Symbole chargé depuis des PNG pré-rastérisés (pas de lockFocus runtime).
         img = _load_template_image_from_pngs(pt=18)
         if img is not None:
             btn.setImage_(img)
-            print("[menubar] glyphe V chargé (assets/vocal-glyph-v-18.png + @2x)")
+            print("[menubar] symbole chargé (assets/vlocal-menubar-18.png + @2x)")
         else:
-            # Repli ultime : SF Symbol "waveform", sinon lettre V
+            # Repli ultime : SF Symbol "waveform", sinon le nom en texte
             sym = None
             try:
                 sym = NSImage.imageWithSystemSymbolName_accessibilityDescription_(
@@ -129,17 +130,20 @@ class MenuBar:
             if sym is not None:
                 sym.setTemplate_(True)
                 btn.setImage_(sym)
-                print("[menubar] SF Symbol fallback (glyphe SVG indisponible)")
+                print("[menubar] SF Symbol fallback (symbole indisponible)")
             else:
-                btn.setTitle_("V")
-                print("[menubar] titre 'V' fallback")
+                btn.setTitle_("Vlocal")
+                print("[menubar] titre texte fallback")
 
         self.refresh(tasks=[])
 
     # ------------------------------------------------------------------ #
     def icon_frame(self):
-        """Frame ÉCRAN (x, y, w, h) de l'icône V dans la barre des menus, pour
-        ancrer le bec de la bulle de dictée dessous. None si indisponible."""
+        """Frame ÉCRAN (x, y, w, h) de l'icône dans la barre des menus, ou None.
+
+        Plus utilisée : la pilule de dictée se place en bas de l'écran de la
+        souris (overlay.py). Gardée tant que app.py la passe encore à
+        overlay.set_anchor_provider ; à retirer avec cet appel."""
         try:
             win = self._item.button().window()
             f = win.frame()
