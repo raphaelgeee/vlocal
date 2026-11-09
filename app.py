@@ -436,6 +436,8 @@ _BT = {
     "Use the Dictate button. Send a diagnostic from Settings: the problem will be reported to us.",
   "Le moteur se charge, réessayez dans un instant.": "The engine is loading, try again in a moment.",
   "Un instant": "One moment",
+  "Connexion du micro": "Connecting the microphone",
+  "Un instant, le micro se met en route.": "One moment, the microphone is starting up.",
   "Transcription précédente en cours.": "Previous transcription in progress.",
   "Réessayez.": "Please try again.",
   "Aucun son capté. Réessayez.": "No sound captured. Please try again.",
@@ -861,6 +863,35 @@ def _self_relaunch(reason: str = "") -> None:
     os._exit(0)
 
 
+# v1.5 — Au réveil, CoreAudio republie ses périphériques pendant une à deux
+# secondes : un worker relancé trop tôt figerait une liste encore incomplète.
+WAKE_SETTLE_S = 2.0
+_wake_observers = []   # jeton de l'observateur : le garder vivant
+
+
+def _watch_system_wake(engine) -> None:
+    """v1.5 — Sortie de veille -> worker micro neuf, AU REPOS (engine.
+    mic_after_wake), pour que le premier appui après le réveil n'ouvre ni un
+    PortAudio périmé ni l'ancien micro, et ne paie pas la réparation."""
+    try:
+        from AppKit import NSWorkspace, NSWorkspaceDidWakeNotification
+    except ImportError as e:
+        print(f"[micworker] suivi du réveil indisponible : {e}")
+        return
+
+    def _on_wake(_note):
+        t = threading.Timer(WAKE_SETTLE_S, engine.mic_after_wake)
+        t.daemon = True
+        t.start()
+
+    try:
+        center = NSWorkspace.sharedWorkspace().notificationCenter()
+        _wake_observers.append(center.addObserverForName_object_queue_usingBlock_(
+            NSWorkspaceDidWakeNotification, None, None, _on_wake))
+    except Exception as e:   # fonction d'appoint : le démarrage continue sans elle
+        print(f"[micworker] suivi du réveil non installé : {e}")
+
+
 def _dictation_supervisor():
     """Daemon : surveille l'état de la dictée et garantit la récupération."""
     import time as _t
@@ -1156,9 +1187,27 @@ class _FinalizeWatch:
                 self._on_beat()
 
 
+# Périphériques qui captent le son du SYSTÈME (visio en réunion) : utiles à la
+# réunion, jamais à la dictée (on y dicterait le son de l'ordinateur).
+_LOOPBACK_KW = ("blackhole", "aggregate", "multi-output", "loopback",
+                "stereo mix", "soundflower", "vb-audio", "voicemeeter",
+                "what u hear", "wave out")
+
+
 class DictationController:
+    # v1.5 — Le chargement du modèle (prewarm) et l'ouverture du micro se
+    # disputaient le CPU et le lecteur du worker dans les premières centaines
+    # de millisecondes (bascule HFP, premiers blocs CoreAudio) : trous et faux
+    # flux mort. On laisse la capture s'installer d'abord ; le chargement reste
+    # masqué par la parole, qui dure toujours bien plus. (Le live-tail ne
+    # transcrit rien avant livetail.ARM_S = 29 s : il n'a pas besoin de ce délai.)
+    CAPTURE_SETTLE_S = 0.3
+
     def __init__(self, engine: VlocalEngine):
         self.engine = engine
+        # v1.5 — ouverture lente (Bluetooth) : l'overlay dit « connexion du micro ».
+        self._connecting_shown = False
+        engine.on_mic_connecting = self._mic_connecting
         self._stop_evt = _DictationStop()
         # v1.4.4 — texte court de l'overlay quand la finalisation rend "" (silence,
         # panne, dictée perdue...). Par THREAD : le raccourci lit, dans le thread
@@ -1237,12 +1286,12 @@ class DictationController:
             # RÉPARE EN FOND pour l'appui suivant (terrain : il réappuie sous 3 s).
             _budget_dl = time.monotonic() + 2.0
             if getattr(self, "_mic_lost", False):
+                # v1.5 — flux mort à la dictée précédente et réparation de fond
+                # pas encore lancée : worker neuf LANCÉ sans l'attendre ;
+                # l'ouverture qui suit le rejoint. Avant, ce reset synchrone
+                # prélevait 1 s fixe sur les 2 s du budget avant tout essai.
                 self._mic_lost = False
-                try:
-                    # respawn borné (process neuf) au lieu de la ré-init 9 s
-                    self.engine.hard_mic_reset(timeout=1.0)
-                except Exception:
-                    pass
+                self.engine.hard_mic_reset(wait=False)
             # v13.1 — Bug observé : si on relançait une dictée alors qu'un
             # ancien worker audio était encore en train de boucler (cas rare
             # mais possible si stop_and_finalize a été interrompu), on
@@ -1260,6 +1309,11 @@ class DictationController:
             # set() sur SON event ; un clear() partagé pouvait le lui retirer
             # avant que son worker de niveau ne l'ait vu (worker zombie).
             self._stop_evt = _DictationStop()
+            # v1.5 — assertion anti-App Nap AVANT l'ouverture du micro : c'est
+            # l'ouverture (et ses premiers blocs) que le throttling retardait.
+            self._activity = _begin_activity("Vlocal dictation")
+            self._connecting_shown = False
+            _device = self._dictation_device()
             # P1-2 — micro indisponible / permission révoquée : start_recording LÈVE
             # (engine.py). v1.0.11 — AUTO-HEAL MICRO : un device CoreAudio coincé fait
             # échouer l'ouverture. Au lieu d'abandonner (et de forcer un redémarrage
@@ -1270,7 +1324,7 @@ class DictationController:
             # à nettoyer en cas d'échec.)
             ok = False
             try:
-                ok = self.engine.start_recording(deadline=_budget_dl)
+                ok = self.engine.start_recording(device=_device, deadline=_budget_dl)
                 # v1.0.22 — chaînage : juste après un relâchement, la capture
                 # précédente peut être en train de se refermer (fenêtre ~0,3 s :
                 # jointure du worker de niveau + stop du flux). False ici =
@@ -1278,7 +1332,7 @@ class DictationController:
                 # épuisement du budget (résolu en ~0,1 s en pratique).
                 while (not ok) and _time_left(_budget_dl) > 0.05:
                     time.sleep(0.05)
-                    ok = self.engine.start_recording(deadline=_budget_dl)
+                    ok = self.engine.start_recording(device=_device, deadline=_budget_dl)
                 if not ok:
                     print("[dictée] capture précédente toujours ouverte (budget épuisé).")
             except Exception as e:
@@ -1313,7 +1367,7 @@ class DictationController:
                 try:
                     if _time_left(_budget_dl) <= 0.05:
                         raise RuntimeError("budget épuisé")
-                    ok = self.engine.start_recording(deadline=_budget_dl)
+                    ok = self.engine.start_recording(device=_device, deadline=_budget_dl)
                     if ok:
                         print("[dictée] micro récupéré après reset dur (worker neuf).")
                         _via = "hard_reset"
@@ -1330,8 +1384,8 @@ class DictationController:
                                 _via = "builtin"
                         except Exception as e3:
                             if _trace: _trace.fail("fallback_builtin", e3)
-                    # Repli 2 (dernier recours, chemin in-process historique) :
-                    # candidats de l'énumération parent, tant que le budget tient.
+                    # Repli 2 (dernier recours) : autres micros, par NOM, listés
+                    # et résolus par le worker (v1.5), tant que le budget tient.
                     if not ok:
                         for _dev in (self.engine.list_input_devices() or [])[:2]:
                             if _time_left(_budget_dl) <= 0.05:
@@ -1356,15 +1410,9 @@ class DictationController:
                     # worker NEUF est préparé pendant que l'utilisateur lit le
                     # message ; le terrain montre qu'il réappuie sous ~3 s
                     # (médiane mesurée) et il retombera alors sur un micro sain.
-                    # `_mic_lost` garantit en plus un départ propre au prochain
-                    # start même si ce respawn échoue.
-                    self._mic_lost = True
-                    try:
-                        threading.Thread(
-                            target=lambda: self.engine.hard_mic_reset(timeout=5.0),
-                            name="mic-repair-bg", daemon=True).start()
-                    except Exception:
-                        pass
+                    # v1.5 : cette réparation cède la place à un appui qui
+                    # survient pendant qu'elle tourne (l'appui rejoint son spawn).
+                    self._repair_mic_in_background()
                     # v1.0.21 — DIAGNOSTIC HONNÊTE. On vient d'essayer la ré-init PROFONDE
                     # PUIS le micro intégré EXPLICITEMENT. Si ça échoue ENCORE, une app
                     # « simplement lancée » (OBS en fond, etc.) n'est presque jamais la
@@ -1391,9 +1439,13 @@ class DictationController:
                     else:
                         _toast("Micro occupé une seconde, on le remet à neuf. "
                                "Réessayez votre dictée tout de suite.", kind="info")
+                    self._release_activity()
                     return False
             if not ok:
+                self._release_activity()
                 return False
+            if self._connecting_shown:
+                overlay.recording()   # la pilule repasse de « connexion » à la waveform
             _mic_fail_count[0] = 0   # Fix 4 — micro OK : on remet le compteur à zéro
             self._active = True
             # v1.0.22 — _busy n'est PLUS posé au start : il signifie désormais
@@ -1412,25 +1464,72 @@ class DictationController:
             )
             self._audio_worker.start()
             # v21 — ANTI-VARIANCE (trois mesures, sortie texte inchangée) :
-            # 1) assertion anti-App Nap le temps de la dictée + transcription ;
+            # 1) assertion anti-App Nap le temps de la dictée + transcription
+            #    (posée avant l'ouverture, v1.5) ;
             # 2) préchargement ANTICIPÉ des modèles pendant que l'utilisateur
             #    parle (si l'éco-RAM les avait déchargés, le rechargement est
-            #    masqué par la parole au lieu de s'ajouter à l'attente) ;
+            #    masqué par la parole au lieu de s'ajouter à l'attente), une
+            #    fois la capture installée (CAPTURE_SETTLE_S) ;
             # 3) live-tail (dictées longues, modes auto/fidèle) : fenêtres
             #    transcrites PENDANT la parole, reliquat seul à la relâche.
-            self._activity = _begin_activity("Vlocal dictation")
             speed = "auto"
             try:
                 speed = _load_settings().get("dictation_speed", "auto")
             except Exception:
                 pass
-            threading.Thread(
-                target=lambda: self.engine.prewarm(
-                    want_small=(speed in ("auto", "rapide"))),
-                daemon=True).start()
+            _prewarm = threading.Timer(
+                self.CAPTURE_SETTLE_S,
+                lambda: self.engine.prewarm(want_small=(speed in ("auto", "rapide"))))
+            _prewarm.daemon = True
+            _prewarm.start()
             self._tail = (_DictationLiveTail(self.engine)
                           if speed in ("auto", "fidele") else None)
             return True
+
+    def _dictation_device(self):
+        """v1.5 — NOM du micro choisi dans les réglages, appliqué aussi à la
+        dictée (avant : réunions seulement). None = micro par défaut : rien de
+        choisi, ou un périphérique de capture du son système (inutile ici).
+        Absent au moment de l'appui, le worker retombe sur le défaut."""
+        name = _load_settings().get("audio_device_name")
+        if not name or any(k in name.lower() for k in _LOOPBACK_KW):
+            return None
+        return name
+
+    def _mic_connecting(self):
+        """Ouverture lente annoncée par le worker (Bluetooth, bascule HFP) :
+        la pilule le dit au lieu de laisser croire à une dictée en cours."""
+        self._connecting_shown = True
+        overlay.info(_te("Connexion du micro"), _te("Un instant, le micro se met en route."))
+
+    def _release_activity(self):
+        """Fin de l'assertion anti-App Nap d'un appui qui n'a pas abouti."""
+        tok, self._activity = self._activity, None
+        if tok is not None:
+            _end_activity(tok)
+
+    def _repair_mic_in_background(self):
+        """Worker micro neuf préparé EN FOND pour l'appui suivant (il cède la
+        place à un appui qui survient pendant qu'il tourne)."""
+        threading.Thread(target=lambda: self.engine.hard_mic_reset(timeout=5.0),
+                         name="mic-repair-bg", daemon=True).start()
+
+    def _after_capture(self, stop_evt):
+        """v1.5 — Bilan de la capture qui vient de se fermer, UNE fois par dictée :
+          - dépassements (blocs perdus par CoreAudio ou par la file du worker) :
+            journal + un incident mic_overflow ;
+          - flux mort pendant la dictée : worker neuf préparé tout de suite, au
+            repos, plutôt qu'au prochain appui."""
+        st = getattr(self.engine, "last_capture_stats", None) or {}
+        xruns, dropped = int(st.get("xruns", 0)), int(st.get("dropped", 0))
+        if xruns or dropped:
+            print(f"[dictée] capture dégradée : {xruns} dépassement(s) CoreAudio, "
+                  f"{dropped} bloc(s) perdu(s) dans la file du worker.")
+            if _EV:
+                _EV.log(_EV.E.MIC_OVERFLOW, level="warning", xruns=xruns, dropped=dropped)
+        if stop_evt.stream_dead:
+            self._mic_lost = False
+            self._repair_mic_in_background()
 
     def _audio_level_loop(self, stop_evt=None):
         """Pousse le RMS du buffer audio à l'UI à 10 Hz pendant la dictée.
@@ -1741,6 +1840,7 @@ class DictationController:
         # était refusée pendant tout ce temps — la promesse d'enchaînement
         # tombait précisément là où elle est le plus utile.
         audio = self.engine.stop_recording()
+        self._after_capture(my_evt)
         self._fin_beat = time.time()      # v1.0.22 : battement (capture fermée)
         lt = None
         tail = my_tail
@@ -3843,10 +3943,6 @@ class Api:
         return {"ok": True, "id": mid, "duree": duree}
 
     # ------------------------ v2 : périphériques audio ----------------------
-    _LOOPBACK_KW = ["blackhole", "aggregate", "multi-output", "loopback",
-                    "stereo mix", "soundflower", "vb-audio", "voicemeeter",
-                    "what u hear", "wave out"]
-
     @_api_safe(default=list)
     def list_input_devices(self):
         """v2 — Périphériques d'ENTRÉE pour la réunion. Détecte ceux capables de
@@ -3859,7 +3955,7 @@ class Api:
         for i, d in enumerate(sd.query_devices()):
             if d.get("max_input_channels", 0) > 0:
                 name = d.get("name", f"Périphérique {i}")
-                is_lb = any(k in name.lower() for k in self._LOOPBACK_KW)
+                is_lb = any(k in name.lower() for k in _LOOPBACK_KW)
                 out.append({"index": i, "name": name, "loopback": is_lb})
         return out
 
@@ -3870,7 +3966,14 @@ class Api:
             idx = int(index)
         except Exception:
             idx = -1
-        _save_settings({"audio_device": (None if idx < 0 else idx)})
+        # v1.5 — le NOM accompagne l'index : la dictée le fait résoudre par le
+        # worker micro, dont l'énumération (à jour) ne suit pas celle d'ici.
+        name = None
+        if idx >= 0:
+            import sounddevice as sd
+            name = sd.query_devices(idx).get("name")
+        _save_settings({"audio_device": (None if idx < 0 else idx),
+                        "audio_device_name": name})
         return True
 
     @_api_safe(default=False)
@@ -5988,6 +6091,7 @@ def _load_engine_async():
                          name="micworker-prewarm", daemon=True).start()
     except Exception:
         pass
+    _watch_system_wake(engine)
     _start_idle_unloader()   # libère Whisper de la RAM après inactivité prolongée
     # v2 — Préchargement de small EN FOND si la dictée l'utilisera (modes
     # « auto » et « rapide »), pour que la PREMIÈRE dictée soit déjà rapide
