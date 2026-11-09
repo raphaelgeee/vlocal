@@ -25,6 +25,7 @@ FICHIERS = (
     "hotkeys.py",
     "api_system.py",
     "api_settings.py",
+    "api_meetings.py",
     "app.py",
 )
 
