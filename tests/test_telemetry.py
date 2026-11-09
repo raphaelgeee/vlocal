@@ -9,6 +9,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import app_sources  # noqa: E402
 import storage  # noqa: E402
 import telemetry  # noqa: E402
 
@@ -333,9 +334,7 @@ class EngineFieldTests(unittest.TestCase):
     def test_app_profile_reads_the_engine_instance(self):
         """Garde-fou : app.py ne passe plus par mlx_engine.available() pour le
         profil, et lit last_backend() sur l'instance moteur."""
-        with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                               "app.py"), encoding="utf-8") as f:
-            src = f.read()
+        src = app_sources.texte_complet()
         corps = src[src.index("def _telemetry_profile"):]
         corps = corps[:corps.index("\ndef ", 1)]
         self.assertIn(".engine.last_backend()", corps)

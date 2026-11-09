@@ -7,14 +7,18 @@ vérifie que chaque nom appelé depuis Python est bien exposé.
 """
 import os
 import re
+import sys
 import unittest
 
 RACINE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import app_sources  # noqa: E402
 
 
 class TestPontUI(unittest.TestCase):
     def test_toute_fonction_appelee_par_python_est_exposee(self):
-        app = open(os.path.join(RACINE, "app.py"), encoding="utf-8").read()
+        app = app_sources.texte_complet()
         html = open(os.path.join(RACINE, "vlocal-interface.html"), encoding="utf-8").read()
         noms = sorted(set(re.findall(r"typeof ([A-Za-z_]\w*)==='function'", app)))
         self.assertTrue(noms, "aucun appel _ui trouvé : le motif a changé ?")

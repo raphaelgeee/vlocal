@@ -6,8 +6,7 @@
   perdue et la journalise ;
 - le verdict GPU est oublié après le téléchargement du modèle.
 
-app.py ne s'importe pas dans un test (pywebview, AppKit, moteur) : les quelques
-définitions visées en sont extraites telles quelles (ast) et exécutées dans un
+Les définitions visées sont extraites des sources de l'app telles quelles (ast) et exécutées dans un
 espace de noms de doublures. C'est bien le code livré qui est testé.
 """
 import ast
@@ -23,49 +22,24 @@ from unittest import mock
 RACINE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, RACINE)
 
+import app_sources  # noqa: E402
 import errors  # noqa: E402
 
 E = errors.E
-APP = os.path.join(RACINE, "app.py")
 
 
 def _source_app():
-    with open(APP, encoding="utf-8") as f:
-        return f.read()
-
-
-def _arbre_app():
-    return ast.parse(_source_app(), APP)
+    return app_sources.texte_complet()
 
 
 def _charge_depuis_app(noms, espace):
-    """Exécute dans `espace` les définitions de premier niveau de app.py nommées
-    dans `noms` (fonctions, classes, affectations simples), dans leur ordre."""
-    arbre = _arbre_app()
-    choisis = []
-    for n in arbre.body:
-        nom = None
-        if isinstance(n, (ast.FunctionDef, ast.ClassDef)):
-            nom = n.name
-        elif isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name):
-            nom = n.targets[0].id
-        if nom in noms:
-            choisis.append(n)
-    trouves = {getattr(n, "name", None) or n.targets[0].id for n in choisis}
-    manquants = set(noms) - trouves
-    if manquants:
-        raise AssertionError(f"définitions absentes de app.py : {sorted(manquants)}")
-    exec(compile(ast.Module(body=choisis, type_ignores=[]), APP, "exec"), espace)
-    return espace
+    """Exécute dans `espace` les définitions de premier niveau de l'app (app.py et
+    ses modules) nommées dans `noms` (fonctions, classes, affectations simples)."""
+    return app_sources.charge(noms, espace)
 
 
 def _litteral_app(nom):
-    for n in _arbre_app().body:
-        if isinstance(n, (ast.Assign, ast.AnnAssign)):
-            cible = n.targets[0] if isinstance(n, ast.Assign) else n.target
-            if isinstance(cible, ast.Name) and cible.id == nom:
-                return ast.literal_eval(n.value)
-    raise AssertionError(f"{nom} absent de app.py")
+    return app_sources.litteral(nom)
 
 
 class _JournalCapture:
