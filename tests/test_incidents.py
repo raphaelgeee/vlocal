@@ -354,11 +354,12 @@ class TestFinalisationReelle(unittest.TestCase):
             "_toast": lambda m, kind="info": self.toasts.append(m),
             "_schedule_overlay_hide": lambda d: None,
             "overlay": types.SimpleNamespace(error=lambda m: self.overlays.append(m)),
-            "_store": self.store, "_load_settings": lambda: self.reglages,
+            "appstate": types.SimpleNamespace(store=self.store, telemetry=None),
+            "_load_settings": lambda: self.reglages,
             "_save_settings": lambda d: None, "_current_mode": lambda: "DICTEE",
             "copy_to_clipboard": lambda t: self.copies.append(t) or True,
             "_ui": lambda code: None, "permissions": None, "_acc_warned": [False],
-            "_telemetry": None, "_looks_like_timed_reminder": lambda t: False,
+            "_looks_like_timed_reminder": lambda t: False,
             "_refresh_lists_ui": lambda: None, "_post_process_by_mode": lambda raw, mode: None,
         }
         _charge_depuis_app(
@@ -478,8 +479,9 @@ class TestVerdictGpuApresTelechargement(unittest.TestCase):
         open(os.path.join(tmp.name, "model.bin"), "wb").close()
         fil = mock.Mock()
         ns = _charge_depuis_app({"_finish_model_download"}, {
-            "os": os, "MODEL_DIR": tmp.name, "SMALL_MODEL_DIR": "/nope",
-            "_cpu_threads_resolved": 4, "_engine_load_params": None,
+            "os": os, "appstate": types.SimpleNamespace(
+                model_dir=tmp.name, small_model_dir="/nope",
+                cpu_threads=4, engine_load_params=None),
             "_resolve_model_dirs": lambda: ordre.append(("resolve",)),
             "_point_mlx_to_cache": lambda: ordre.append(("point",)),
             "_load_engine_async": lambda: None,
@@ -488,7 +490,7 @@ class TestVerdictGpuApresTelechargement(unittest.TestCase):
             self.assertTrue(ns["_finish_model_download"]())
         self.assertEqual(ordre, [("resolve",), ("point",), ("reset", "modèle téléchargé")])
         mlx.available.assert_not_called()
-        self.assertEqual(ns["_engine_load_params"], (tmp.name, 4))
+        self.assertEqual(ns["appstate"].engine_load_params, (tmp.name, 4))
         fil.return_value.start.assert_called_once_with()
 
 

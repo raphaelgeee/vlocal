@@ -94,6 +94,7 @@ except Exception:
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
 
+import appstate
 import processor
 import notifier
 import overlay
@@ -131,10 +132,9 @@ import model_store
 def _resolve_model_dirs():
     """(Re)calcule MODEL_DIR/SMALL_MODEL_DIR depuis model_store. Appelé à l'import,
     en main(), et après un téléchargement (les modèles passent du néant au cache)."""
-    global MODEL_DIR, SMALL_MODEL_DIR
     _root = model_store.models_dir()
-    MODEL_DIR = os.path.join(_root, TURBO_DIR_NAME)
-    SMALL_MODEL_DIR = os.path.join(_root, SMALL_DIR_NAME)
+    appstate.model_dir = os.path.join(_root, TURBO_DIR_NAME)
+    appstate.small_model_dir = os.path.join(_root, SMALL_DIR_NAME)
 
 def _point_mlx_to_cache():
     """Pointe le moteur GPU (mlx) sur le modèle q8 du dossier résolu (cache ou
@@ -148,18 +148,12 @@ def _point_mlx_to_cache():
     except Exception:
         pass
 
-MODEL_DIR = None
-SMALL_MODEL_DIR = None
 _resolve_model_dirs()
 
-_window = None
-_quitting = False        # True quand l'utilisateur quitte vraiment (menu « Quitter »)
-_quit_in_progress = False  # v29.8 — garde-fou réentrance du quit (idempotent)
 _update_busy = False       # v1.0.5 — une préparation de MAJ est en cours (anti-double)
 _update_staged = None      # v1.0.5 — chemin de la réplique vérifiée prête à installer
 _app_delegate = None       # v29.8 — notre délégué d'app NSApp (terminate -> vrai quit)
 _DRAG_VIEW_CLS = None       # v3.2.4 — classe NSView "bande de déplacement" (enregistrée 1 fois)
-_window_visible = True   # suivi de visibilité (fenêtre naît affichée)
 # Géométrie de la fenêtre principale — point de vérité unique. NB : la CARTE
 # CSS (.panel) fait 374 px, soit 6 px de moins que la fenêtre native.
 WIN_W = 1180            # v3.1 — dashboard plein écran (était 380, carte flottante)
@@ -167,11 +161,8 @@ WIN_H = 780             # v3.1 — (était 720)
 PANEL_W = 840            # (hérité ; set_meeting_panel neutralisé en v3.1)
 APP_VERSION = "1.4.3"   # 19 septembre 2026 : code de la 1.3.5 (retour arrière). Synchrone avec le fichier VERSION (build) ;
                         # affiché dans l'onglet « Mises à jour ». Historique : CHANGELOG.md.
-# Libellé humain du raccourci global actif (posé par start_global_hotkey,
-# consommé par le message de permission _check_hotkey_perm).
-_hotkey_label = "Ctrl + Espace"
+appstate.app_version = APP_VERSION
 _hotkey_state = None       # v1.3.3 — état du raccourci global (hotkey_mac.start), pour le réarmer à chaud
-_update_latest = None      # v1.3.4 — version plus récente connue (menu V « Mise à jour disponible »)
 
 
 def _ui(code: str):
@@ -187,12 +178,12 @@ def _ui(code: str):
     directement sur la WKWebView via le main thread, sans attendre (exactement
     comme overlay.py). Aucun appelant de _ui n'utilise sa valeur de retour.
     """
-    if _window is None:
+    if appstate.window is None:
         return
     try:
         from webview.platforms.cocoa import BrowserView
         from Foundation import NSOperationQueue
-        inst = BrowserView.instances.get(getattr(_window, "uid", "master"))
+        inst = BrowserView.instances.get(getattr(appstate.window, "uid", "master"))
         web = getattr(inst, "webview", None) if inst is not None else None
         if web is not None:
             NSOperationQueue.mainQueue().addOperationWithBlock_(
@@ -206,7 +197,7 @@ def _ui(code: str):
         # ci-dessus) ; tant qu'il était appelé dans le thread courant, ce repli
         # pouvait geler la boucle audio, la finalisation, ou pire le verrou de
         # dictée pendant un _toast. Aucun appelant n'utilise la valeur de retour.
-        threading.Thread(target=lambda: _window.evaluate_js(code),
+        threading.Thread(target=lambda: appstate.window.evaluate_js(code),
                          name="ui-fallback", daemon=True).start()
     except Exception:
         pass
@@ -238,29 +229,27 @@ def _lifecycle_quit():
     """Quitter pour de vrai. Utilise le nettoyage complet s'il est enregistré ;
     sinon (démarrage incomplet), marque la sortie, ferme la base et garantit la
     mort du process en 4 s. Ne lève jamais."""
-    global _quitting
     hook = _lifecycle_quit_hook
     if hook is not None:
         hook()
         return
-    _quitting = True
+    appstate.quitting = True
     t = threading.Timer(4.0, lambda: os._exit(0))
     t.daemon = True
     t.start()
     try:
-        if _store:
-            _store.close()
+        if appstate.store:
+            appstate.store.close()
     except Exception:
         pass
 
 
 def _lifecycle_show():
     """Ré-affiche la fenêtre masquée et ramène Vlocal au premier plan."""
-    global _window_visible
     try:
-        if _window is not None:
-            _window.show()
-        _window_visible = True
+        if appstate.window is not None:
+            appstate.window.show()
+        appstate.window_visible = True
     except Exception:
         pass
     try:
@@ -361,7 +350,6 @@ def _toast(message: str, kind: str = "info"):
 # au changement). Idempotent : une chaîne EN n'est pas une clé FR -> renvoyée telle
 # quelle. Les chaînes interpolées (variables) restent gérées au point d'appel.
 # ---------------------------------------------------------------------------
-_UI_LANG = "fr"
 # v1.0.11 — comptes "dev" : le DÉTAIL technique du diagnostic (état moteur, nombre
 # d'incidents) n'est affiché QUE pour ces licences. Un utilisateur lambda ne voit que
 # le formulaire d'envoi (l'envoi transmet quand même les métadonnées sanitisées au
@@ -518,7 +506,7 @@ def _te(s):
     """Traduit un message backend FR -> EN si la langue UI est EN ; sinon inchangé.
     Correspondance EXACTE d'abord (_BT), puis par PRÉFIXE (_BT_PREFIX) pour les
     messages interpolés. Idempotent (une chaîne EN n'est pas une clé FR)."""
-    if _UI_LANG == "en" and isinstance(s, str):
+    if appstate.ui_lang == "en" and isinstance(s, str):
         v = _BT.get(s)
         if v is not None:
             return v
@@ -901,7 +889,7 @@ def _dictation_supervisor():
     while True:
         _t.sleep(1.0)
         try:
-            c = _controller
+            c = appstate.controller
             if c is None:
                 continue
             busy = bool(getattr(c, "_busy", False))
@@ -1021,14 +1009,14 @@ def _auto_diag_loop():
     _t.sleep(90)   # laisse le démarrage tranquille
     while True:
         try:
-            if _auto_diag_enabled() and _api_instance is not None:
+            if _auto_diag_enabled() and appstate.api is not None:
                 try:
                     last = float(_load_settings().get("auto_diag_last", 0) or 0)
                 except Exception:
                     last = 0.0
                 if (_t.time() - last) > _AUTO_DIAG_DAYS * 86400:
                     try:
-                        r = _api_instance.send_support_diagnostic(
+                        r = appstate.api.send_support_diagnostic(
                             "[auto] rapport periodique testeur", "", source="auto-diag")
                         if isinstance(r, dict) and r.get("ok"):
                             _save_settings({"auto_diag_last": _t.time()})
@@ -1067,8 +1055,8 @@ def _polish_dictation(raw: str) -> str:
     # quel que soit le modèle utilisé par la cascade. Fidélité garantie même
     # quand small a fast-pathé.
     try:
-        if _store is not None:
-            gl = _store.glossary_pairs()
+        if appstate.store is not None:
+            gl = appstate.store.glossary_pairs()
             if gl:
                 raw = processor.apply_glossary(raw, gl)
     except Exception as e:
@@ -1076,8 +1064,8 @@ def _polish_dictation(raw: str) -> str:
     # Vlocal 2 — Raccourcis vocaux (snippets) : on dicte « ma signature »
     # -> insertion du bloc enregistré. Appliqué sur TOUS les modes.
     try:
-        if _store is not None:
-            pairs = _store.snippet_pairs()
+        if appstate.store is not None:
+            pairs = appstate.store.snippet_pairs()
             if pairs:
                 raw = processor.apply_glossary(raw, pairs)
     except Exception as e:
@@ -1096,7 +1084,7 @@ def _polish_dictation(raw: str) -> str:
 
 def _history_keeps_dictations() -> bool:
     """Le réglage de stockage garde-t-il le texte des dictées (« all ») ?"""
-    return _store is not None and _load_settings().get("history_scope", "all") == "all"
+    return appstate.store is not None and _load_settings().get("history_scope", "all") == "all"
 
 
 def _late_dictation_messages() -> tuple:
@@ -1782,7 +1770,7 @@ class DictationController:
             self._outcome.overlay = _late_dictation_messages()[1]
             return ""
         try:
-            _store.add_dictation(raw, mode="DICTEE")
+            appstate.store.add_dictation(raw, mode="DICTEE")
         except Exception as e:
             print(f"[dictée] dictée tardive non sauvegardée : {e}")
             self._outcome.overlay = _LOST_DICTATION_OVERLAY
@@ -1967,14 +1955,14 @@ class DictationController:
         # alimenté quel que soit le réglage d'historique. Sert l'accueil et la
         # télémétrie déclarée (telemetry.py), qui est prévenue sans bloquer.
         try:
-            if _store is not None and raw:
-                _store.record_usage(_store.word_count(raw), _rec_dur)
+            if appstate.store is not None and raw:
+                appstate.store.record_usage(appstate.store.word_count(raw), _rec_dur)
                 # v1.2.0 — horodatage de la DERNIÈRE dictée : c'est lui qui est
                 # partagé (si l'utilisateur l'accepte), pas l'heure d'envoi ;
                 # la console peut donc dire « utilisé il y a 12 minutes » juste.
                 _save_settings({"last_used_at": time.time()})
-                if _telemetry is not None:
-                    _telemetry.notify_usage()
+                if appstate.telemetry is not None:
+                    appstate.telemetry.notify_usage()
         except Exception:
             pass
         # v18.4 — Historique des DICTÉES (texte seul, très léger). Persisté
@@ -1985,7 +1973,7 @@ class DictationController:
             # dictée (fini le doublon « rappel + dictée » remonté par Raphael).
             if _current_mode() == "DICTEE" and _history_keeps_dictations() \
                     and not _looks_like_timed_reminder(raw):
-                _store.add_dictation(raw, mode="DICTEE")
+                appstate.store.add_dictation(raw, mode="DICTEE")
                 # Bug #4 — rafraîchit l'accueil (mots / temps gagné / sessions du
                 # mois) après une dictée, comme le fait déjà le chemin réunion.
                 # Non bloquant (via _ui fire-and-forget), hors chemin de copie,
@@ -2006,9 +1994,6 @@ class DictationController:
         return raw
 
 
-_controller = None  # type: DictationController | None
-_store: "Store | None" = None
-_menubar = None  # MenuBar (lazy import depuis menubar.py)
 # v12 — état du mode Réunion (recorder + meeting id en cours)
 _meeting_state = {
     "recorder": None,
@@ -2063,7 +2048,7 @@ _VALID_MODES = ("DICTEE", "REUNION")
 # Override possible : VLOCAL_REUNION=0 pour le désactiver explicitement.
 # Lecture aussi de settings.json (clé reunion_enabled) prise en compte
 # dans `_init_reunion_flag()` plus bas.
-REUNION_ENABLED = os.environ.get("VLOCAL_REUNION", "1") not in ("0", "false", "False")
+appstate.reunion_enabled = os.environ.get("VLOCAL_REUNION", "1") not in ("0", "false", "False")
 # v1.0.12 — Mode VISIO de la réunion (capture audio système, 100% additif).
 # Kill-switch sans rebuild : VLOCAL_VISIO=0 -> seul le présentiel reste actif.
 VISIO_MODE_ENABLED = os.environ.get("VLOCAL_VISIO", "1") not in ("0", "false", "False")
@@ -2203,10 +2188,10 @@ def _save_glossary_text(text: str) -> bool:
 
 def _refresh_lists_ui():
     """Pousse la liste des rappels à la fenêtre (silencieux si pas prête)."""
-    if _store is None:
+    if appstate.store is None:
         return
     try:
-        _ui("renderTasks(%s)" % json.dumps(_store.list_tasks(limit=10)))
+        _ui("renderTasks(%s)" % json.dumps(appstate.store.list_tasks(limit=10)))
     except Exception:
         pass
     # v1.0.6 — STATS LIVE : rafraîchit aussi la vue ouverte (Accueil compris) pour
@@ -2221,18 +2206,18 @@ def _refresh_lists_ui():
 def _refresh_whisper_bias():
     """v15 — Réinjecte les formes correctes du glossaire dans le biais
     hotwords de Whisper (passe 1, v20). Appelé après toute modif du glossaire."""
-    if _store is None:
+    if appstate.store is None:
         return
     try:
         from engine import set_correction_terms
-        set_correction_terms([c for _, c in _store.glossary_pairs()])
+        set_correction_terms([c for _, c in appstate.store.glossary_pairs()])
     except Exception:
         pass
 
 
 def _menubar_labels():
     """v3.3 — libellés i18n du menu NSStatusItem (suivent la langue UI backend)."""
-    if _UI_LANG == "en":
+    if appstate.ui_lang == "en":
         return {"dictate": "Dictate", "open": "Open Vlocal", "reminders": "Recent reminders",
                 "none": "  (none)", "settings": "Settings...", "quit": "Quit Vlocal",
                 "update": "Update {0} available..."}
@@ -2243,11 +2228,11 @@ def _menubar_labels():
 
 def _refresh_menubar():
     """Recharge les items + les libellés i18n du menu bar (best-effort)."""
-    if _menubar is None:
+    if appstate.menubar is None:
         return
     try:
-        _tasks = _store.list_tasks(only_open=True, limit=5) if _store else []
-        _menubar.refresh(tasks=_tasks, labels=_menubar_labels(), update_version=_update_latest)
+        _tasks = appstate.store.list_tasks(only_open=True, limit=5) if appstate.store else []
+        appstate.menubar.refresh(tasks=_tasks, labels=_menubar_labels(), update_version=appstate.update_latest)
     except Exception:
         pass
 
@@ -2289,7 +2274,7 @@ def _task_still_open(task_id) -> bool:
     if task_id is None:
         return True            # timer sans id (héritage) : on sonne
     try:
-        for t in (_store.list_tasks(limit=500, only_open=True) if _store else []):
+        for t in (appstate.store.list_tasks(limit=500, only_open=True) if appstate.store else []):
             if t.get("id") == task_id:
                 return True
     except Exception:
@@ -2359,7 +2344,7 @@ def _looks_like_timed_reminder(raw: str) -> bool:
     try:
         if not raw or not reminders.is_reminder(raw):
             return False
-        glossary = _store.glossary_pairs() if _store else []
+        glossary = appstate.store.glossary_pairs() if appstate.store else []
         raw_gloss = processor.apply_glossary(raw, glossary) if glossary else raw
         data = reminders.parse_reminder(raw_gloss, time.time()) or {}
         return bool(data.get("datetime_iso"))
@@ -2375,7 +2360,7 @@ def _post_process_by_mode(raw: str, mode: str):
     local déterministe, instantané, hors-ligne) ; sinon c'est une dictée normale
     (le texte brut est déjà copié, rien d'autre à faire). RÉUNION a son propre
     pipeline. Silencieux en cas d'échec : le brut reste disponible."""
-    if not raw or _store is None:
+    if not raw or appstate.store is None:
         return
     if (mode or "DICTEE").upper() == "REUNION":
         return
@@ -2400,8 +2385,8 @@ def _telemetry_profile() -> dict:
     """Profil technique transmis par la télémétrie (telemetry.machine_profile).
     Appelé par telemetry.sync_once APRÈS la vérification du consentement.
     Moteur : celui de la dernière dictée ("" si le moteur n'est pas encore chargé)."""
-    ctrl = _controller
-    return telemetry.machine_profile(_UI_LANG, _load_settings().get("hotkey"),
+    ctrl = appstate.controller
+    return telemetry.machine_profile(appstate.ui_lang, _load_settings().get("hotkey"),
                                      ctrl.engine.last_backend() if ctrl is not None else "")
 
 
@@ -2412,12 +2397,12 @@ def _obsidian_meeting_sync(meeting_id):
     en base quoi qu'il arrive."""
     try:
         _s = _load_settings()
-        if not (_s.get("obsidian_enabled") and _s.get("obsidian_vault")) or _store is None:
+        if not (_s.get("obsidian_enabled") and _s.get("obsidian_vault")) or appstate.store is None:
             return
         vault = _s.get("obsidian_vault")
         def _run():
             try:
-                m = _store.get_meeting(int(meeting_id))
+                m = appstate.store.get_meeting(int(meeting_id))
                 if not m:
                     return
                 blocks, names = None, {}
@@ -2439,9 +2424,9 @@ def _obsidian_meeting_sync(meeting_id):
 def _create_reminder_from_text(raw: str):
     """Crée un rappel depuis un texte dicté (parseur local). Notif planifiée à
     l'heure dite ; confirmation in-app QUOI + QUAND."""
-    if _recently_added_same(raw, _store):
+    if _recently_added_same(raw, appstate.store):
         return
-    glossary = _store.glossary_pairs() if _store else []
+    glossary = appstate.store.glossary_pairs() if appstate.store else []
     raw_gloss = processor.apply_glossary(raw, glossary) if glossary else raw
     now_ts = time.time()
     data = reminders.parse_reminder(raw_gloss, now_ts) or {}
@@ -2456,7 +2441,7 @@ def _create_reminder_from_text(raw: str):
         print("[dictée] rappel sans horaire -> ignoré (anti faux positif).")
         return
     try:
-        tid = _store.add_task(titre=titre, echeance=echeance_naturelle,
+        tid = appstate.store.add_task(titre=titre, echeance=echeance_naturelle,
                               echeance_iso=datetime_iso, details=None,
                               source_raw_text=raw)
     except Exception:
@@ -2473,7 +2458,7 @@ def _create_reminder_from_text(raw: str):
         when = reminders.humanize_when(datetime_iso, now_ts)
         _schedule_reminder(iso_ts, titre, task_id=tid)
         try:
-            _store.mark_notif_scheduled(tid)
+            appstate.store.mark_notif_scheduled(tid)
         except Exception:
             pass
         _toast((f"C'est noté : « {titre} ». Vous serez prévenu {when}."
@@ -2713,8 +2698,8 @@ def _meeting_fail(meeting_id, message, extra_fields=None):
     fin (l'utilisateur ne voyait jamais la réunion aboutir ni échouer). On
     marque la réunion en erreur (récupérable), on prévient, on rafraîchit."""
     try:
-        if _store and meeting_id:
-            _store.update_meeting(meeting_id, status="error", **(extra_fields or {}))
+        if appstate.store and meeting_id:
+            appstate.store.update_meeting(meeting_id, status="error", **(extra_fields or {}))
     except Exception as e:
         print(f"[reunion] update_meeting(error) KO : {e}")
     if _EV: _EV.log(_EV.E.MEETING_FAIL, mid=str(meeting_id))
@@ -2792,7 +2777,7 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
                     imp_diar = _dz.Diarizer(); imp_diar.reset_stream()
                 # fichier court (<= 5 min) : rafale brève -> peu/pas de pacing.
                 _pace_b = 0.0 if _dur_min <= 3 else 0.45
-                detailed = _controller.engine.transcribe_import(
+                detailed = appstate.controller.engine.transcribe_import(
                     wav_path, batch_size=_bs, pace=_pace_b, mode="reunion",
                     on_progress=lambda p: _ui("setMeetingProgress(%.2f)" % p),
                     on_window=((lambda pcm, s, off: imp_diar.feed_window(pcm, s, off))
@@ -2831,7 +2816,7 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
                 # Au-delà : fenêtré incrémental (RAM stable éprouvée, ~×13).
                 if _mlx.available() and not _feed_tiles and _dur_min <= 45:
                     try:
-                        detailed = _controller.engine.transcribe_import_mlx(
+                        detailed = appstate.controller.engine.transcribe_import_mlx(
                             _au, sr=_sr,
                             on_progress=lambda p: _ui("setMeetingProgress(%.2f)" % p))
                         print(f"[import] plein débit GPU "
@@ -2855,7 +2840,7 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
                     else:
                         _ramp = max(0.3, min(0.8, (_dur_min - 12) / 45.0 + 0.3))
                         _pace = max(_ramp, 0.6) if _econ else _ramp
-                    detailed = _controller.engine.transcribe_incremental(
+                    detailed = appstate.controller.engine.transcribe_incremental(
                         _au, sr=_sr,
                         on_progress=lambda p: _ui("setMeetingProgress(%.2f)" % p),
                         on_window=((lambda pcm, s, off: imp_diar.feed_window(pcm, s, off))
@@ -2914,7 +2899,7 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
                 _durq_min = _wfq.getnframes() / float(_srq * 60.0)
             if _mlxq.available() and _durq_min <= LIVE_RETRANSCRIBE_MAX_MIN:
                 _auq = _npq.memmap(wav_path, dtype="<i2", mode="r", offset=44)
-                _clean = _controller.engine.transcribe_import_mlx(
+                _clean = appstate.controller.engine.transcribe_import_mlx(
                     _auq, sr=_srq,
                     on_progress=lambda p: _ui("setMeetingProgress(%.2f)" % p))
                 if _clean and _clean.get("segments"):
@@ -2928,7 +2913,7 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
                 # CPU (transcribe_detailed = segments mot-à-mot fins) pour nourrir la
                 # diarisation. Restaure la qualité v29.3 sur machine sans GPU (clients
                 # macOS < 14 / Intel + bascule CPU transitoire). Aucun effet si MLX actif.
-                _cleancpu = _controller.engine.transcribe_detailed(
+                _cleancpu = appstate.controller.engine.transcribe_detailed(
                     wav_path, mode="reunion",
                     on_progress=lambda p: _ui("setMeetingProgress(%.2f)" % p))
                 if _cleancpu and _cleancpu.get("segments"):
@@ -2949,7 +2934,7 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
                 with _wvf.open(wav_path, "rb") as _wff:
                     _srf = _wff.getframerate()
                 _auf = _npf.memmap(wav_path, dtype="<i2", mode="r", offset=44)
-                detailed = _controller.engine.transcribe_import_mlx(
+                detailed = appstate.controller.engine.transcribe_import_mlx(
                     _auf, sr=_srf,
                     on_progress=lambda p: _ui("setMeetingProgress(%.2f)" % p))
                 print("[reunion] repli plein débit GPU OK.")
@@ -2958,7 +2943,7 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
             detailed = None
     if detailed is None:
         try:
-            detailed = _controller.engine.transcribe_detailed(
+            detailed = appstate.controller.engine.transcribe_detailed(
                 wav_path, mode="reunion",
                 on_progress=lambda p: _ui("setMeetingProgress(%.2f)" % p),
             )
@@ -2979,12 +2964,12 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
                       extra_fields={"duree_transcription_s": dur_transcribe})
         return
 
-    glossary = _store.glossary_pairs() if _store else []
+    glossary = appstate.store.glossary_pairs() if appstate.store else []
     # Brut = transcription Whisper + glossaire (sécurité noms propres).
     brut = processor.apply_glossary(raw_text, glossary) if glossary else raw_text
 
-    if _store and meeting_id:
-        _store.update_meeting(
+    if appstate.store and meeting_id:
+        appstate.store.update_meeting(
             meeting_id,
             transcription_brute=brut,
             duree_transcription_s=dur_transcribe,
@@ -3095,8 +3080,8 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
                         # était réellement chargé (sur MLX, model est None par
                         # design -> sinon on chargerait 1,7 Go de CT2 pour rien).
                         try:
-                            _reloaded = getattr(_controller.engine, "model", None) is not None
-                            _controller.engine.unload_model()
+                            _reloaded = getattr(appstate.controller.engine, "model", None) is not None
+                            appstate.controller.engine.unload_model()
                         except Exception:
                             pass
                         # v27 — relais GPU : la transcription est finie, on rend
@@ -3105,7 +3090,7 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
                         # l'idle-unloader. Jamais pendant une dictée en cours.
                         try:
                             import mlx_engine as _mlxe
-                            if _mlxe.available() and not getattr(_controller, "_busy", False):
+                            if _mlxe.available() and not getattr(appstate.controller, "_busy", False):
                                 _mlxe.unload()
                         except Exception:
                             pass
@@ -3191,9 +3176,9 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
                             # relais RAM : recharger au finally SEULEMENT si un
                             # modèle CT2 était chargé (sur MLX, model est None).
                             if not _reloaded:
-                                _reloaded = getattr(_controller.engine, "model",
+                                _reloaded = getattr(appstate.controller.engine, "model",
                                                     None) is not None
-                            _controller.engine.unload_model()
+                            appstate.controller.engine.unload_model()
                         except Exception:
                             pass
                         try:
@@ -3282,7 +3267,7 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
                             pass
                     if _reloaded:
                         try:
-                            _controller.engine.load_model()
+                            appstate.controller.engine.load_model()
                         except Exception:
                             pass
             else:
@@ -3292,19 +3277,19 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
             print(f"[reunion] diarisation ignorée ({e}) -> affichage continu.")
             speaker_blocks_json = None
 
-    if _store and meeting_id:
+    if appstate.store and meeting_id:
         fields = {"transcription_structuree": structured, "status": "ready"}
         if conf_json is not None:
             fields["confidence_json"] = conf_json
             fields["avg_confidence"] = avg_conf
         if speaker_blocks_json is not None:
             fields["speaker_blocks_json"] = speaker_blocks_json
-        _store.update_meeting(meeting_id, **fields)
+        appstate.store.update_meeting(meeting_id, **fields)
         try:    # v1.2.0 — compteur d'usage : mots transcrits et durée d'audio
-            _store.record_meeting(_store.word_count(structured or ""), audio_duree)
+            appstate.store.record_meeting(appstate.store.word_count(structured or ""), audio_duree)
             _save_settings({"last_used_at": time.time()})
-            if _telemetry is not None:
-                _telemetry.notify_usage()
+            if appstate.telemetry is not None:
+                appstate.telemetry.notify_usage()
         except Exception:
             pass
         _obsidian_meeting_sync(meeting_id)   # v1.1.0 — coffre « Vlocal, ma voix »
@@ -3328,7 +3313,7 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
 class Api:
     @_api_safe(default=False)
     def start_dictation(self):
-        if _controller is None:
+        if appstate.controller is None:
             # v2 — moteur encore en préparation (démarrage différé).
             _toast("Le moteur de transcription finit de se préparer, un "
                    "instant…", kind="info")
@@ -3344,11 +3329,11 @@ class Api:
                 return False
         except Exception:
             pass
-        return bool(_controller.start())
+        return bool(appstate.controller.start())
 
     def engine_ready(self):
         """v2 — True si le moteur Whisper est chargé et prêt."""
-        return _controller is not None and _engine_ready.is_set()
+        return appstate.controller is not None and _engine_ready.is_set()
 
     @_api_safe(default=False)
     def copy_text(self, text):
@@ -3362,17 +3347,17 @@ class Api:
         # est déjà faite dans le contrôleur. Aucun post-traitement LLM ici (garde-fou).
         # _api_safe garantit qu'un échec rend "" plutôt qu'une promesse rejetée
         # (sinon l'UI resterait bloquée sur "Transcription en cours").
-        if _controller is None:
+        if appstate.controller is None:
             return ""
-        return _controller.stop_and_finalize()
+        return appstate.controller.stop_and_finalize()
 
     @_api_safe(default=False)
     def cancel_dictation(self):
         """v2 — Annule la dictée en cours sans transcrire (touche Échap / bouton
         Annuler). Jette l'audio, instantané. True si une dictée a été annulée."""
-        if _controller is None:
+        if appstate.controller is None:
             return False
-        cancelled = _controller.cancel()
+        cancelled = appstate.controller.cancel()
         if cancelled:
             _ui("dictationCancelled()")
             _cancel_overlay_hide()
@@ -3387,7 +3372,7 @@ class Api:
         """v11 — Change le mode actif. Persisté entre sessions. v3.3 — ne persiste
         PAS REUNION si le mode Réunion est désactivé (sinon réouverture en état
         incohérent : UI réunion mais bouton Enregistrer qui refuse)."""
-        if (mode or "").upper() == "REUNION" and not REUNION_ENABLED:
+        if (mode or "").upper() == "REUNION" and not appstate.reunion_enabled:
             _toast("Le mode Réunion n'est pas activé. Activez-le dans "
                    "Réglages.", kind="info")
             new = _set_mode("DICTEE")
@@ -3397,7 +3382,7 @@ class Api:
         return new
 
     def is_reunion_enabled(self):
-        return REUNION_ENABLED
+        return appstate.reunion_enabled
 
     # ------------------------ v12 : drag & drop fichiers --------------------
     SUPPORTED_AUDIO_EXT = {
@@ -3413,7 +3398,7 @@ class Api:
         """Message unique « fichier trop gros », dérivé de MAX_AUDIO_BYTES (i18n)."""
         _mb = int(observed_bytes) // (1024 * 1024)
         _max = self.MAX_AUDIO_BYTES // (1024 * 1024)
-        if _UI_LANG == "en":
+        if appstate.ui_lang == "en":
             return f"File too large ({_mb} MB). Maximum {_max} MB."
         return f"Fichier trop gros ({_mb} Mo). Maximum {_max} Mo."
 
@@ -3464,7 +3449,7 @@ class Api:
         le mode actif est DICTÉE. Retourne {ok, text, mode, error}. Aucun emoji.
         """
         import os
-        if _controller is None:
+        if appstate.controller is None:
             return {"ok": False,
                     "error": "Le moteur de transcription se prépare encore, "
                              "réessayez dans un instant."}
@@ -3508,7 +3493,7 @@ class Api:
                             _avail_gb = _ps.virtual_memory().available / 2 ** 30
                             _bs = 4 if _avail_gb >= 6.0 else (2 if _avail_gb >= 2.5 else 0)
                             if _bs:
-                                det = _controller.engine.transcribe_file_batched(
+                                det = appstate.controller.engine.transcribe_file_batched(
                                     path, mode="dictee", batch_size=_bs,
                                     on_progress=lambda p: _ui("setFileProgress(%.2f)" % p))
                                 text = det.get("text", "")
@@ -3518,7 +3503,7 @@ class Api:
                         # mode="dictee" : voie dictée par fichier (kwargs identiques
                         # à l'ancien défaut "reunion" — word_timestamps est forcé à
                         # False dans engine.transcribe_file).
-                        text = _controller.engine.transcribe_file(
+                        text = appstate.controller.engine.transcribe_file(
                             path,
                             on_progress=lambda p: _ui(
                                 "setFileProgress(%.2f)" % p
@@ -3569,9 +3554,9 @@ class Api:
         import base64 as _b64
         import os
         import time as _t
-        if _controller is None:
+        if appstate.controller is None:
             return {"ok": False, "error": "Le moteur de transcription se prépare encore."}
-        if _store is None:
+        if appstate.store is None:
             return {"ok": False, "error": "Stockage indisponible."}
         name = os.path.basename(filename or "audio")
         ext = os.path.splitext(name)[1].lower()
@@ -3642,7 +3627,7 @@ class Api:
                     pass
                 raise ValueError("Audio trop court.")
             titre = "Import · " + (os.path.splitext(name)[0][:40] or "audio")
-            mid = _store.add_meeting(titre, wav_path, "transcribing")
+            mid = appstate.store.add_meeting(titre, wav_path, "transcribing")
             # Import : le pipeline transcrit le WAV de façon INCRÉMENTALE (fenêtres
             # + pacing anti-chauffe) et alimente le diariseur en ligne.
             _meeting_state["live"] = None
@@ -3688,11 +3673,11 @@ class Api:
               avant que la 1ʳᵉ pipeline ait fini d'écrire en SQLite, et
               l'UI mélangeait les statuts à l'écran.
         """
-        if _controller is None:
+        if appstate.controller is None:
             _toast("Le moteur de transcription finit de se préparer, un "
                    "instant…", kind="info")
             return {"ok": False, "error": "Moteur en préparation."}
-        if not REUNION_ENABLED:
+        if not appstate.reunion_enabled:
             _toast("Le mode Réunion n'est pas activé. Activez-le dans "
                    "Réglages.", kind="info")
             return {"ok": False, "error": "Mode Réunion désactivé."}
@@ -3749,7 +3734,7 @@ class Api:
                 wav_path = rec.start()
                 import time as _t
                 titre = "Réunion " + _t.strftime("%d/%m/%Y %H:%M")
-                mid = _store.add_meeting(titre, wav_path, "recording") if _store else None
+                mid = appstate.store.add_meeting(titre, wav_path, "recording") if appstate.store else None
                 _meeting_state["id"] = mid
                 # v16 — Transcription INCRÉMENTALE pendant l'enregistrement :
                 # au stop, il ne restera qu'une courte fenêtre à traiter (au
@@ -3780,7 +3765,7 @@ class Api:
                     # Présentiel : aucun kwarg -> fenêtres engine par défaut (inchangé).
                     _vk = ({"window_target_s": 12.0, "window_max_s": 18.0}
                            if _meeting_state.get("mode") == "visio" else {})
-                    lt = LiveMeetingTranscriber(_controller.engine, wav_path,
+                    lt = LiveMeetingTranscriber(appstate.controller.engine, wav_path,
                                                 diarizer=_diar, **_vk)
                     lt.start()
                     _meeting_state["live"] = lt
@@ -3894,9 +3879,9 @@ class Api:
                 except Exception:
                     pass
             mid0 = _meeting_state.get("id")
-            if _store and mid0:
+            if appstate.store and mid0:
                 try:
-                    _store.update_meeting(mid0, duree_audio_s=duree,
+                    appstate.store.update_meeting(mid0, duree_audio_s=duree,
                                           status="error")
                 except Exception:
                     pass
@@ -3907,9 +3892,9 @@ class Api:
             _end_activity(_meeting_state.pop("activity", None))  # v21
             return {"ok": False, "error": "Enregistrement trop court."}
         mid = _meeting_state.get("id")
-        if _store and mid:
+        if appstate.store and mid:
             try:
-                _store.update_meeting(
+                appstate.store.update_meeting(
                     mid, duree_audio_s=duree, status="transcribing"
                 )
             except Exception:
@@ -3931,9 +3916,9 @@ class Api:
             # à vie ("réunion précédente en cours") jusqu'au redémarrage. On nettoie.
             _meeting_state["pipeline_busy"] = False
             print(f"[reunion] lancement pipeline KO : {_err}")
-            if _store and mid:
+            if appstate.store and mid:
                 try:
-                    _store.update_meeting(mid, status="error")
+                    appstate.store.update_meeting(mid, status="error")
                 except Exception:
                     pass
             _toast("Le traitement de la réunion n'a pas pu démarrer. Réessayez.",
@@ -3992,24 +3977,24 @@ class Api:
 
     @_api_safe(default=list)
     def list_meetings(self):
-        return _store.list_meetings(limit=10) if _store else []
+        return appstate.store.list_meetings(limit=10) if appstate.store else []
 
     def get_meeting(self, mid):
         """v12e — Retourne le détail complet d'une réunion (transcription
         brute + propre) pour la vue détaillée avec toggle.
         v20 — accès SQL ciblé : O(1) au lieu de charger 50 réunions, et les
         réunions au-delà des 50 dernières redeviennent consultables."""
-        if _store is None:
+        if appstate.store is None:
             return None
         try:
-            return _store.get_meeting(int(mid))
+            return appstate.store.get_meeting(int(mid))
         except Exception:
             return None
 
     @_api_safe(default=False)
     def delete_meeting(self, mid):
-        if _store:
-            _store.delete_meeting(int(mid), delete_wav=True)
+        if appstate.store:
+            appstate.store.delete_meeting(int(mid), delete_wav=True)
             _refresh_lists_ui()
         return True
 
@@ -4021,9 +4006,9 @@ class Api:
         Récupère notamment les réunions ratées par un ancien build. {ok, id}."""
         import os as _os
         import wave as _wave
-        if _controller is None or _store is None:
+        if appstate.controller is None or appstate.store is None:
             return {"ok": False, "error": "Le moteur se prépare encore, un instant."}
-        m = _store.get_meeting(mid)
+        m = appstate.store.get_meeting(mid)
         if not m:
             return {"ok": False, "error": "Réunion introuvable."}
         wav = m["wav_path"] if "wav_path" in m.keys() else None
@@ -4041,7 +4026,7 @@ class Api:
         try:
             with _wave.open(wav, "rb") as wf:
                 dur = wf.getnframes() / float(wf.getframerate())
-            _store.update_meeting(mid, status="transcribing")
+            appstate.store.update_meeting(mid, status="transcribing")
             _meeting_state["live"] = None
             _meeting_state["diar"] = None
             _meeting_state["import"] = True          # re-traitement depuis le WAV
@@ -4063,7 +4048,7 @@ class Api:
         (confidence_json). Permet de corriger une sur-segmentation en fixant le
         nombre de locuteurs. Renvoie le nb de locuteurs, ou False si impossible."""
         m = self.get_meeting(mid)
-        if not m or _store is None:
+        if not m or appstate.store is None:
             return False
         wav = m.get("wav_path")
         if not wav or not os.path.exists(wav):
@@ -4091,9 +4076,9 @@ class Api:
             # (rechargé au finally SEULEMENT s'il était chargé — sur MLX, None).
             _rl = False
             try:
-                if _controller is not None:
-                    _rl = getattr(_controller.engine, "model", None) is not None
-                    _controller.engine.unload_model()
+                if appstate.controller is not None:
+                    _rl = getattr(appstate.controller.engine, "model", None) is not None
+                    appstate.controller.engine.unload_model()
             except Exception:
                 pass
             dia = diarizer.Diarizer()
@@ -4152,14 +4137,14 @@ class Api:
                     return False
                 units = diarizer.words_from_segments(segs)
                 blocks = _attribute_blocks(dia, units, wav, spk)  # attribution au mot ≥98 %
-                gl = _store.glossary_pairs() if _store else []
+                gl = appstate.store.glossary_pairs() if appstate.store else []
                 if gl:
                     for b in blocks:
                         b["text"] = processor.apply_glossary(b["text"], gl)
                 # v1.2 — reconnaissance des voix connues (idem pipeline,
                 # silencieuse ici : pas de log).
                 auto_names = _recognize_voices(voices_map)
-                _store.update_meeting(int(mid), speaker_blocks_json=json.dumps(
+                appstate.store.update_meeting(int(mid), speaker_blocks_json=json.dumps(
                     {"blocks": blocks, "names": auto_names, "voices": voices_map},
                     ensure_ascii=False))
                 _obsidian_meeting_sync(mid)
@@ -4175,7 +4160,7 @@ class Api:
                     pass
                 if _rl:
                     try:
-                        _controller.engine.load_model()
+                        appstate.controller.engine.load_model()
                     except Exception:
                         pass
         except Exception as e:
@@ -4187,11 +4172,11 @@ class Api:
     def get_history(self, limit=200):
         """v18.4 — Timeline unifiée (réunions, dictées, notes, rappels) triée du
         plus récent au plus ancien. Chaque entrée : {type,id,titre,apercu,ts}."""
-        if _store is None:
+        if appstate.store is None:
             return []
         items = []
         try:
-            for m in _store.list_meetings(limit=limit):
+            for m in appstate.store.list_meetings(limit=limit):
                 txt = (m.get("transcription_structuree")
                        or m.get("transcription_brute") or "")
                 items.append({"type": "reunion", "id": m.get("id"),
@@ -4201,7 +4186,7 @@ class Api:
         except Exception:
             pass
         try:
-            for d in _store.list_dictations(limit=limit):
+            for d in appstate.store.list_dictations(limit=limit):
                 _c = d.get("content") or ""
                 items.append({"type": "dictee", "id": d.get("id"),
                               "titre": "Dictée",
@@ -4211,7 +4196,7 @@ class Api:
         except Exception:
             pass
         try:
-            for t in _store.list_tasks(limit=limit):
+            for t in appstate.store.list_tasks(limit=limit):
                 items.append({"type": "rappel", "id": t.get("id"),
                               "titre": t.get("titre") or "Rappel",
                               "apercu": (t.get("echeance") or ""),
@@ -4233,13 +4218,13 @@ class Api:
     def clear_history(self, scope):
         """v18.4 — Purge l'historique. scope : 'dictees', 'reunions' ou 'tout'.
         Renvoie le nombre d'éléments supprimés. Libère le stockage."""
-        if _store is None:
+        if appstate.store is None:
             return 0
         n = 0
         if scope in ("dictees", "tout"):
-            n += _store.clear_dictations()
+            n += appstate.store.clear_dictations()
         if scope in ("reunions", "tout"):
-            n += _store.clear_meetings(delete_wav=True)
+            n += appstate.store.clear_meetings(delete_wav=True)
         _refresh_lists_ui()
         return n
 
@@ -4251,21 +4236,21 @@ class Api:
                 "n_reunions": 0, "n_dictees": 0, "audio_files": 0,
                 "stats_since": int(_load_settings().get("stats_since", 0) or 0)}
         try:
-            if _store is not None and os.path.exists(_store.path):
-                info["db_mo"] = round(os.path.getsize(_store.path) / 1e6, 2)
+            if appstate.store is not None and os.path.exists(appstate.store.path):
+                info["db_mo"] = round(os.path.getsize(appstate.store.path) / 1e6, 2)
         except Exception:
             pass
         try:
-            if _store is not None:
+            if appstate.store is not None:
                 # v20 — comptages/chemins LÉGERS : plus aucune transcription ni
                 # JSON par mot matérialisés juste pour compter (RAM transitoire).
-                info["n_reunions"] = _store.count_meetings()
-                info["n_dictees"] = _store.count_dictations()
+                info["n_reunions"] = appstate.store.count_meetings()
+                info["n_dictees"] = appstate.store.count_dictations()
                 # v18.5 — on somme les VRAIS fichiers audio référencés par les
                 # réunions (wav_path), où qu'ils soient, plutôt qu'un dossier fixe.
                 tot = 0
                 n = 0
-                for _mid, wp in _store.list_meeting_wavs():
+                for _mid, wp in appstate.store.list_meeting_wavs():
                     try:
                         if wp and os.path.exists(wp):
                             tot += os.path.getsize(wp)
@@ -4363,7 +4348,7 @@ class Api:
                       flags=re.UNICODE).strip()[:60] or "reunion"
         try:
             import webview as _wv
-            dest = _window.create_file_dialog(
+            dest = appstate.window.create_file_dialog(
                 _wv.SAVE_DIALOG,
                 directory=os.path.expanduser("~/Documents"),
                 save_filename=safe + ".txt")
@@ -4397,14 +4382,14 @@ class Api:
         longtemps) : aux réunions suivantes, le nom apparaîtra tout seul. name
         vide -> retire le renommage (la voix connue, elle, reste)."""
         data = self._load_speaker_payload(mid)
-        if data is None or _store is None:
+        if data is None or appstate.store is None:
             return False
         name = (name or "").strip()
         if name:
             data["names"][speaker_id] = name
         else:
             data["names"].pop(speaker_id, None)
-        _store.update_meeting(int(mid), speaker_blocks_json=json.dumps(
+        appstate.store.update_meeting(int(mid), speaker_blocks_json=json.dumps(
             data, ensure_ascii=False))
         _obsidian_meeting_sync(mid)
         # Enrôlement / apprentissage de la voix (centroïde stocké avec la réunion).
@@ -4447,9 +4432,9 @@ class Api:
     def update_meeting_text(self, mid, text):
         """v18.1 — Édition inline de la transcription continue (sans locuteurs).
         Persiste le texte corrigé par l'utilisateur."""
-        if _store is None:
+        if appstate.store is None:
             return False
-        _store.update_meeting(int(mid), transcription_structuree=(text or ""))
+        appstate.store.update_meeting(int(mid), transcription_structuree=(text or ""))
         return True
 
     @_api_safe(default=False)
@@ -4457,13 +4442,13 @@ class Api:
         """v18.1 — Édition inline du texte d'un bloc locuteur. Persiste dans
         speaker_blocks_json."""
         data = self._load_speaker_payload(mid)
-        if data is None or _store is None:
+        if data is None or appstate.store is None:
             return False
         try:
             data["blocks"][int(block_index)]["text"] = (text or "").strip()
         except Exception:
             return False
-        _store.update_meeting(int(mid), speaker_blocks_json=json.dumps(
+        appstate.store.update_meeting(int(mid), speaker_blocks_json=json.dumps(
             data, ensure_ascii=False))
         _obsidian_meeting_sync(mid)
         return True
@@ -4500,16 +4485,16 @@ class Api:
 
     @_api_safe(default=list)
     def list_glossary(self):
-        return _store.list_glossary() if _store else []
+        return appstate.store.list_glossary() if appstate.store else []
 
     @_api_safe(default=list)
     def list_glossary_suggestions(self):
         """Suggestions non encore présentes dans la base (case insensitive)."""
-        if _store is None:
+        if appstate.store is None:
             return list(self.GLOSSARY_SUGGESTIONS)
         existing = {
             (e.get("incorrect") or "").strip().lower()
-            for e in _store.list_glossary()
+            for e in appstate.store.list_glossary()
         }
         return [
             s for s in self.GLOSSARY_SUGGESTIONS
@@ -4518,48 +4503,48 @@ class Api:
 
     @_api_safe(default=None)
     def add_glossary_entry(self, incorrect, correct, notes=""):
-        if _store is None:
+        if appstate.store is None:
             return None
-        new_id = _store.add_glossary_entry(incorrect, correct, notes or "")
+        new_id = appstate.store.add_glossary_entry(incorrect, correct, notes or "")
         _refresh_whisper_bias()   # v15 — réinjecte le biais lexical (hotwords)
         return new_id
 
     @_api_safe(default=False)
     def delete_glossary_entry(self, entry_id):
-        if _store is None:
+        if appstate.store is None:
             return False
-        _store.delete_glossary_entry(int(entry_id))
+        appstate.store.delete_glossary_entry(int(entry_id))
         _refresh_whisper_bias()
         return True
 
     # ------------------------ Vlocal 2 : raccourcis vocaux -------------------
     @_api_safe(default=list)
     def list_snippets(self):
-        return _store.list_snippets() if _store else []
+        return appstate.store.list_snippets() if appstate.store else []
 
     @_api_safe(default=None)
     def add_snippet(self, trigger, expansion):
-        if _store is None:
+        if appstate.store is None:
             return None
-        return _store.add_snippet(trigger, expansion)
+        return appstate.store.add_snippet(trigger, expansion)
 
     @_api_safe(default=False)
     def delete_snippet(self, snippet_id):
-        if _store is None:
+        if appstate.store is None:
             return False
-        _store.delete_snippet(int(snippet_id))
+        appstate.store.delete_snippet(int(snippet_id))
         return True
 
     @_api_safe(default=0)
     def import_glossary_suggestions(self, entries):
         """v13 — Import en lot des suggestions cochées par l'utilisateur.
         entries : liste de dicts {incorrect, correct, notes?}."""
-        if _store is None or not entries:
+        if appstate.store is None or not entries:
             return 0
         n = 0
         for e in entries:
             try:
-                if _store.add_glossary_entry(
+                if appstate.store.add_glossary_entry(
                     e.get("incorrect", ""), e.get("correct", ""), e.get("notes", "")
                 ):
                     n += 1
@@ -4574,10 +4559,9 @@ class Api:
         (toasts, overlay, payloads d'erreur) + overlay de dictée. Poussé par le
         dashboard au démarrage et à chaque changement (il garde sa propre langue
         en localStorage ; ici on aligne le backend)."""
-        global _UI_LANG
-        _UI_LANG = "en" if str(lang).lower().startswith("en") else "fr"
+        appstate.ui_lang = "en" if str(lang).lower().startswith("en") else "fr"
         try:
-            overlay.set_lang(_UI_LANG)
+            overlay.set_lang(appstate.ui_lang)
         except Exception:
             pass
         try:
@@ -4628,7 +4612,7 @@ class Api:
         au support). 100% local : AUCUN texte transcrit (events.jsonl exclut déjà
         'text'), aucune donnée personnelle, rien n'est envoyé automatiquement."""
         import platform as _pf
-        d = {"version": APP_VERSION, "lang": _UI_LANG}
+        d = {"version": appstate.app_version, "lang": appstate.ui_lang}
         try:
             d["engine_ready"] = bool(self.engine_ready())
         except Exception:
@@ -4694,7 +4678,7 @@ class Api:
         if not isinstance(d, dict):
             d = {}
         lines = [
-            "Vlocal " + str(d.get("version") or APP_VERSION),
+            "Vlocal " + str(d.get("version") or appstate.app_version),
             "System : " + str(d.get("arch") or "?") + " / macOS "
                 + str(d.get("macos") or "?") + " / " + str(d.get("ram_gb") or "?") + " GB",
             "Engine : " + ("ready" if d.get("engine_ready") else "loading")
@@ -4724,7 +4708,7 @@ class Api:
             os_ver = ""
         payload = {"category": "bug", "message": message,
                    "source": (source or "app-diag")[:20],
-                   "app_version": APP_VERSION, "os_version": os_ver}
+                   "app_version": appstate.app_version, "os_version": os_ver}
         if email:
             payload["email"] = email
         url = edge_url("submit-feedback")
@@ -4772,7 +4756,7 @@ class Api:
         # ctrl_space divergeait des deux.
         s.setdefault("hotkey",
                      os.environ.get("VLOCAL_HOTKEY", "ctrl_cmd"))
-        s.setdefault("reunion_enabled", REUNION_ENABLED)
+        s.setdefault("reunion_enabled", appstate.reunion_enabled)
         s.setdefault("insert_at_cursor", True)         # Vlocal 2
         s.setdefault("dictation_speed", "auto")        # auto | fidele | rapide
         s.setdefault("audio_device", None)             # None = micro par défaut
@@ -4800,18 +4784,17 @@ class Api:
             except Exception as _th_err:
                 print(f"[overlay] thème non appliqué : {_th_err}")
         # v1.1.0 — partage activé depuis les Réglages : premier envoi tout de suite.
-        if (patch or {}).get("telemetry_enabled") is True and _telemetry is not None:
-            threading.Thread(target=_telemetry.sync_now, name="telemetry-now",
+        if (patch or {}).get("telemetry_enabled") is True and appstate.telemetry is not None:
+            threading.Thread(target=appstate.telemetry.sync_now, name="telemetry-now",
                              daemon=True).start()
         # Application en chaud quand possible
         try:
             if "reunion_enabled" in patch:
-                global REUNION_ENABLED
-                REUNION_ENABLED = bool(patch["reunion_enabled"])
+                appstate.reunion_enabled = bool(patch["reunion_enabled"])
                 # Synchroniser l'UI principale si ouverte
                 _ui("if(typeof _applyReunionFlag==='function')"
                     "_applyReunionFlag(%s);" %
-                    ("true" if REUNION_ENABLED else "false"))
+                    ("true" if appstate.reunion_enabled else "false"))
         except Exception:
             pass
         return new
@@ -4863,7 +4846,7 @@ class Api:
         détection auto n'a rien trouvé, ou pour changer de coffre)."""
         try:
             import webview as _wv
-            dest = _window.create_file_dialog(
+            dest = appstate.window.create_file_dialog(
                 _wv.FOLDER_DIALOG, directory=os.path.expanduser("~"))
         except Exception:
             return {"ok": False, "error": "Connexion à Obsidian impossible."}
@@ -4890,7 +4873,7 @@ class Api:
         L'ancien calcul ne voyait que les 400 dernières et rien du tout si
         l'historique était désactivé : sur une base réelle il affichait 50 min
         là où l'utilisateur avait gagné 4 h 05 dans le mois."""
-        return _store.usage_stats() if _store is not None else {
+        return appstate.store.usage_stats() if appstate.store is not None else {
             "since_day": None, "total": {}, "month": {}, "series": []}
 
     # ------------------- v1.1.0 : identité et télémétrie déclarée -------------
@@ -4899,7 +4882,7 @@ class Api:
         `enabled` vaut None tant qu'aucun choix n'a été fait (l'UI le demande)."""
         try:
             s = _load_settings()
-            totals = _store.usage_totals() if _store is not None else {}
+            totals = appstate.store.usage_totals() if appstate.store is not None else {}
             return {"enabled": s.get("telemetry_enabled"),
                     "first_name": s.get("first_name") or "",
                     "last_name": s.get("last_name") or "",
@@ -4927,8 +4910,8 @@ class Api:
             _save_settings(patch)
         except Exception:
             return {"ok": False}
-        if patch["telemetry_enabled"] and _telemetry is not None:
-            threading.Thread(target=_telemetry.sync_now, name="telemetry-now",
+        if patch["telemetry_enabled"] and appstate.telemetry is not None:
+            threading.Thread(target=appstate.telemetry.sync_now, name="telemetry-now",
                              daemon=True).start()
         return {"ok": True}
 
@@ -4938,7 +4921,7 @@ class Api:
         offline=True (on n'affirme PAS « à jour »), aucune donnée utilisateur envoyée
         (simple GET). C'est ce qui rend la base installée « rattrapable »."""
         import urllib.request as _u
-        cur = APP_VERSION
+        cur = appstate.app_version
         out = {"current": cur, "latest": cur, "update": False, "offline": False,
                "url": "https://www.vlocal.org/telecharger", "notes": "", "message": "",
                "length": 0}
@@ -5244,29 +5227,29 @@ class Api:
     @_api_safe(default=list)
     def list_tasks(self):
         # v9 TOP-5 #5 — on relève la limite à 50, l'UI scroll
-        return _store.list_tasks(limit=50) if _store else []
+        return appstate.store.list_tasks(limit=50) if appstate.store else []
 
     @_api_safe(default=False)
     def rename_task(self, task_id, new_title):
         """v9 TOP-5 #4 — édition inline du titre d'une tâche."""
-        if _store is None or not new_title:
+        if appstate.store is None or not new_title:
             return False
-        ok = _store.rename_task(int(task_id), str(new_title).strip()[:200])
+        ok = appstate.store.rename_task(int(task_id), str(new_title).strip()[:200])
         _refresh_menubar()
         return ok
 
     @_api_safe(default=None)
     def toggle_task(self, task_id):
-        if _store is None:
+        if appstate.store is None:
             return None
-        new = _store.toggle_task(int(task_id))
+        new = appstate.store.toggle_task(int(task_id))
         # v20 — tâche cochée -> son timer ne sonnera pas ; re-décochée avant
         # l'échéance -> ré-armement.
         try:
             if new == "done":
                 _cancel_reminder_timer(int(task_id))
             elif new == "open":
-                for t in _store.list_tasks(limit=500, only_open=True):
+                for t in appstate.store.list_tasks(limit=500, only_open=True):
                     if t.get("id") == int(task_id):
                         ts = notifier.parse_iso(t.get("echeance_iso") or "")
                         if ts and ts > time.time():
@@ -5280,9 +5263,9 @@ class Api:
 
     @_api_safe(default=False)
     def delete_task(self, task_id):
-        if _store is None:
+        if appstate.store is None:
             return False
-        _store.delete_task(int(task_id))
+        appstate.store.delete_task(int(task_id))
         _cancel_reminder_timer(int(task_id))   # v20 — ne sonne plus après suppression
         _refresh_menubar()
         return True
@@ -5290,11 +5273,10 @@ class Api:
     def hide_window(self):
         """v7 — masque la fenêtre sans tuer le process. L'app reste vivante via
         le menu bar (clic 'Ouvrir Vlocal' pour la rouvrir)."""
-        global _window_visible
         try:
-            if _window is not None:
-                _window.hide()
-                _window_visible = False
+            if appstate.window is not None:
+                appstate.window.hide()
+                appstate.window_visible = False
         except Exception:
             pass
         return True
@@ -5318,8 +5300,8 @@ def _open_settings_modal_robust():
 
     def _cocoa_show():
         try:
-            if _window is not None:
-                _window.show()
+            if appstate.window is not None:
+                appstate.window.show()
             from AppKit import NSApplication
             NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
         except Exception as e:
@@ -5333,8 +5315,8 @@ def _open_settings_modal_robust():
             _cocoa_show()
     else:
         try:
-            if _window is not None:
-                _window.show()
+            if appstate.window is not None:
+                appstate.window.show()
         except Exception:
             pass
 
@@ -5342,20 +5324,20 @@ def _open_settings_modal_robust():
         import time as _t
         for delay in (0.05, 0.18, 0.42):
             _t.sleep(delay)
-            if _window is None:
+            if appstate.window is None:
                 print("[settings] _window None, abandon")
                 return
             try:
                 # On vérifie que la fonction existe AVANT de l'appeler.
                 # evaluate_js synchrone retourne la valeur — None si le JS
                 # n'a pas tourné. typeof renvoie 'function' si tout va bien.
-                kind = _window.evaluate_js(
+                kind = appstate.window.evaluate_js(
                     "typeof openSettingsModal"
                 )
                 print(f"[settings] tentative t+{delay}s : "
                       f"typeof openSettingsModal = {kind!r}")
                 if kind == "function":
-                    _window.evaluate_js("openSettingsModal();")
+                    appstate.window.evaluate_js("openSettingsModal();")
                     print(f"[settings] OK : modal ouvert (t+{delay}s)")
                     return
             except Exception as e:
@@ -5430,7 +5412,7 @@ def start_global_hotkey():
     Valeurs : ctrl_space (défaut) | ctrl_cmd (chord de modificateurs) |
     ctrl_alt_space | ctrl_cmd_space | cmd_shift_x | none.
     """
-    global _hotkey_label, _hotkey_state
+    global _hotkey_state
     _settings_now = _load_settings()
     hotkey_name = (os.environ.get("VLOCAL_HOTKEY")
                    or _settings_now.get("hotkey")
@@ -5439,7 +5421,7 @@ def start_global_hotkey():
     # ou double appui pour garder le micro ouvert). Indépendant de la touche.
     hotkey_mode = "tap" if _settings_now.get("hotkey_mode") == "tap" else "hold"
     if hotkey_name == "none":
-        _hotkey_label = ""   # raccourci désactivé -> pas de libellé (toast/UI)
+        appstate.hotkey_label = ""   # raccourci désactivé -> pas de libellé (toast/UI)
         print("[hotkey] désactivé via VLOCAL_HOTKEY=none — utilise le bouton Dicter.")
         return None
 
@@ -5475,7 +5457,7 @@ def start_global_hotkey():
     chord_vk = {"fn": hotkey_mac.FN_KEYCODE,
                 "right_cmd": hotkey_mac.RIGHT_CMD_KEYCODE,
                 "right_opt": hotkey_mac.RIGHT_OPT_KEYCODE}.get(hotkey_name)
-    _hotkey_label = hotkey_label
+    appstate.hotkey_label = hotkey_label
     # v1.3.4 — l'ancien appel setHotkeyLabel() visait une fonction que le tableau
     # de bord n'a plus (il lit le raccourci dans les réglages) : supprimé, comme
     # setEngineReady() ; tests/test_ui_bridge.py garde désormais ce pont.
@@ -5494,7 +5476,7 @@ def start_global_hotkey():
         # l'ouverture du flux audio déclencher le PROMPT MICRO NATIF de macOS.
         # Le micro réellement refusé est géré en aval (aucun son -> message clair).
         print(f"[hotkey] BEGIN ({hotkey_label})")
-        if not _controller:
+        if not appstate.controller:
             # DICT-02 — moteur encore en chargement : feedback au lieu du silence.
             overlay.info(_te("Vlocal démarre"), _te("Le moteur se charge, réessayez dans un instant."))
             _schedule_overlay_hide(2.0)
@@ -5518,7 +5500,7 @@ def start_global_hotkey():
         # si ça échoue (micro indispo) ou si c'est refusé (occupé).
         overlay.recording()             # overlay État 1 (waveform live) — INSTANTANÉ
         try:
-            started = bool(_controller.start())
+            started = bool(appstate.controller.start())
         except Exception as e:
             # DICT-04 — micro indisponible / périphérique monopolisé : on prévient.
             print(f"[hotkey] micro indisponible : {e}")
@@ -5534,20 +5516,20 @@ def start_global_hotkey():
             _schedule_overlay_hide(1.5)
 
     def end():
-        if not _controller:
+        if not appstate.controller:
             return
-        if not _controller.recording_active():
+        if not appstate.controller.recording_active():
             # DICT-01 — anti-race : le worker begin a peut-être posé _active
             # juste après. On re-teste sur une courte fenêtre bornée avant
             # d'abandonner (jamais de dictée fantôme micro-ouvert).
             deadline = time.time() + 0.5
             while time.time() < deadline:
                 time.sleep(0.02)
-                if _controller.recording_active():
+                if appstate.controller.recording_active():
                     break
             else:
                 return
-        rec_dur = _controller.recording_duration()
+        rec_dur = appstate.controller.recording_duration()
         print(f"[hotkey] END dur={rec_dur:.2f}s")
         # ÉTAPE 4.4 — capture trop courte : pas d'appel Whisper (hallucinations).
         if rec_dur < 0.3:
@@ -5555,7 +5537,7 @@ def start_global_hotkey():
             # exécuté ici en synchrone, il RETENAIT LE THREAD PUMP du raccourci,
             # donc retardait l'appui suivant de plusieurs secondes sur un simple
             # tap court. En thread daemon, comme _finalize.
-            threading.Thread(target=_controller.cancel, name="tap-cancel",
+            threading.Thread(target=appstate.controller.cancel, name="tap-cancel",
                              daemon=True).start()
             _ui("dictationCancelled()")
             overlay.too_short()
@@ -5569,17 +5551,17 @@ def start_global_hotkey():
         # bloqué.
         def _finalize():
             t_rel = time.time()
-            my_gen = getattr(_controller, "_gen", 0)   # CONC-5
+            my_gen = getattr(appstate.controller, "_gen", 0)   # CONC-5
             # v1.0.22 — chaînage : la VALIDITÉ D'INSERTION ne dépend plus de la
             # génération (une dictée enchaînée qui démarre pendant cette
             # finalisation est désormais NORMALE et ne doit pas faire perdre ce
             # texte) mais de l'epoch, bumpé UNIQUEMENT par force_reset.
-            my_epoch = getattr(_controller, "_epoch", 0)
+            my_epoch = getattr(appstate.controller, "_epoch", 0)
 
             def _own():
                 # True tant que cette dictée reste la plus récente (sinon une
                 # nouvelle dictée a démarré -> on ne touche plus l'overlay).
-                return my_gen == getattr(_controller, "_gen", my_gen)
+                return my_gen == getattr(appstate.controller, "_gen", my_gen)
 
             # INS-1 — on capture le presse-papier ORIGINAL AVANT stop_and_finalize
             # (qui va y copier le texte dicté) -> restauration correcte ensuite.
@@ -5590,7 +5572,7 @@ def start_global_hotkey():
                 _orig_clip = None
             try:
                 # notify_ui=False : la fenêtre principale ne réagit pas (overlay seul).
-                text = _controller.stop_and_finalize(notify_ui=False)
+                text = appstate.controller.stop_and_finalize(notify_ui=False)
             except Exception as e:
                 print(f"[hotkey]  transcription KO : {e}")
                 if _own():
@@ -5601,7 +5583,7 @@ def start_global_hotkey():
                 # Silence, panne, dictée perdue... : stop_and_finalize a déjà
                 # toasté le détail et donne ici le texte court de SA dictée.
                 if _own():
-                    overlay.error(_te(_controller.empty_overlay_text()
+                    overlay.error(_te(appstate.controller.empty_overlay_text()
                                       or "Aucun son capté. Réessayez."))
                     _schedule_overlay_hide(4.0)
                 return
@@ -5612,7 +5594,7 @@ def start_global_hotkey():
             # jeté au presse-papier = « ça se perd » en usage intensif). Seul un
             # force_reset (epoch bumpé : figeage récupéré par le superviseur)
             # invalide ce texte — c'était le vrai cas visé par l'anti-pollution.
-            if getattr(_controller, "_epoch", my_epoch) != my_epoch:
+            if getattr(appstate.controller, "_epoch", my_epoch) != my_epoch:
                 print("[hotkey] finalisation invalidée par un reset -> "
                       "insertion au curseur IGNORÉE (anti-pollution). "
                       "Texte au presse-papier.")
@@ -5679,7 +5661,7 @@ def start_global_hotkey():
                     _schedule_overlay_hide(9.0)   # laisser lire l'invite
                 else:
                     trans_dur = time.time() - t_rel
-                    branch = getattr(_controller.engine, "last_model", None)
+                    branch = getattr(appstate.controller.engine, "last_model", None)
                     overlay.result(trans_dur, inserted, branch, text)   # texte fidèle à l'app
                     _schedule_overlay_hide(3.0)
         threading.Thread(target=_finalize, daemon=True).start()
@@ -5702,9 +5684,9 @@ def start_global_hotkey():
     # conseil qui va avec.
     def _cancel_safe():
         try:
-            if not _controller:
+            if not appstate.controller:
                 return
-            threading.Thread(target=_controller.cancel, name="tap-cancel",
+            threading.Thread(target=appstate.controller.cancel, name="tap-cancel",
                              daemon=True).start()
             _ui("dictationCancelled()")
             overlay.too_short_tap()
@@ -5805,7 +5787,7 @@ def selftest():
             check=True,
         )
 
-    eng = VlocalEngine(model_dir=MODEL_DIR)
+    eng = VlocalEngine(model_dir=appstate.model_dir)
     with wave.open(audio_file, "rb") as w:
         pcm = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16)
     audio = pcm.astype(np.float32) / 32768.0
@@ -5831,12 +5813,12 @@ def _rearm_pending_reminders():
     ré-armement, un rappel créé hier pour aujourd'hui 14h ne se déclencherait
     jamais si l'app a été relancée entretemps. On relit la base et on re-arme
     tout rappel ouvert dont l'échéance est encore dans le futur."""
-    if _store is None:
+    if appstate.store is None:
         return
     rearmed = 0
     now = time.time()
     try:
-        for t in _store.list_tasks(limit=200, only_open=True):
+        for t in appstate.store.list_tasks(limit=200, only_open=True):
             iso = t.get("echeance_iso")
             ts = notifier.parse_iso(iso) if iso else None
             if ts and ts > now:
@@ -5875,8 +5857,8 @@ def _post_startup_model_checks():
         if not s.get("welcome_shown"):
             # v1.0 — utilise le libellé RÉEL du raccourci (défaut Ctrl + Cmd),
             # plus le « Ctrl + Espace » codé en dur qui était faux.
-            _hk = (_hotkey_label or "").strip()
-            if _UI_LANG == "en":
+            _hk = (appstate.hotkey_label or "").strip()
+            if appstate.ui_lang == "en":
                 _how = ('click "Dictate" (or hold %s)' % _hk) if _hk else 'click "Dictate"'
                 _toast('Welcome to Vlocal. Choose a mode above, then %s and speak. '
                        'Everything stays on your Mac, nothing is sent online.'
@@ -5893,11 +5875,7 @@ def _post_startup_model_checks():
 
 
 # v2 — Paramètres + chargement DIFFÉRÉ du moteur Whisper (démarrage instantané).
-_engine_load_params = None
-_cpu_threads_resolved = 4   # v3.3 — threads CPU retenus en main(), réutilisés après un download thin
 _dl_in_flight = False       # v3.3 (N2) — garde anti-double téléchargement modèles
-_telemetry = None           # v1.1.0 — planificateur de télémétrie (telemetry.Telemetry)
-_api_instance = None        # v3.3 — handle de l'instance Api (re-vérif licence en arrière-plan)
 _engine_ready = threading.Event()
 
 
@@ -5947,13 +5925,13 @@ def _memory_tick() -> None:
     import time as _t
     import memory_policy as _mp
     import mlx_engine as _mlx
-    eng = _controller.engine if _controller is not None else None
+    eng = appstate.controller.engine if appstate.controller is not None else None
     if eng is None:
         return
     busy = bool(_meeting_state.get("recording")
                 or _meeting_state.get("pipeline_busy")
                 or _meeting_state.get("file_busy")
-                or _controller.recording_active())
+                or appstate.controller.recording_active())
     now = _t.time()
     cpu_last = max(getattr(eng, "last_use", 0.0), getattr(eng, "_fast_last_use", 0.0))
     level = _mp.pressure_level()
@@ -5987,7 +5965,6 @@ def _start_idle_unloader():
 def _finish_model_download():
     """v3.3 — après le téléchargement R2 des modèles : recalcule les chemins puis
     lance le moteur Whisper en tâche de fond (comme au démarrage normal)."""
-    global _engine_load_params
     _resolve_model_dirs()
     _point_mlx_to_cache()
     # v1.4.4 — un verdict GPU rendu AVANT le téléchargement (modèle absent) est
@@ -5996,14 +5973,14 @@ def _finish_model_download():
     import mlx_engine as _mlx_reset
     _mlx_reset.reset_availability("modèle téléchargé")
     _wd = None
-    if os.path.exists(os.path.join(MODEL_DIR, "model.bin")):
-        _wd = MODEL_DIR
-    elif os.path.exists(os.path.join(SMALL_MODEL_DIR, "model.bin")):
-        _wd = SMALL_MODEL_DIR
+    if os.path.exists(os.path.join(appstate.model_dir, "model.bin")):
+        _wd = appstate.model_dir
+    elif os.path.exists(os.path.join(appstate.small_model_dir, "model.bin")):
+        _wd = appstate.small_model_dir
     if _wd is None:
         print("[models] post-download : modèle introuvable malgré le téléchargement.")
         return False
-    _engine_load_params = (_wd, _cpu_threads_resolved)
+    appstate.engine_load_params = (_wd, appstate.cpu_threads)
     threading.Thread(target=_load_engine_async, daemon=True).start()
     return True
 
@@ -6011,10 +5988,9 @@ def _finish_model_download():
 def _load_engine_async():
     """Charge le moteur Whisper en tâche de fond (la fenêtre est déjà affichée).
     Met à jour _controller + injecte le glossaire + signale l'UI quand prêt."""
-    global _controller
-    if not _engine_load_params:
+    if not appstate.engine_load_params:
         return
-    whisper_dir, cpu_threads = _engine_load_params
+    whisper_dir, cpu_threads = appstate.engine_load_params
     print(f"[whisper] chargement en arrière-plan "
           f"({os.path.basename(whisper_dir)}, int8, cpu_threads={cpu_threads})…")
     try:
@@ -6025,12 +6001,12 @@ def _load_engine_async():
         _toast("Le moteur de transcription n'a pas pu démarrer. Réessayez de "
                "lancer Vlocal.", kind="error")
         return
-    _controller = DictationController(engine)
+    appstate.controller = DictationController(engine)
     # Glossaire -> biais lexical (hotwords)
     try:
-        if _store is not None:
+        if appstate.store is not None:
             from engine import set_correction_terms
-            terms = [c for _, c in _store.glossary_pairs()]
+            terms = [c for _, c in appstate.store.glossary_pairs()]
             set_correction_terms(terms)
             print(f"[glossaire] {len(terms)} terme(s) injecté(s).")
     except Exception as e:
@@ -6099,7 +6075,7 @@ def _acquire_single_instance():
 
 
 def main():
-    global _window, _controller, _instance_lock, _api_instance
+    global _instance_lock
 
     # v3.2.3 — FIX DÉFINITIF « DEUX ICÔNES DOCK » (constaté sur le vif : 2 process
     # "Foreground"). Cause : le multiprocessing.resource_tracker (créé par numba/MLX
@@ -6183,8 +6159,8 @@ def main():
     chosen = os.environ.get("VLOCAL_WHISPER", "").lower()
     _resolve_model_dirs()      # v3.3 — chemins à jour (cache si complet, sinon bundle)
     _point_mlx_to_cache()
-    turbo_dir = MODEL_DIR
-    small_dir = SMALL_MODEL_DIR
+    turbo_dir = appstate.model_dir
+    small_dir = appstate.small_model_dir
 
     def _has_model(d):
         return os.path.exists(os.path.join(d, "model.bin"))
@@ -6245,12 +6221,11 @@ def main():
     # v6 — persistance locale (rapide) : chargée AVANT la fenêtre (les listes
     # s'affichent tout de suite). Le moteur Whisper (lent) charge en tâche de
     # fond -> DÉMARRAGE INSTANTANÉ, aucune attente perçue.
-    global _store
     try:
-        _store = Store()
-        print(f"[base]    {_store.path}")
+        appstate.store = Store()
+        print(f"[base]    {appstate.store.path}")
     except Exception as e:
-        _store = None
+        appstate.store = None
         print(f"[base]    persistance désactivée ({e}) — mode brut intact.")
 
     # v1.0.5 — AUTO-RÉPARATION MAJ : si on tourne, on a démarré depuis
@@ -6274,7 +6249,7 @@ def main():
                 _last_ui = _f.read().strip()
         except Exception:
             _last_ui = None
-        if _last_ui != APP_VERSION:
+        if _last_ui != appstate.app_version:
             import shutil as _sh
             for _wd in ("~/Library/WebKit/com.vlocal.app",
                         "~/Library/Caches/com.vlocal.app"):
@@ -6284,18 +6259,17 @@ def main():
             try:
                 os.makedirs(_APP_SUPPORT, exist_ok=True)
                 with open(_ui_marker, "w") as _f:
-                    _f.write(APP_VERSION)
+                    _f.write(appstate.app_version)
             except Exception:
                 pass
-            print(f"[ui]      cache WebKit purgé (MAJ {_last_ui} -> {APP_VERSION}) : UI fraîche garantie.")
+            print(f"[ui]      cache WebKit purgé (MAJ {_last_ui} -> {appstate.app_version}) : UI fraîche garantie.")
     except Exception as _e:
         print(f"[ui]      purge cache WebKit ignorée : {_e}")
 
     # Paramètres pour le chargement différé du moteur (lancé dans _after_start).
-    global _engine_load_params, _cpu_threads_resolved
-    _cpu_threads_resolved = cpu_threads
+    appstate.cpu_threads = cpu_threads
     if whisper_dir is not None:
-        _engine_load_params = (whisper_dir, cpu_threads)
+        appstate.engine_load_params = (whisper_dir, cpu_threads)
     # whisper_dir None = app thin, 1er lancement : moteur chargé APRÈS le download.
 
     # v10b — UNIQUEMENT la carte arrondie liquid glass, rien autour.
@@ -6308,29 +6282,28 @@ def main():
     # Plus aucune zone tampon, plus aucune drop-shadow CSS → plus aucun halo.
     # Le border-radius:30px de .panel + NSWindow.opaque=NO découpe les coins
     # arrondis ; tout ce qui n'est pas la carte est 100% invisible.
-    _api_instance = Api()
+    appstate.api = Api()
     # v1.1.0 — identifiant d'installation (UUID aléatoire, jamais dérivé de la
     # machine) + planificateur de télémétrie. Rien ne part tant que l'utilisateur
     # n'a pas fait son choix (telemetry_enabled is True), cf. telemetry.py.
     # v1.3.6, une copie de l'identifiant vit dans les préférences macOS : un
     # dossier de l'app vidé, ou une réinstallation, ne crée plus une deuxième
     # « installation » de la même personne dans la console.
-    global _telemetry
     try:
         telemetry.ensure_install_id(_load_settings, _save_settings)
         import platform as _plat
-        _telemetry = telemetry.Telemetry(_load_settings, _save_settings,
-                                         lambda: _store, APP_VERSION,
+        appstate.telemetry = telemetry.Telemetry(_load_settings, _save_settings,
+                                         lambda: appstate.store, appstate.app_version,
                                          _plat.mac_ver()[0] or "",
                                          get_profile=_telemetry_profile)
-        _telemetry.start()
+        appstate.telemetry.start()
     except Exception as e:
         print(f"[telemetry] non démarrée : {e}")
     _start_auto_diag()   # v1.0.11 — diagnostic auto consenti (cohorte early/testeurs)
-    _window = webview.create_window(
+    appstate.window = webview.create_window(
         "Vlocal",
         HTML_PATH,
-        js_api=_api_instance,
+        js_api=appstate.api,
         width=WIN_W,
         height=WIN_H,
         min_size=(940, 640),   # v3.1 — dashboard redimensionnable
@@ -6352,17 +6325,16 @@ def main():
     # la ré-affiche. Le raccourci fonctionne donc même fenêtre fermée.
     def _on_window_closing():
         # Quitter explicitement (menu bar « Quitter Vlocal ») -> on laisse fermer.
-        if _quitting:
+        if appstate.quitting:
             return True
-        global _window_visible
         try:
-            _window.hide()
-            _window_visible = False
+            appstate.window.hide()
+            appstate.window_visible = False
         except Exception:
             pass
         return False   # fermeture fenêtre = masquage -> process maintenu en vie
     try:
-        _window.events.closing += _on_window_closing
+        appstate.window.events.closing += _on_window_closing
         print("[window] fermeture = masquage (agent maintenu en vie).")
     except Exception as _e:
         print(f"[window] hook closing indisponible : {_e}")
@@ -6494,7 +6466,7 @@ def main():
         except Exception:
             pass
     try:
-        _window.events.shown += _on_window_shown
+        appstate.window.events.shown += _on_window_shown
     except Exception:
         pass
     # v3.3.2 — RE-APPLIQUER APRÈS CHARGEMENT (fix fenêtre figée ~5s) : pywebview fait
@@ -6503,7 +6475,7 @@ def main():
     # ré-applique style + bande sur « loaded » (postérieur au reset) pour la remettre
     # au-dessus de la webview. addOperationWithBlock_ garantit l'ordre (runloop suivant).
     try:
-        _window.events.loaded += _on_window_shown
+        appstate.window.events.loaded += _on_window_shown
     except Exception:
         pass
     # v1.0.1 — FILET ANTI-FIGEAGE : pywebview peut ré-installer la contentView à des
@@ -6576,11 +6548,10 @@ def main():
                         os.remove(_SHOW_REQUEST)
 
                         def _show():
-                            global _window_visible
                             try:
-                                if _window is not None:
-                                    _window.show()
-                                _window_visible = True
+                                if appstate.window is not None:
+                                    appstate.window.show()
+                                appstate.window_visible = True
                                 from AppKit import NSApplication
                                 NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
                             except Exception:
@@ -6603,11 +6574,10 @@ def main():
             import time as _t
             _t.sleep(0.8)
             def _go():
-                global _window_visible
                 try:
-                    if _window is not None and not _quitting:
-                        _window.show()
-                        _window_visible = True
+                    if appstate.window is not None and not appstate.quitting:
+                        appstate.window.show()
+                        appstate.window_visible = True
                         from AppKit import NSApplication
                         NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
                         _set_dock_visible(True)   # B1 — ré-impose Accessory APRÈS l'affichage (pywebview a pu remettre Regular)
@@ -6626,15 +6596,14 @@ def main():
         _reopen = {"prev_active": True}
 
         def _reopen_check():   # tourne sur le MAIN thread (lecture AppKit sûre)
-            global _window_visible
             try:
                 from AppKit import NSApplication
                 app = NSApplication.sharedApplication()
                 active = bool(app.isActive())
-                if active and not _reopen["prev_active"] and not _window_visible:
-                    if _window is not None:
-                        _window.show()
-                    _window_visible = True
+                if active and not _reopen["prev_active"] and not appstate.window_visible:
+                    if appstate.window is not None:
+                        appstate.window.show()
+                    appstate.window_visible = True
                     app.activateIgnoringOtherApps_(True)
                 _reopen["prev_active"] = active
             except Exception:
@@ -6697,11 +6666,10 @@ def main():
             # v29.8 — Nettoyage de quit IDEMPOTENT, SANS terminate_ : appelable
             # depuis applicationShouldTerminate_ (Cmd+Q/Dock/menu) ET depuis _on_quit
             # (icône V) sans réentrance.
-            global _quitting, _quit_in_progress
-            if _quit_in_progress:
+            if appstate.quit_in_progress:
                 return
-            _quit_in_progress = True
-            _quitting = True   # autorise la vraie fermeture (vs masquage)
+            appstate.quit_in_progress = True
+            appstate.quitting = True   # autorise la vraie fermeture (vs masquage)
             # v29.1 — DEADMAN : garantit la mort du process en <=4 s, même si la
             # suite (sauvegarde réunion) se BLOQUE sur un worker GPU figé.
             # os._exit() ne peut être bloqué par AUCUN thread (le resource_tracker
@@ -6725,8 +6693,8 @@ def main():
                         pass
                     rec.stop()                      # flush + clôture du WAV
                     mid = _meeting_state.get("id")
-                    if _store and mid:
-                        _store.update_meeting(mid, status="error")
+                    if appstate.store and mid:
+                        appstate.store.update_meeting(mid, status="error")
                     print("[quit]    réunion en cours sauvegardée (WAV clos, "
                           "statut error récupérable).")
             except Exception as e:
@@ -6735,8 +6703,8 @@ def main():
             # Store.close() est idempotent : le 2e appel (fin de boucle
             # Cocoa, après webview.start) est sans effet.
             try:
-                if _store:
-                    _store.close()
+                if appstate.store:
+                    appstate.store.close()
             except Exception:
                 pass
 
@@ -6796,11 +6764,10 @@ def main():
                         # le clic sur l'icône Dock DOIT ré-afficher le dashboard (sinon
                         # « je clique sur l'icône et rien ne s'ouvre »). flag=False quand
                         # aucune fenêtre n'est visible (cas du masquage).
-                        global _window_visible
                         try:
-                            if _window is not None:
-                                _window.show()
-                            _window_visible = True
+                            if appstate.window is not None:
+                                appstate.window.show()
+                            appstate.window_visible = True
                         except Exception:
                             pass
                         try:
@@ -6820,11 +6787,10 @@ def main():
             except Exception as e:
                 print(f"[quit]    délégué terminate indispo ({e}) — quit via icône V.")
         def _on_open():
-            global _window_visible
             try:
-                if _window is not None:
-                    _window.show()
-                _window_visible = True
+                if appstate.window is not None:
+                    appstate.window.show()
+                appstate.window_visible = True
             except Exception:
                 pass
             try:
@@ -6833,14 +6799,14 @@ def main():
             except Exception:
                 pass
         def _on_dictate_toggle():
-            if _controller and _controller.recording_active():
-                threading.Thread(target=_controller.stop_and_finalize,
+            if appstate.controller and appstate.controller.recording_active():
+                threading.Thread(target=appstate.controller.stop_and_finalize,
                                  daemon=True).start()
-            elif _controller:
-                _controller.start()
+            elif appstate.controller:
+                appstate.controller.start()
         def _on_toggle_task(tid):
-            if _store:
-                _store.toggle_task(int(tid))
+            if appstate.store:
+                appstate.store.toggle_task(int(tid))
             _refresh_lists_ui(); _refresh_menubar()
 
         def _create_menubar_on_main():
@@ -6853,8 +6819,7 @@ def main():
             #  - Quitter = menu V ou Cmd+Q (applicationShouldTerminate_ -> vrai quit).
             #  - La bulle de dictée s'ANCRE sous l'icône V (le bec pointe enfin dessus).
             _install_terminate_handler()
-            global _menubar
-            if _menubar is not None:
+            if appstate.menubar is not None:
                 return
             try:
                 import menubar as _mb
@@ -6867,7 +6832,7 @@ def main():
                     _on_open()
                     _ui("if(typeof activateView==='function')activateView('maj')")
 
-                _menubar = _mb.MenuBar({
+                appstate.menubar = _mb.MenuBar({
                     "dictate": _on_dictate_toggle,
                     "open": _on_open,
                     "settings": _open_settings,
@@ -6877,7 +6842,7 @@ def main():
                 }, labels=_menubar_labels())
                 _refresh_menubar()                       # peuple « Rappels récents »
                 try:
-                    overlay.set_anchor_provider(_menubar.icon_frame)
+                    overlay.set_anchor_provider(appstate.menubar.icon_frame)
                     print("[menubar] icône V installée + overlay ancré sous l'icône.")
                 except Exception as _ae:
                     print(f"[menubar] ancre overlay indispo ({_ae}).")
@@ -6973,15 +6938,14 @@ def main():
         # existe, le menu V gagne une entrée « Mise à jour disponible » en tête.
         # La fenêtre, elle, pose sa propre pastille (checkUpdateBadge).
         def _update_watch():
-            global _update_latest
             import time as _t
             _t.sleep(30.0)
             while True:
                 try:
-                    info = _api_instance.check_updates() if _api_instance is not None else None
+                    info = appstate.api.check_updates() if appstate.api is not None else None
                     latest = (info or {}).get("latest") if (info or {}).get("update") else None
-                    if latest != _update_latest:
-                        _update_latest = latest
+                    if latest != appstate.update_latest:
+                        appstate.update_latest = latest
                         _refresh_menubar()
                 except Exception as _uw_err:
                     print(f"[update]  veille KO (ignorée) : {_uw_err}")
@@ -6993,8 +6957,8 @@ def main():
     # fermeture PROPRE de la base (WAL tronqué). Store.close() est idempotent,
     # le double appel avec _on_quit est sûr.
     try:
-        if _store:
-            _store.close()
+        if appstate.store:
+            appstate.store.close()
     except Exception:
         pass
 

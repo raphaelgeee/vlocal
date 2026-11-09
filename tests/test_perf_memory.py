@@ -132,7 +132,8 @@ class AppTickTests(unittest.TestCase):
         ctrl = types.SimpleNamespace(engine=self.eng,
                                      recording_active=lambda: self.recording)
         self.ns = _charge_depuis_app(["_apply_memory_plan", "_memory_tick"],
-                                     {"_controller": ctrl, "_meeting_state": {}})
+                                     {"appstate": types.SimpleNamespace(controller=ctrl),
+                                      "_meeting_state": {}})
         gpu = self.gpu
 
         def unload():

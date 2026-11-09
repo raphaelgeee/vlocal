@@ -11,8 +11,9 @@ import os
 
 RACINE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# Ordre sans importance ; un fichier par module issu d'app.py.
+# Dans l'ordre des dépendances : un module avant ceux qui l'importent.
 FICHIERS = (
+    "appstate.py",
     "app.py",
 )
 

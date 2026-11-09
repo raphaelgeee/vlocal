@@ -102,7 +102,7 @@ class TestPlomberieApp(unittest.TestCase):
         src = app_sources.texte_complet()
         self.assertIn("overlay.set_theme(", src)
         self.assertIn('"theme" in', src)
-        self.assertIn("update_version=_update_latest", src)
+        self.assertIn("update_version=appstate.update_latest", src)
         self.assertIn('"update": "Mise à jour {0} disponible..."', src)
         self.assertIn("def _update_watch", src)
 
