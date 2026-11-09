@@ -208,9 +208,24 @@ SILENCE_RMS = 0.012
 # reste très au-dessus du légitime et borne quand même tout vrai figeage.
 DICT_GPU_TIMEOUT_BASE_S = 22.0
 DICT_GPU_TIMEOUT_PER_AUDIO_S = 0.5
+# v1.5 : le budget GPU d'une dictée se partage entre l'attente de son TOUR
+# (au plus DICT_GPU_QUEUE_S) et le calcul (le reste, compté depuis son
+# démarrage effectif : seul un calcul trop long est un gel). Le plus long
+# travail qui puisse la précéder est un bloc d'import de IMPORT_MLX_CHUNK_S
+# (quelques secondes de GPU) ; le spéculatif, lui, est interrompu. Le total
+# reste dictation_gpu_timeout : le chien de garde de finalisation est inchangé.
+DICT_GPU_QUEUE_S = 6.0
+IMPORT_MLX_CHUNK_S = 60.0
 # v1.6 : une erreur GPU levée en moins de 3 s (pas un gel) est retentée une fois
 # sur le GPU avant le repli CPU (cf. VlocalEngine._mlx_text).
 GPU_RETRY_WITHIN_S = 3.0
+
+
+def _acquire_until(lock, deadline) -> bool:
+    """Prend `lock` au plus tard à `deadline` (time.monotonic) ; None = sans borne."""
+    if deadline is None:
+        return lock.acquire()
+    return lock.acquire(timeout=max(0.0, deadline - _time.monotonic()))
 
 
 def dictation_gpu_timeout(audio_s: float) -> float:
@@ -739,6 +754,10 @@ class VlocalEngine:
         # allocation RAM). Séparé de _infer_lock pour ne pas bloquer l'inférence
         # de turbo pendant le chargement de small.
         self._fast_model_lock = threading.Lock()
+        # v1.5 — chargement du turbo CPU, HORS _infer_lock : un import ou une
+        # réunion qui tient l'inférence plusieurs minutes ne retient plus le
+        # chargement, et la dictée borne chacune de ses attentes.
+        self._load_lock = threading.Lock()
         # Vlocal 2 — modèle « rapide » (small) chargé À LA DEMANDE pour la dictée
         # rapide / la cascade. Reste None tant qu'on n'en a pas besoin.
         # small ~0,5 Go : assez léger pour être chargé sur toute machine (8 Go
@@ -785,14 +804,19 @@ class VlocalEngine:
         gc.collect()
         print("[whisper] modèle rapide (small) déchargé (RAM rendue).")
 
-    def load_model(self):
+    def load_model(self, deadline=None):
         """Recharge turbo en mémoire après un unload_model(). Idempotent.
         Renvoie l'instance chargée (référence locale anti-course pour les
-        appelants)."""
+        appelants). v1.5 — chargé HORS _infer_lock (un unload concurrent ne
+        touche pas la référence rendue) ; `deadline` (time.monotonic) borne
+        l'attente d'un chargement concurrent : TimeoutError au-delà."""
         _qos_user_initiated()   # v21 — le pool CT2 recréé hérite de la QoS
-        with self._infer_lock:
-            if self.model is not None:
-                return self.model
+        if not _acquire_until(self._load_lock, deadline):
+            raise TimeoutError("chargement du modèle CPU déjà en cours")
+        try:
+            m = self.model
+            if m is not None:
+                return m
             # Garde-fou : sans dossier modèle, WhisperModel tenterait un
             # téléchargement HuggingFace au runtime (ou échouerait avec une
             # erreur HF cryptique). Échec LOCAL propre, avant tout réseau.
@@ -800,23 +824,25 @@ class VlocalEngine:
                 raise RuntimeError(
                     f"Modèle Whisper introuvable : {self.model_dir}")
             from faster_whisper import WhisperModel
-            self.model = WhisperModel(self.model_dir, device="cpu",
-                                      compute_type="int8",
-                                      cpu_threads=self._cpu_threads)
-            m = self.model
+            m = WhisperModel(self.model_dir, device="cpu", compute_type="int8",
+                             cpu_threads=self._cpu_threads)
+            self.model = m
+        finally:
+            self._load_lock.release()
         print("[whisper] modèle rechargé.")
         return m
 
-    def _ensure_model(self):
+    def _ensure_model(self, deadline=None):
         """Chargement PARESSEUX : recharge turbo s'il a été déchargé (économie
         RAM à l'inactivité). Appelé en tête de chaque inférence -> on peut
         décharger librement quand l'app est inactive. Marque l'activité.
         Renvoie la RÉFÉRENCE LOCALE au modèle : une fois capturée non-None, un
-        unload_model() concurrent ne peut plus l'invalider sous l'appelant."""
+        unload_model() concurrent ne peut plus l'invalider sous l'appelant.
+        `deadline` : cf. load_model (chemin de la dictée)."""
         self.last_use = _time.time()
         m = self.model
         if m is None:
-            m = self.load_model()
+            m = self.load_model(deadline)
         return m
 
     def _ensure_fast_model(self):
@@ -1694,9 +1720,10 @@ class VlocalEngine:
         return {"text": text, "segments": seg_all, "avg_conf": avg_conf}
 
     def transcribe_import_mlx(self, audio_np, sr: int = SAMPLE_RATE,
-                              on_progress=None, chunk_s: float = 300.0) -> dict:
-        """v27 — IMPORT PLEIN DÉBIT sur GPU MLX : passe l'audio par GROS BLOCS
-        (~10 min) à mlx_whisper, qui gère nativement son fenêtrage 30 s -> on
+                              on_progress=None,
+                              chunk_s: float = IMPORT_MLX_CHUNK_S) -> dict:
+        """v27 — IMPORT PLEIN DÉBIT sur GPU MLX : passe l'audio par BLOCS
+        (IMPORT_MLX_CHUNK_S) à mlx_whisper, qui gère nativement son fenêtrage 30 s -> on
         évite l'overhead des fenêtres 25 s de transcribe_incremental (×28 temps
         réel mesuré, mots inclus, vs ~×13). Blocs coupés au CREUX D'ÉNERGIE
         (jamais en plein mot), conversion float32 PAR BLOC (RAM bornée ~40 Mo,
@@ -1704,7 +1731,11 @@ class VlocalEngine:
         RÉSERVÉ À L'IMPORT RÉUNION (jamais la dictée). Lève si MLX indisponible
         (l'appelant retombe sur transcribe_incremental).
 
-        RAM (mesuré, 34 min) : blocs 5 min -> pic ~1,5 Go (vs 2,0 Go à 10 min).
+        v1.5 — blocs de 60 s (300 s avant) : un bloc tient quelques secondes de
+        GPU, une dictée arrivée pendant un import n'attend donc jamais plus que
+        son délai de file (DICT_GPU_QUEUE_S) et ne retombe plus sur le CPU.
+        RAM (mesuré, 34 min) : blocs 5 min -> pic ~1,5 Go (vs 2,0 Go à 10 min) ;
+        des blocs plus courts ne peuvent que l'abaisser.
         Dérive du pool Metal ~18 Mo/bloc : un reset périodique a été testé et
         REJETÉ (le rechargement crée un pic transitoire +450 Mo, pire que la
         dérive). Au-delà de ~45 min, l'appelant route vers transcribe_
@@ -1917,7 +1948,8 @@ class VlocalEngine:
         # garde de finalisation n'attend jamais plus qu'avant.
         t0 = _time.monotonic()
         try:
-            r = mlx_engine.transcribe(audio_np, _timeout=_budget, **kw)
+            r = mlx_engine.transcribe(audio_np, _timeout=_budget - DICT_GPU_QUEUE_S,
+                                      _queue_timeout=DICT_GPU_QUEUE_S, **kw)
         except TimeoutError:
             raise
         except Exception as e:
@@ -1927,7 +1959,9 @@ class VlocalEngine:
             print(f"[mlx] erreur GPU ({type(e).__name__}: {e}) -> second essai "
                   "sur un worker neuf avant le CPU.")
             mlx_engine.renew_worker()
-            r = mlx_engine.transcribe(audio_np, _timeout=_budget - spent, **kw)
+            r = mlx_engine.transcribe(audio_np,
+                                      _timeout=_budget - spent - DICT_GPU_QUEUE_S,
+                                      _queue_timeout=DICT_GPU_QUEUE_S, **kw)
         text = _mlx_clean_text(r)
         # Pas de VAD sur ce chemin : un texte vide vient des seuils de décodage
         # (no_speech) ou des filtres anti-hallucination.
@@ -2025,7 +2059,14 @@ class VlocalEngine:
             except Exception as e:
                 print(f"[mlx] transcribe KO ({e}) -> repli CPU.")
                 self._after_gpu_failure()
-        model = self._ensure_model()
+        # v1.0.23 / v1.5 — ATTENTES BORNÉES SUR LE CHEMIN DICTÉE. `_infer_lock`
+        # est PARTAGÉ avec la transcription de fichier et de réunion, qui le
+        # tiennent pendant TOUT le fichier (plusieurs minutes sur un import
+        # d'une heure). Une dictée tombée dessus attendait sans borne. Au-delà
+        # de DICTATION_LOCK_WAIT_S (chargement concurrent compris), TimeoutError :
+        # `_do_finalize` l'attrape, informe l'utilisateur et rend la main.
+        deadline = _time.monotonic() + self.DICTATION_LOCK_WAIT_S
+        model = self._ensure_model(deadline)
         if fast:
             # Référence LOCALE au small : un unload_fast_model() concurrent ne
             # peut plus nullifier la référence entre le check et l'inférence.
@@ -2036,14 +2077,8 @@ class VlocalEngine:
         # NB : aucun appelant ne passe vad=False aujourd'hui (vad_filter=True
         # est déjà posé par _base_kwargs) ; paramètre conservé (API publique).
         kwargs["vad_filter"] = vad
-        # v1.0.23 — ACQUISITION BORNÉE SUR LE CHEMIN DICTÉE. `_infer_lock` est
-        # PARTAGÉ avec la transcription de fichier et de réunion, qui le tiennent
-        # pendant TOUT le fichier (plusieurs minutes sur un import d'une heure).
-        # Une dictée tombée dessus attendait sans borne. On lève au bout de 20 s :
-        # `_do_finalize` attrape déjà TimeoutError, informe l'utilisateur et rend
-        # la main — au lieu de le laisser croire que la dictée est perdue.
-        if not self._infer_lock.acquire(timeout=20.0):
-            print("[engine] moteur occupé (import/réunion) > 20 s -> dictée rendue.")
+        if not _acquire_until(self._infer_lock, deadline):
+            print("[engine] moteur occupé (import/réunion) -> dictée rendue.")
             raise TimeoutError("moteur occupé par une autre transcription")
         try:
             try:
@@ -2090,6 +2125,9 @@ class VlocalEngine:
     # Seuil conservateur : les courtes dictées restent sur la cascade (small y
     # suffit souvent et c'est plus rapide).
     ADAPTIVE_DIRECT_TURBO_S = 28.0
+    # Attente maximale du moteur CPU (chargement concurrent + verrou
+    # d'inférence) sur le chemin de la dictée.
+    DICTATION_LOCK_WAIT_S = 20.0
 
     def _small_with_conf(self, audio_np):
         """Transcrit avec small SANS biais glossaire (confiance stable et
@@ -2105,14 +2143,23 @@ class VlocalEngine:
         kwargs["best_of"] = 1
         kwargs["temperature"] = 0.0
         kwargs["word_timestamps"] = True
-        with self._infer_lock:
-            segments, _info = self._fast_model.transcribe(audio_np, **kwargs)
+        fm = self._fast_model
+        if fm is None:
+            raise RuntimeError("modèle rapide déchargé")
+        if not _acquire_until(self._infer_lock,
+                              _time.monotonic() + self.DICTATION_LOCK_WAIT_S):
+            print("[engine] moteur occupé (import/réunion) -> dictée rendue.")
+            raise TimeoutError("moteur occupé par une autre transcription")
+        try:
+            segments, _info = fm.transcribe(audio_np, **kwargs)
             probs, pieces = [], []
             for seg in segments:
                 pieces.append(seg.text)
                 for w in (getattr(seg, "words", None) or []):
                     probs.append(float(getattr(w, "probability", 1.0) or 0.0))
             text = assemble_segments(pieces)
+        finally:
+            self._infer_lock.release()
         if not probs:
             return strip_hallucinations(text), 1.0, 0.0, 0.0
         avg = sum(probs) / len(probs)
@@ -2159,6 +2206,8 @@ class VlocalEngine:
             return self.transcribe(audio_np, mode="dictee", use_gpu=use_gpu), "turbo"
         try:
             text_s, avg, frac03, frac05 = self._small_with_conf(audio_np)
+        except TimeoutError:
+            raise               # moteur tenu par un import : turbo attendrait autant
         except Exception as e:
             print(f"[cascade] small KO ({e}) — turbo direct.")
             return self.transcribe(audio_np, mode="dictee", use_gpu=use_gpu), "turbo"

@@ -176,18 +176,30 @@ def _next_seq() -> int:
 _MLX_JOB_TIMEOUT = 60.0
 
 
-# Priorité de la sentinelle d'arrêt : APRÈS tout travail déjà en file, que
-# l'ancien worker termine avant de s'arrêter (cf. renew_worker).
+# Priorité de la sentinelle d'arrêt : APRÈS tout travail déjà en file.
 _PRIO_STOP = 99
+# v1.5 — un worker remplaçant (renew_worker) attend la fin du précédent avant
+# son premier travail : deux threads MLX ne calculent jamais en même temps.
+# Borne = un gel avéré du précédent, déjà traité par son propre appelant.
+_PREDECESSOR_JOIN_S = _MLX_JOB_TIMEOUT
 
 
-def _worker_loop(jobs):
+def _worker_loop(jobs, predecessor=None):
+    if predecessor is not None:
+        predecessor.join(_PREDECESSOR_JOIN_S)
     while True:
         item = jobs.get()
-        _prio, _seq, fn, args, kwargs, box, done, started = item
+        _prio, _seq, fn, args, kwargs, box, done, started, claim = item
         if fn is None:                    # sentinelle de renew_worker
             return
+        # v1.5 — travail ABANDONNÉ par son appelant (attente de tour épuisée) :
+        # le verrou `claim` est déjà pris, on le saute. Sans ça, une dictée
+        # rendue « GPU occupé » (et repartie sur le CPU) tournait quand même
+        # sur le GPU ensuite, pour rien.
+        if not claim.acquire(blocking=False):
+            continue
         try:
+            box["t0"] = time.monotonic()
             started.set()      # v1.0.22 : le job a QUITTÉ la file (voir _on_worker)
             box["value"] = fn(*args, **kwargs)
         except BaseException as e:        # y compris les erreurs Metal
@@ -196,73 +208,96 @@ def _worker_loop(jobs):
             done.set()
 
 
-def _on_worker(fn, *args, _timeout=_MLX_JOB_TIMEOUT, _prio=PRIO_BACKGROUND, **kwargs):
+def _replace_worker(predecessor=None):
+    """Installe un worker NEUF sur une file neuve où passent les travaux encore
+    en attente dans l'ancienne (aucun n'est perdu). Sous _mlx_worker_lock."""
+    global _mlx_worker, _mlx_jobs
+    old_jobs, new_jobs = _mlx_jobs, _queue.PriorityQueue()
+    while True:
+        try:
+            item = old_jobs.get_nowait()
+        except _queue.Empty:
+            break
+        if item[2] is not None:           # les sentinelles restent à l'ancien
+            new_jobs.put(item)
+    _mlx_jobs = new_jobs
+    _mlx_worker = _threading.Thread(
+        target=_worker_loop, args=(new_jobs, predecessor), name="mlx-gpu",
+        daemon=True)
+    _mlx_worker.start()
+    return old_jobs
+
+
+def _on_worker(fn, *args, _timeout=_MLX_JOB_TIMEOUT, _prio=PRIO_BACKGROUND,
+               _queue_timeout=None, **kwargs):
     """Exécute fn sur l'UNIQUE thread MLX et renvoie son résultat (ou relève).
-    Si fn ne rend pas la main sous _timeout (Metal figé), on ABANDONNE le thread
-    (daemon : il restera coincé sur l'op bloquée puis dormira sur son ancienne
-    file) et on force un worker NEUF au prochain appel -> la dictée suivante
-    repart, au lieu d'un blocage 180 s. Lève TimeoutError pour que l'appelant
-    libère son verrou _busy dans son finally."""
-    global _mlx_worker, _mlx_jobs, _kernels_warm
+
+    Deux délais distincts (v1.5) :
+      - ATTENTE DU TOUR (`_queue_timeout`, défaut `_timeout`) : épuisée, le
+        travail est ABANDONNÉ (le worker le sautera) et TimeoutError « GPU
+        occupé » est levée, GPU conservé ;
+      - CALCUL (`_timeout`), compté depuis le DÉMARRAGE EFFECTIF du travail :
+        seul un calcul qui dépasse son propre délai est un gel Metal. On
+        abandonne alors le thread (daemon, coincé dans l'op bloquée) et un
+        worker NEUF reprend la file -> la dictée suivante repart.
+    L'appelant libère son verrou _busy dans son finally."""
+    global _kernels_warm
     with _mlx_worker_lock:
         if _mlx_worker is None or not _mlx_worker.is_alive():
-            _mlx_jobs = _queue.PriorityQueue()
-            _mlx_worker = _threading.Thread(
-                target=_worker_loop, args=(_mlx_jobs,), name="mlx-gpu",
-                daemon=True)
-            _mlx_worker.start()
+            _replace_worker()
         jobs = _mlx_worker, _mlx_jobs
     box, done, started = {}, _threading.Event(), _threading.Event()
+    claim = _threading.Lock()
     if _prio == PRIO_DICTATION:
         running = _job_cancel
         if running is not None:
             running.set()       # v1.7 : la dictée passe devant le spéculatif EN COURS
-    jobs[1].put((_prio, _next_seq(), fn, args, kwargs, box, done, started))
-    if not done.wait(_timeout):
-        # v1.0.22 — DISTINGUER L'ATTENTE EN FILE DU VRAI GEL METAL. Le timeout
-        # englobait aussi le temps passé À ATTENDRE SON TOUR derrière un autre
-        # job (bloc d'import de 300 s d'audio, fenêtre de réunion, préchauffe).
-        # Une dictée mise en file derrière eux déclenchait donc `_force_cpu`,
-        # qui désactive le GPU pour TOUTE la session : +1,7 Go de RAM et x7 sur
-        # la vitesse de TOUTES les dictées suivantes, à cause d'un simple
-        # embouteillage. Désormais, on ne condamne le GPU que si le job avait
-        # RÉELLEMENT commencé (started) ; sinon on rend la main sans rien casser.
-        _really_stuck = started.is_set()
-        if _really_stuck:
-            # FIGEAGE : on jette ce worker. Le prochain _on_worker en recrée un
-            # neuf (file neuve) ; le modèle sera rechargé proprement.
-            with _mlx_worker_lock:
-                if _mlx_worker is jobs[0]:   # pas déjà remplacé par un autre appel
-                    _mlx_worker = None
-                    _mlx_jobs = _queue.PriorityQueue()   # v1.0.22 : même type
-            _kernels_warm = False            # re-préchauffe propre au prochain usage
-            # v1.1.0 : suspension temporaire (voir _gpu_strike), plus de bascule
-            # définitive au premier dépassement. L'appelant a son repli CPU.
-            # v1.4.4 : seul un gel de DICTÉE compte pour la bascule (un gel de
-            # réunion ou de préchauffe ne fait que suspendre).
-            _gpu_strike(f"inférence MLX figée (>{_timeout:.0f}s)",
-                        dictation=(_prio == PRIO_DICTATION))
+    jobs[1].put((_prio, _next_seq(), fn, args, kwargs, box, done, started, claim))
+    qt = _timeout if _queue_timeout is None else _queue_timeout
+    if not started.wait(qt):
+        if claim.acquire(blocking=False):
+            # Jamais commencé : abandonné, le worker le sautera. Simple
+            # embouteillage (un bloc d'import, une fenêtre de réunion) : le GPU
+            # n'est accusé de rien.
             raise TimeoutError(
-                "transcription MLX figée (>%.0fs) — worker réinitialisé" % _timeout)
+                "GPU occupé (>%.0fs) — travail abandonné avant son tour, "
+                "GPU conservé" % qt)
+        started.wait()          # le worker vient de le prendre : posé à l'instant
+    left = box["t0"] + _timeout - time.monotonic()
+    if not done.wait(max(0.0, left)):
+        # FIGEAGE : ce calcul a dépassé son délai depuis son propre démarrage.
+        # On jette ce worker ; un neuf reprend les travaux en attente.
+        with _mlx_worker_lock:
+            if _mlx_worker is jobs[0]:   # pas déjà remplacé par un autre appel
+                _replace_worker()
+        _kernels_warm = False            # re-préchauffe propre au prochain usage
+        # v1.1.0 : suspension temporaire (voir _gpu_strike), plus de bascule
+        # définitive au premier dépassement. L'appelant a son repli CPU.
+        # v1.4.4 : seul un gel de DICTÉE compte pour la bascule (un gel de
+        # réunion ou de préchauffe ne fait que suspendre).
+        _gpu_strike(f"inférence MLX figée (>{_timeout:.0f}s)",
+                    dictation=(_prio == PRIO_DICTATION))
         raise TimeoutError(
-            "GPU occupé (>%.0fs) — travail en attente, GPU conservé" % _timeout)
+            "transcription MLX figée (>%.0fs) — worker réinitialisé" % _timeout)
     if "error" in box:
         raise box["error"]
     return box.get("value")
 
 
 def renew_worker() -> None:
-    """v1.6 — Remplace le worker MLX par un neuf au prochain appel, après une
-    ERREUR (pas un gel) d'inférence. L'ancien termine les travaux déjà en file
-    puis s'arrête (sentinelle) : aucun thread orphelin. Le modèle est conservé :
-    mesuré, un modèle chargé sur un thread s'utilise tel quel sur un autre
-    (MLX 0.31), le second essai ne paie donc aucun rechargement."""
-    global _mlx_worker
+    """v1.6 — Remplace le worker MLX par un neuf, après une ERREUR (pas un gel)
+    d'inférence. v1.5 — les travaux en attente passent au neuf, qui ne démarre
+    qu'une fois l'ancien sorti (sentinelle après son calcul en cours) : jamais
+    deux threads MLX en même temps, aucun thread orphelin. Le modèle est
+    conservé : mesuré, un modèle chargé sur un thread s'utilise tel quel sur un
+    autre (MLX 0.31), le second essai ne paie donc aucun rechargement."""
     with _mlx_worker_lock:
-        if _mlx_worker is None:
+        old = _mlx_worker
+        if old is None:
             return
-        _mlx_jobs.put((_PRIO_STOP, _next_seq(), None, None, None, None, None, None))
-        _mlx_worker = None              # _on_worker en crée un neuf, file neuve
+        old_jobs = _replace_worker(predecessor=old)
+        old_jobs.put((_PRIO_STOP, _next_seq(), None, None, None, None, None,
+                      None, None))
 
 
 def _base_dir():
@@ -780,7 +815,8 @@ def _transcribe_impl(a, language, initial_prompt, word_timestamps,
 def transcribe(audio_np, language: str = "fr", initial_prompt=None,
                word_timestamps: bool = False,
                hallucination_silence_threshold=None, temperature=None,
-               _timeout=_MLX_JOB_TIMEOUT, _prio=PRIO_BACKGROUND, cancel=None) -> dict:
+               _timeout=_MLX_JOB_TIMEOUT, _prio=PRIO_BACKGROUND, cancel=None,
+               _queue_timeout=None) -> dict:
     """Transcrit un buffer float32 mono 16 kHz sur le GPU. Renvoie le dict
     mlx_whisper brut {text, segments[...]}. Lève si MLX indisponible (l'appelant
     doit avoir vérifié available() et gérer le repli). Exécuté sur l'UNIQUE thread
@@ -788,6 +824,7 @@ def transcribe(audio_np, language: str = "fr", initial_prompt=None,
     _timeout : plafond du worker pour CET appel. La DICTÉE en passe un plus court
     (< watchdog de finalisation) pour que le repli CPU parte AVANT que le watchdog
     ne libère le verrou -> jamais de chevauchement. La réunion garde le défaut 60 s.
+    _queue_timeout : attente maximale du TOUR (défaut _timeout), cf. _on_worker.
     cancel (v1.7, travail de fond seulement) : jeton Cancel ; levé par l'appelant
     ou par la mise en file d'une dictée, il interrompt le travail (Cancelled)."""
     import numpy as np
@@ -796,7 +833,8 @@ def transcribe(audio_np, language: str = "fr", initial_prompt=None,
     a = np.asarray(audio_np, dtype=np.float32)
     return _on_worker(_transcribe_impl, a, language, initial_prompt,
                       word_timestamps, hallucination_silence_threshold, temperature,
-                      cancel, _timeout=_timeout, _prio=_prio)
+                      cancel, _timeout=_timeout, _prio=_prio,
+                      _queue_timeout=_queue_timeout)
 
 
 def idle_seconds() -> float:
