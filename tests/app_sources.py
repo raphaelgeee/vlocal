@@ -17,6 +17,7 @@ FICHIERS = (
     "texts.py",
     "settings.py",
     "ui_bridge.py",
+    "lifecycle.py",
     "app.py",
 )
 

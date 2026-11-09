@@ -94,6 +94,7 @@ os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
 
 import appstate
+import lifecycle
 import processor
 import notifier
 import overlay
@@ -111,6 +112,20 @@ import updater          # v1.0.5 — mise à jour in-app (téléchargement + swa
 from engine import (SAMPLE_RATE, SMALL_DIR_NAME, TURBO_DIR_NAME, VlocalEngine,
                     assemble_segments)
 from storage import Store
+from lifecycle import (
+    _acquire_single_instance,
+    _arm_freeze_watchdog,
+    _auto_diag_enabled,
+    _begin_activity,
+    _end_activity,
+    _install_lifecycle_delegate_class,
+    _quit_app,
+    _register_quit_hook,
+    _reveal_app_in_finder,
+    _self_relaunch,
+    _start_auto_diag,
+    _watch_system_wake,
+)
 from ui_bridge import (
     _api_safe,
     _cancel_overlay_hide,
@@ -200,110 +215,6 @@ appstate.app_version = APP_VERSION
 _hotkey_state = None       # v1.3.3 — état du raccourci global (hotkey_mac.start), pour le réarmer à chaud
 
 
-# --------------------------------------------------------------------------- #
-# v1.3.2 — CYCLE DE VIE : rouvrir et quitter ne dépendent plus du démarrage.
-#
-# Jusqu'en 1.3.0, le délégué d'application qui sait rouvrir la fenêtre et
-# quitter pour de vrai était posé par _after_start, tout à la fin. Si une étape
-# précédente levait, il n'était jamais posé, et celui de pywebview restait
-# actif : fermer la fenêtre la masquait pour de bon, le clic sur le Dock ne
-# faisait rien, et « Quitter » était refusé (pywebview consulte notre gestionnaire
-# de fermeture, qui répond « masquer »). Seul « Forcer à quitter » en sortait.
-#
-# On remplace donc la CLASSE de délégué que pywebview instancie lui-même, avant
-# que la fenêtre n'existe : quel que soit l'ordre de démarrage et quoi qu'il
-# arrive ensuite, le délégué actif sait rouvrir et quitter.
-_lifecycle_quit_hook = None     # nettoyage complet (_perform_quit), posé par _after_start
-_LifecycleDelegate = None       # la classe installée dans pywebview
-
-
-def _register_quit_hook(fn):
-    global _lifecycle_quit_hook
-    _lifecycle_quit_hook = fn
-
-
-def _lifecycle_quit():
-    """Quitter pour de vrai. Utilise le nettoyage complet s'il est enregistré ;
-    sinon (démarrage incomplet), marque la sortie, ferme la base et garantit la
-    mort du process en 4 s. Ne lève jamais."""
-    hook = _lifecycle_quit_hook
-    if hook is not None:
-        hook()
-        return
-    appstate.quitting = True
-    t = threading.Timer(4.0, lambda: os._exit(0))
-    t.daemon = True
-    t.start()
-    try:
-        if appstate.store:
-            appstate.store.close()
-    except Exception:
-        pass
-
-
-def _lifecycle_show():
-    """Ré-affiche la fenêtre masquée et ramène Vlocal au premier plan."""
-    try:
-        if appstate.window is not None:
-            appstate.window.show()
-        appstate.window_visible = True
-    except Exception:
-        pass
-    try:
-        from AppKit import NSApplication
-        NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
-    except Exception:
-        pass
-
-
-def _install_lifecycle_delegate_class():
-    """À appeler après `import webview` et AVANT create_window/start."""
-    global _LifecycleDelegate
-    if _LifecycleDelegate is not None:
-        return True
-    try:
-        import webview.platforms.cocoa as _cocoa
-
-        class VlocalLifecycleDelegate(_cocoa.BrowserView.AppDelegate):
-            def applicationShouldTerminate_(self, sender):
-                try:
-                    _lifecycle_quit()
-                except Exception:
-                    os._exit(0)
-                return 1   # NSTerminateNow
-
-            def applicationShouldHandleReopen_hasVisibleWindows_(self, sender, flag):
-                _lifecycle_show()
-                return True
-
-        _cocoa.BrowserView.AppDelegate = VlocalLifecycleDelegate
-        _LifecycleDelegate = VlocalLifecycleDelegate
-        print("[cycle]   délégué de cycle de vie installé dans pywebview (rouvrir + quitter).")
-        return True
-    except Exception as e:
-        print(f"[cycle]   délégué de cycle de vie indisponible ({e}) — repli sur _after_start.")
-        return False
-
-
-def _quit_app():
-    """v1.0.5 — Termine Vlocal PROPREMENT. `terminate_` DOIT être invoqué sur le
-    main thread Cocoa, sinon c'est un no-op silencieux (bug historique : on
-    passait une fonction Python à _ui() qui attend du JS -> le quit ne partait
-    jamais, l'ancien process survivait au « Redémarrer » et l'insertion restait
-    figée). On dispatche donc explicitement sur la mainQueue."""
-    def _do():
-        try:
-            from AppKit import NSApplication
-            NSApplication.sharedApplication().terminate_(None)
-        except Exception:
-            os._exit(0)
-    try:
-        from Foundation import NSOperationQueue
-        NSOperationQueue.mainQueue().addOperationWithBlock_(_do)
-    except Exception:
-        _do()
-
-
 def copy_to_clipboard(text: str) -> bool:
     """Copie le texte dans le presse-papier (macOS).
     La copie auto EST le produit (coller avec Cmd+V)."""
@@ -364,168 +275,6 @@ def _mic_grabber_name():
     return None
 
 
-def _reveal_app_in_finder():
-    """Révèle le bundle Vlocal.app dans le Finder (pour le glisser sur le « + » de
-    la liste Accessibilité quand il n'y apparaît pas). Best-effort, jamais d'exception."""
-    try:
-        from Foundation import NSBundle
-        path = NSBundle.mainBundle().bundlePath() or "/Applications/Vlocal.app"
-    except Exception:
-        path = "/Applications/Vlocal.app"
-    try:
-        from AppKit import NSWorkspace
-        NSWorkspace.sharedWorkspace().selectFile_inFileViewerRootedAtPath_(path, "")
-    except Exception:
-        pass
-
-
-# --------------------------------------------------------------------------- #
-# Contrôleur de dictée — partagé par le bouton/espace ET le raccourci global.
-# Gère : capture, niveau audio (wave UI), transcription finale, copie presse-papier.
-# --------------------------------------------------------------------------- #
-# --------------------------------------------------------------------------- #
-# v21 — Anti-App Nap : pendant la dictée puis la transcription, la fenêtre est
-# cachée et le micro FERMÉ (après la relâche) -> macOS a le droit de throttler
-# le process (timers coalescés, démotion) = latence ALÉATOIRE (2-10 s pour la
-# même dictée). L'assertion NSActivity (UserInitiated + LatencyCritical) le
-# lui interdit LE TEMPS DU TRAVAIL uniquement (aucun coût énergie au repos).
-# --------------------------------------------------------------------------- #
-def _begin_activity(reason: str):
-    try:
-        from Foundation import NSProcessInfo
-        try:
-            from Foundation import (NSActivityUserInitiated,
-                                    NSActivityLatencyCritical)
-            opts = NSActivityUserInitiated | NSActivityLatencyCritical
-        except Exception:
-            opts = 0x00FFFFFF | 0xFF00000000   # valeurs documentées NSProcessInfo.h
-        return NSProcessInfo.processInfo().beginActivityWithOptions_reason_(
-            opts, reason)
-    except Exception:
-        return None
-
-
-def _end_activity(token) -> None:
-    try:
-        if token is not None:
-            from Foundation import NSProcessInfo
-            NSProcessInfo.processInfo().endActivity_(token)
-    except Exception:
-        pass
-
-
-# --------------------------------------------------------------------------- #
-# v1.0.6 — DÉTECTEUR DE FIGEAGE (« deadman switch » du thread principal).
-# --------------------------------------------------------------------------- #
-# INCIDENT TERRAIN : après un usage intensif, le thread principal Cocoa s'est
-# figé (finalisation / insertion coincée AU SEIN du main thread). L'app est un
-# agent menu-bar (politique Accessory) -> AUCUNE icône Dock -> impossible de la
-# « forcer à quitter » sans ouvrir le Moniteur d'activité. Le watchdog de
-# finalisation (30 s) libère bien _busy, mais il NE débloque PAS le main thread
-# figé : l'UI reste morte et l'app fantôme tourne indéfiniment.
-#
-# PARADE : un battement de cœur estampillé par un NSTimer SUR LE MAIN THREAD
-# (~1 s). Un thread DAEMON (qui SURVIT au gel du main thread) le surveille. Si le
-# battement n'a pas avancé depuis MAIN_FREEZE_KILL_S, le main thread est
-# irrécupérablement figé -> on JOURNALISE puis os._exit() : l'app se ferme
-# d'elle-même, l'utilisateur la relance. Plus jamais d'app fantôme inkillable.
-#
-# FAUX POSITIFS ÉCARTÉS :
-#  - Veille système / suspension du process (App Nap au repos) : le daemon mesure
-#    SON PROPRE retard de réveil ; si sa boucle a dormi BEAUCOUP plus que prévu,
-#    c'est que le process a été suspendu (pas un gel) -> on réarme la base sans
-#    tuer. Au réveil, le NSTimer ré-estampille sous 1 s.
-#  - Suivi d'événement (menu ouvert, glissement de fenêtre) : timer ajouté en
-#    NSRunLoopCommonModes -> continue de battre, pas de faux gel.
-#  - PHASE DE CONFIRMATION : avant de tuer, on redonne ~4 s au main thread pour
-#    re-battre. S'il re-bat (throttling passager) OU si NOTRE propre sommeil a
-#    dépassé (process suspendu), on s'abstient. Tuer exige un battement figé
-#    AVANT et APRÈS confirmation, daemon non suspendu -> faux positif quasi nul.
-#  - Seuil 60 s : très au-dessus du légitime (le main thread ne porte aucun gros
-#    calcul — transcription/GPU/IO tournent sur des workers) ET au-dessus du
-#    watchdog de finalisation (30 s), qui a sa chance de récupérer d'abord.
-#    Récupération plus rapide qu'à 90 s sans sacrifier la sûreté (confirmation).
-MAIN_FREEZE_KILL_S = 60.0
-_main_heartbeat = [0.0]          # estampille (time.time) posée par le main thread
-_freeze_guard_armed = [False]    # vrai une fois le 1er battement posé
-_heartbeat_obj = None            # ref forte vers la cible NSTimer (sinon GC)
-_heartbeat_timer = None          # ref forte vers le NSTimer (sinon GC)
-
-
-def _arm_freeze_watchdog():
-    """Pose le battement de cœur main-thread + lance le daemon de surveillance.
-    À DISPATCHER sur la main queue (le NSTimer DOIT vivre sur la run loop du
-    main thread). Best-effort, idempotent, ne lève jamais."""
-    global _heartbeat_obj, _heartbeat_timer
-    if _freeze_guard_armed[0]:
-        return
-    try:
-        from Foundation import (NSObject, NSTimer, NSRunLoop,
-                                 NSRunLoopCommonModes)
-
-        class _Heartbeat(NSObject):
-            def tick_(self, timer):
-                _main_heartbeat[0] = time.time()
-
-        hb = _Heartbeat.alloc().init()
-        _main_heartbeat[0] = time.time()   # 1er battement immédiat (run loop active)
-        _freeze_guard_armed[0] = True
-        t = NSTimer.timerWithTimeInterval_target_selector_userInfo_repeats_(
-            1.0, hb, "tick:", None, True)
-        NSRunLoop.currentRunLoop().addTimer_forMode_(t, NSRunLoopCommonModes)
-        _heartbeat_obj = hb
-        _heartbeat_timer = t
-    except Exception as e:
-        print(f"[watchdog] battement main-thread indispo ({e}) — détecteur OFF.")
-        return
-
-    def _freeze_monitor():
-        CHECK = 5.0
-        CONFIRM = 4.0
-        last_wake = time.time()
-        while True:
-            time.sleep(CHECK)
-            now = time.time()
-            overslept = (now - last_wake) - CHECK
-            last_wake = now
-            # Process suspendu (veille / App Nap profond) : notre propre boucle a
-            # pris bien plus que CHECK -> ce n'est PAS un gel. On réarme la base.
-            if overslept > 30.0:
-                _main_heartbeat[0] = now
-                continue
-            hb_ts = _main_heartbeat[0]
-            if hb_ts <= 0.0:
-                continue
-            if (now - hb_ts) <= MAIN_FREEZE_KILL_S:
-                continue
-            # SUSPICION DE GEL -> CONFIRMATION : on redonne une chance de battre.
-            t_confirm = time.time()
-            time.sleep(CONFIRM)
-            if (time.time() - t_confirm) - CONFIRM > 10.0:
-                # NOTRE sommeil a dérapé -> process suspendu, pas un gel. On réarme.
-                _main_heartbeat[0] = time.time()
-                last_wake = time.time()
-                continue
-            if _main_heartbeat[0] != hb_ts:
-                # Le main thread a re-battu pendant la confirmation -> vivant.
-                last_wake = time.time()
-                continue
-            # Battement TOUJOURS figé après confirmation, daemon non suspendu :
-            # gel réel et irrécupérable -> on journalise puis on force l'arrêt.
-            age = time.time() - hb_ts
-            try:
-                if _EV:
-                    _EV.log(_EV.E.MAIN_FREEZE_KILL, age=round(age, 1))
-            except Exception:
-                pass
-            print(f"[watchdog] thread principal figé > {age:.0f}s -> arrêt "
-                  "forcé de Vlocal (à relancer).")
-            os._exit(70)
-
-    threading.Thread(target=_freeze_monitor, name="freeze-watchdog",
-                     daemon=True).start()
-
-
 # v1.1.0 : le live-tail vit dans son module (livetail.py), testable sans
 # charger l'app. Alias conservé pour les appelants historiques.
 from livetail import DictationLiveTail as _DictationLiveTail  # noqa: E402
@@ -569,71 +318,6 @@ def _finalize_budget_s(rec_dur_s: float) -> float:
 
 
 _DICT_RESET_MIN_S = 9.0       # v1.0.11 : 12 -> 9 s. PLANCHER SÛR : la formule garde +8 de base (marge au-dessus du pire cas de transcription LÉGITIME ~6-8 s : modèles rechargés + plancher turbo + ladder température) -> on ne descend PAS sous 9 sinon risque de couper une vraie dictée. Les dictées longues montent via durée×0.10+8.
-_last_self_relaunch = [0.0]   # anti-boucle : 1 relance / 5 min max
-
-
-def _self_relaunch(reason: str = "") -> None:
-    """Dernier recours : relance proprement l'app (open -n) puis quitte. Anti-
-    boucle (1 relance / 5 min). L'utilisateur n'a RIEN à faire : Vlocal réapparaît
-    sain en ~1 s. Réservé au cas où un reset logiciel ne suffit pas (sous-système
-    audio OS réellement irrécupérable)."""
-    import time as _t
-    now = _t.time()
-    if now - _last_self_relaunch[0] < 300.0:
-        print("[auto-heal] relance déjà tentée récemment -> abstention (anti-boucle).")
-        return
-    try:
-        exe = sys.executable or ""
-        i = exe.find(".app/Contents/MacOS/")
-        bundle = exe[:i + 4] if i > 0 else None
-        if not bundle or not os.path.isdir(bundle):
-            print("[auto-heal] bundle introuvable -> relance annulée.")
-            return
-        _last_self_relaunch[0] = now
-        print(f"[auto-heal] RELANCE de l'app ({reason}) : {bundle}")
-        try:
-            notifier.show("Vlocal redémarre",
-                          _te("La dictée était bloquée. Vlocal se relance, réessayez dans un instant."),
-                          subtitle=None)
-        except Exception:
-            pass
-        import subprocess
-        subprocess.Popen(["/bin/sh", "-c", 'sleep 1.2; /usr/bin/open -n "%s"' % bundle],
-                         start_new_session=True)
-        _t.sleep(0.4)
-    except Exception as e:
-        print(f"[auto-heal] relance KO ({e}).")
-        return
-    os._exit(0)
-
-
-# v1.5 — Au réveil, CoreAudio republie ses périphériques pendant une à deux
-# secondes : un worker relancé trop tôt figerait une liste encore incomplète.
-WAKE_SETTLE_S = 2.0
-_wake_observers = []   # jeton de l'observateur : le garder vivant
-
-
-def _watch_system_wake(engine) -> None:
-    """v1.5 — Sortie de veille -> worker micro neuf, AU REPOS (engine.
-    mic_after_wake), pour que le premier appui après le réveil n'ouvre ni un
-    PortAudio périmé ni l'ancien micro, et ne paie pas la réparation."""
-    try:
-        from AppKit import NSWorkspace, NSWorkspaceDidWakeNotification
-    except ImportError as e:
-        print(f"[micworker] suivi du réveil indisponible : {e}")
-        return
-
-    def _on_wake(_note):
-        t = threading.Timer(WAKE_SETTLE_S, engine.mic_after_wake)
-        t.daemon = True
-        t.start()
-
-    try:
-        center = NSWorkspace.sharedWorkspace().notificationCenter()
-        _wake_observers.append(center.addObserverForName_object_queue_usingBlock_(
-            NSWorkspaceDidWakeNotification, None, None, _on_wake))
-    except Exception as e:   # fonction d'appoint : le démarrage continue sans elle
-        print(f"[micworker] suivi du réveil non installé : {e}")
 
 
 def _dictation_supervisor():
@@ -743,50 +427,6 @@ def _start_dictation_supervisor():
         print("[auto-heal] superviseur de dictée actif.")
     except Exception as e:
         print(f"[auto-heal] superviseur indispo ({e}).")
-
-
-# v1.0.11 — DIAGNOSTIC AUTO (CONSENTI). Pour la cohorte early (clés 'comp'/testeurs),
-# Vlocal envoie un diagnostic ANONYME (le MÊME payload sanitisé que l'envoi manuel :
-# zéro audio, zéro texte dicté, zéro chemin/nom) ~1×/semaine vers l'admin, pour
-# fignoler le produit. Défaut ON pour 'comp', OFF pour les payants (vie privée).
-# Désactivable (réglage `auto_diag`), disclosure visible dans Réglages > Diagnostic.
-# Ne casse rien : best-effort total, ne lève jamais, réutilise l'envoi existant.
-_AUTO_DIAG_DAYS = 7
-
-def _auto_diag_enabled() -> bool:
-    try:
-        s = _load_settings()
-        return bool(s.get("auto_diag", False))
-    except Exception:
-        return False
-
-def _auto_diag_loop():
-    import time as _t
-    _t.sleep(90)   # laisse le démarrage tranquille
-    while True:
-        try:
-            if _auto_diag_enabled() and appstate.api is not None:
-                try:
-                    last = float(_load_settings().get("auto_diag_last", 0) or 0)
-                except Exception:
-                    last = 0.0
-                if (_t.time() - last) > _AUTO_DIAG_DAYS * 86400:
-                    try:
-                        r = appstate.api.send_support_diagnostic(
-                            "[auto] rapport periodique testeur", "", source="auto-diag")
-                        if isinstance(r, dict) and r.get("ok"):
-                            _save_settings({"auto_diag_last": _t.time()})
-                    except Exception:
-                        pass
-        except Exception:
-            pass
-        _t.sleep(6 * 3600)   # re-vérifie toutes les 6 h
-
-def _start_auto_diag():
-    try:
-        threading.Thread(target=_auto_diag_loop, name="auto-diag", daemon=True).start()
-    except Exception:
-        pass
 
 
 def _polish_dictation(raw: str) -> str:
@@ -5479,18 +5119,6 @@ def _load_engine_async():
 _instance_lock = None   # garde le verrou d'instance unique en vie
 
 
-def _acquire_single_instance():
-    """Empêche DEUX instances de Vlocal de tourner : deux raccourcis globaux, deux
-    bulles, le même texte inséré deux fois, et la RAM doublée. Renvoie les handles
-    à garder vivants, ou None si une autre instance tourne déjà.
-    v1.3.3 — deux couches (dossier de support ET dossier privé de l'utilisateur,
-    indépendant de $HOME), et seul EWOULDBLOCK vaut « déjà lancé » : un HOME sur
-    un partage réseau sans flock ne peut plus empêcher Vlocal de s'ouvrir.
-    Détail et raisons dans instance_lock.py."""
-    import instance_lock
-    return instance_lock.acquire(_APP_SUPPORT)
-
-
 def main():
     global _instance_lock
 
@@ -6156,7 +5784,7 @@ def main():
             try:
                 from AppKit import NSApplication as _NSA
                 _d = _NSA.sharedApplication().delegate()
-                if _LifecycleDelegate is not None and isinstance(_d, _LifecycleDelegate):
+                if lifecycle._LifecycleDelegate is not None and isinstance(_d, lifecycle._LifecycleDelegate):
                     _app_delegate = _d
                     print("[quit]    Cmd+Q / Dock / menu Pomme -> vrai quit "
                           "(délégué de cycle de vie actif dès la fenêtre).")
