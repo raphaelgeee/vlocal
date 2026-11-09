@@ -37,17 +37,27 @@ from settings import (
     write_text_atomic,
 )
 from texts import _te
-from ui_bridge import _api_safe, _cancel_overlay_hide, _refresh_lists_ui, _toast, _ui
+from ui_bridge import _api_safe, _cancel_overlay_hide, _msg, _refresh_lists_ui, _toast, _ui
 
 log = applog.get("api_meetings")
 
 
 # Ouverture du micro de réunion : au-delà, le pilote audio est jugé figé.
 MIC_OPEN_TIMEOUT_S = 8.0
-_START_FAILED_MSG = ("Impossible de démarrer l'enregistrement. Vérifiez le micro "
-                     "et l'espace disque, puis réessayez.")
-_MIC_TIMEOUT_MSG = ("Le micro ne répond pas. Vérifiez qu'il est branché et "
-                    "autorisé, puis réessayez.")
+
+
+def _start_failed_msg():
+    return _msg("Impossible de démarrer l'enregistrement. Vérifiez le micro et "
+                "l'espace disque, puis réessayez.",
+                "The recording could not start. Check the microphone and the "
+                "disk space, then try again.")
+
+
+def _mic_timeout_msg():
+    return _msg("Le micro ne répond pas. Vérifiez qu'il est branché et autorisé, "
+                "puis réessayez.",
+                "The microphone is not responding. Check that it is connected "
+                "and allowed, then try again.")
 
 
 class _MicOpenTimeout(Exception):
@@ -185,8 +195,8 @@ class MeetingsApi:
             except Exception:
                 log.warning("[reunion] préparation de l'enregistreur KO", exc_info=True)
                 _reset_start_state()
-                _toast(_START_FAILED_MSG, kind="error")
-                return {"ok": False, "error": _START_FAILED_MSG}
+                _toast(_start_failed_msg(), kind="error")
+                return {"ok": False, "error": _start_failed_msg()}
         # Ouverture du micro HORS _meeting_lock et BORNÉE : un pilote audio figé
         # ne bloque plus ni l'interface ni les autres transitions de réunion.
         # « recording » déjà posé empêche un second démarrage entre-temps ;
@@ -200,7 +210,7 @@ class MeetingsApi:
                         " (délai dépassé)" if timeout else "", exc_info=not timeout)
             with _meeting_lock:
                 _reset_start_state()
-            msg = _MIC_TIMEOUT_MSG if timeout else _START_FAILED_MSG
+            msg = _mic_timeout_msg() if timeout else _start_failed_msg()
             _toast(msg, kind="error")
             return {"ok": False, "error": msg}
         with _meeting_lock:
@@ -300,8 +310,8 @@ class MeetingsApi:
                 except Exception:
                     log.warning("[reunion] fermeture du micro KO", exc_info=True)
                 _reset_start_state()
-                _toast(_START_FAILED_MSG, kind="error")
-                return {"ok": False, "error": _START_FAILED_MSG}
+                _toast(_start_failed_msg(), kind="error")
+                return {"ok": False, "error": _start_failed_msg()}
 
     @_api_safe(default=lambda: {"ok": False, "error": "Erreur interne (réunion)."})
     def reunion_stop(self):
@@ -319,10 +329,13 @@ class MeetingsApi:
             overlay.set_meeting(False)   # la pilule de repos revient
             try:
                 wav_path, duree = rec.stop()
-            except Exception as e:
-                log.warning(f"[reunion] arrêt : {e}")
+            except Exception:
+                log.warning("[reunion] arrêt KO", exc_info=True)
                 _end_activity(_meeting_state.pop("activity", None))  # v21
-                return {"ok": False, "error": str(e)}
+                return {"ok": False, "error": _msg(
+                    "L'enregistrement n'a pas pu être arrêté proprement. "
+                    "Réessayez.",
+                    "The recording could not be stopped cleanly. Try again.")}
         # v15 — Remonte un éventuel incident d'enregistrement (disque plein…)
         if getattr(rec, "disk_full", False):
             _ui("if(typeof showToast==='function') showToast(%s);" % json.dumps(
@@ -516,10 +529,12 @@ class MeetingsApi:
             threading.Thread(target=_reunion_transcribe_pipeline,
                              args=(mid, wav, dur), daemon=True).start()
             return {"ok": True, "id": mid}
-        except Exception as e:
+        except Exception:
             _meeting_state["pipeline_busy"] = False
-            log.warning(f"[reunion] retry KO : {e}")
-            return {"ok": False, "error": f"Réessai impossible : {e}"}
+            log.warning("[reunion] retry KO", exc_info=True)
+            return {"ok": False, "error": _msg(
+                "Le nouveau traitement n'a pas pu démarrer. Réessayez.",
+                "Processing could not start again. Try again.")}
 
     def rediarize_meeting(self, mid, num_speakers=0):
         """v18.5 — Relance la diarisation d'une réunion DÉJÀ transcrite, sans
@@ -738,9 +753,11 @@ class MeetingsApi:
                 _wv.SAVE_DIALOG,
                 directory=os.path.expanduser("~/Documents"),
                 save_filename=safe + ".txt")
-        except Exception as e:
-            log.debug("import webview : échec ignoré", exc_info=True)
-            return {"ok": False, "error": f"Dialogue d'enregistrement indisponible : {e}"}
+        except Exception:
+            log.warning("[export] dialogue d'enregistrement KO", exc_info=True)
+            return {"ok": False, "error": _msg(
+                "La fenêtre d'enregistrement n'a pas pu s'ouvrir. Réessayez.",
+                "The save window could not open. Try again.")}
         if not dest:
             return {"ok": False, "cancelled": True}
         path = dest if isinstance(dest, str) else (dest[0] if dest else None)
