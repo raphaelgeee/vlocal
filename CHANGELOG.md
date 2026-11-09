@@ -3,6 +3,37 @@
 Dates are publication dates on the update channel. Earlier internal versions
 (3.x, June 2026) are not listed.
 
+## 1.5.0, 10 November 2026
+
+- **New dictation pill.** A glass pill built around the bubble of the new logo,
+  at the bottom of the screen under the pointer. On macOS 26 it uses the native
+  Liquid Glass material, falls back to the system translucent material on older
+  versions, and becomes opaque with Reduce Transparency.
+- **Text ready sooner.** One segmenter replaces the old live tail: every real
+  pause while the key is held sends the finished part to the GPU at low priority,
+  with the previous text as context. After a pause of 1.5 s before release, the
+  text is ready in about 0.4 s; from 2 s, instantly. Measured word error rate is
+  unchanged against a single pass.
+- **Microphone that holds.** Follows the system default device and wakes from
+  sleep; reroutes within the same capture when a device disappears; Bluetooth
+  opening budget; a press always wins over a background repair; the real-time
+  callback never blocks; resampling when a device refuses 16 kHz; silence judged
+  on sliding windows. One incident per press, with its cause.
+- **GPU first, less memory.** A GPU refusal is retried after 1, 5, 15 then 30
+  minutes instead of never; a fast GPU error is retried on the GPU before the
+  CPU; the CPU fallback has a real time budget. Encoder evaluated layer by layer
+  (−37 % peak GPU memory, meeting transcription −42 %). Models are unloaded on
+  real memory pressure, not on fixed timers. Dropped-file transcription now runs
+  on the GPU.
+- **Safer updates.** Resumable download, disk space checked first, signature,
+  notarization, team, version and architecture verified, swap that can be
+  undone, automatic rollback if the new version does not start.
+- **Reliability.** Settings written atomically; interrupted meetings can be
+  retried; technical messages never shown; the 7,000-line app module split into
+  single-purpose modules; every caught error is logged.
+- **New identity.** New wordmark with the speech bubble, app icon, menu bar icon
+  and shared brand tokens.
+
 ## 1.4.3, 19 September 2026
 
 - **Back to 1.3.5.** Versions 1.4.0 to 1.4.2 (16 to 19 September) tested a

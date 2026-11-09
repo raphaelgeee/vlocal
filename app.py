@@ -131,7 +131,7 @@ HTML_PATH = os.path.join(BASE_DIR, "vlocal-interface.html")
 # re-résolus au démarrage et après un téléchargement.
 _resolve_model_dirs()
 
-APP_VERSION = "1.4.3"   # 19 septembre 2026 : code de la 1.3.5 (retour arrière). Synchrone avec le fichier VERSION (build) ;
+APP_VERSION = "1.5.0"   # 10 novembre 2026 : robustesse locale, pilule en verre, anticipation. Synchrone avec le fichier VERSION (build) ;
                         # affiché dans l'onglet « Mises à jour ». Historique : CHANGELOG.md.
 appstate.app_version = APP_VERSION
 
