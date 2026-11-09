@@ -34,6 +34,7 @@ from settings import (
     _load_settings,
     _save_settings,
     _voice_memory_enabled,
+    write_text_atomic,
 )
 from texts import _te
 from ui_bridge import _api_safe, _cancel_overlay_hide, _refresh_lists_ui, _toast, _ui
@@ -673,11 +674,11 @@ class MeetingsApi:
                     "error": "Export SRT impossible : cette réunion n'a pas de "
                              "blocs locuteurs (diarisation absente)."}
         try:
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(content)
-        except Exception as e:
-            log.debug("open : échec ignoré", exc_info=True)
-            return {"ok": False, "error": f"Écriture impossible : {e}"}
+            write_text_atomic(path, content)
+        except Exception:
+            log.warning("[export] écriture impossible", exc_info=True)
+            return {"ok": False, "error": "Écriture impossible. Choisissez un autre "
+                                          "emplacement et réessayez."}
         return {"ok": True, "path": path, "format": fmt}
 
     @_api_safe(default=False)
