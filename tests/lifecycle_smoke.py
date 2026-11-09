@@ -66,9 +66,10 @@ def enfant(sortie):
     import app
     import appstate
     import hotkeys
-    app._load_engine_async = lambda *a, **k: None       # le moteur n'a rien à faire ici
+    import startup
+    startup._load_engine_async = lambda *a, **k: None       # le moteur n'a rien à faire ici
 
-    _vrai_start = app.start_global_hotkey
+    _vrai_start = startup.start_global_hotkey
 
     def _start_observe():
         try:
@@ -78,7 +79,7 @@ def enfant(sortie):
         except Exception as e:
             note("raccourci", f"EXCEPTION {type(e).__name__}: {e}")
             raise
-    app.start_global_hotkey = _start_observe
+    startup.start_global_hotkey = _start_observe
 
     def sur_main(fn, delai=2.5):
         from Foundation import NSOperationQueue

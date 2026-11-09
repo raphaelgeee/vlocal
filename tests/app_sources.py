@@ -29,6 +29,8 @@ FICHIERS = (
     "api_files.py",
     "api_dictation.py",
     "api.py",
+    "window_mac.py",
+    "startup.py",
     "app.py",
 )
 

@@ -14,7 +14,7 @@ import time
 import appstate
 import errors as _EV
 import notifier
-from settings import _APP_SUPPORT, _load_settings, _save_settings
+from settings import _APP_SUPPORT, _SHOW_REQUEST, _load_settings, _save_settings
 from texts import _te
 
 
@@ -408,3 +408,28 @@ def _acquire_single_instance():
     Détail et raisons dans instance_lock.py."""
     import instance_lock
     return instance_lock.acquire(_APP_SUPPORT)
+
+
+def _hand_over_to_running_instance():
+    """Vlocal tourne déjà : on lui demande de ré-afficher sa fenêtre et on
+    l'active, plutôt que de mourir en silence (« ça ne s'ouvre pas »)."""
+    print("[vlocal] déjà en cours — demande d'affichage de l'instance existante.")
+    # L'instance existante peut avoir sa fenêtre CACHÉE (agent en arrière-plan).
+    # On dépose une « demande d'affichage » qu'elle surveille -> elle ré-affiche
+    # sa fenêtre. (Sinon : relancer l'app ne montrait rien = « je n'arrive pas
+    # à la relancer ».) Puis on active et on sort.
+    try:
+        with open(_SHOW_REQUEST, "w") as f:
+            f.write("show")
+    except Exception:
+        pass
+    try:
+        from AppKit import (NSRunningApplication,
+                            NSApplicationActivateIgnoringOtherApps)
+        me = os.getpid()
+        for ap in NSRunningApplication.runningApplicationsWithBundleIdentifier_(
+                "com.vlocal.app"):
+            if ap.processIdentifier() != me:
+                ap.activateWithOptions_(NSApplicationActivateIgnoringOtherApps)
+    except Exception:
+        pass

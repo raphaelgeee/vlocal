@@ -8,6 +8,7 @@ Contient aussi l'auto-test sans fenêtre (--selftest).
 """
 import os
 import subprocess
+import sys
 import threading
 import time
 
@@ -318,3 +319,80 @@ def _load_engine_async():
         except Exception:
             pass
     threading.Thread(target=_preload_and_warm, daemon=True).start()
+
+
+def _choose_whisper_dir():
+    """Dossier du modèle Whisper à charger, ou None quand les modèles doivent
+    d'abord être téléchargés (app thin, premier lancement). Quitte l'app si
+    aucun modèle n'existe et qu'aucun téléchargement n'est possible."""
+    # Modèle principal : turbo int8 ; small int8 chargé à la demande (chemins
+    # ABSOLUS via BASE_DIR, robustes en .app). VLOCAL_WHISPER=small force un
+    # repli si jamais le turbo est absent (dev).
+    chosen = os.environ.get("VLOCAL_WHISPER", "").lower()
+    _resolve_model_dirs()      # v3.3 — chemins à jour (cache si complet, sinon bundle)
+    _point_mlx_to_cache()
+    turbo_dir = appstate.model_dir
+    small_dir = appstate.small_model_dir
+
+    def _has_model(d):
+        return os.path.exists(os.path.join(d, "model.bin"))
+
+    if chosen == "small" and _has_model(small_dir):
+        whisper_dir = small_dir
+    elif _has_model(turbo_dir):
+        whisper_dir = turbo_dir
+    elif _has_model(small_dir):
+        whisper_dir = small_dir
+    elif model_store.needs_download():
+        # v3.3 — APP THIN, 1er lancement (ou MAJ depuis un build bundlé) : modèles
+        # pas encore en cache. NE PAS quitter : l'UI affiche l'écran « préparation »
+        # (download_models) AVANT toute dictée, puis _finish_model_download charge le
+        # moteur. _engine_load_params reste None d'ici là (la dictée attend les modèles).
+        whisper_dir = None
+        print("[whisper] modèles absents -> téléchargement R2 requis (app thin).")
+    else:
+        print(f"[erreur]  aucun modèle Whisper trouvé sous {model_store.models_dir()}")
+        sys.exit(1)
+    return whisper_dir
+
+
+
+def _cpu_threads():
+    """Threads CPU du moteur et de la diarisation, selon la machine et les réglages."""
+    # v2 — Threads CPU ADAPTATIFS : on exploite les cœurs disponibles (mesuré
+    # ~25-40 % plus rapide qu'à 4 threads), en laissant 2 cœurs au système.
+    # R&D vitesse v19 : PLAFOND À 4 (mesuré). Au-delà de 4, turbo ne gagne quasi
+    # rien (−3 % idle) MAIS chauffe beaucoup (core-secondes turbo −46 % / small
+    # −64 % en passant de 8 à 4) et dispute des cœurs à Slack/Chrome. À 4 : small
+    # −45 % (1,8x), variance réduite, sortie BYTE-IDENTIQUE (vérifié, SHA256
+    # constant 2/4/6/8 threads). Override « perf » possible via VLOCAL_THREADS.
+    # v20 — base = cœurs PERFORMANCE réels (Apple Silicon : os.cpu_count()
+    # compte AUSSI les E-cores ; saturer des E-cores = plus lent ET plus chaud).
+    # Repli os.cpu_count() si sysctl indisponible (Intel, etc.).
+    _ncpu = os.cpu_count() or 4
+    try:
+        import subprocess as _sp
+        _pcores = int(_sp.run(["sysctl", "-n", "hw.perflevel0.logicalcpu"],
+                              capture_output=True, text=True, timeout=2).stdout.strip())
+        if _pcores > 0:
+            _ncpu = min(_ncpu, _pcores + 2)   # P-cores + marge (ne JAMAIS élargir)
+    except Exception:
+        pass
+    _default_threads = max(2, min(4, _ncpu - 2))
+    # Mode SILENCIEUX (Réglages) : moitié des cœurs (borné [2,4]) -> les ventilos
+    # se calment pendant la transcription, au prix d'un peu de vitesse. Utile sur
+    # machines modestes (8 Go).
+    try:
+        if _load_settings().get("cpu_economy", False):
+            _default_threads = max(2, min(4, _ncpu // 2))
+    except Exception:
+        pass
+    cpu_threads = int(os.environ.get("VLOCAL_THREADS", str(_default_threads)))
+    # v20 — la diarisation (ONNX) respecte le MÊME plafond mesuré (avant : elle
+    # montait à min(8, cpu-2) et ignorait cpu_economy/VLOCAL_THREADS).
+    try:
+        import diarizer as _dz_threads
+        _dz_threads.set_num_threads(cpu_threads)
+    except Exception:
+        pass
+    return cpu_threads
