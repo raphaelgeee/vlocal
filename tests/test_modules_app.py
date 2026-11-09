@@ -135,6 +135,11 @@ class TestModulesApp(unittest.TestCase):
                  if isinstance(h, ast.ExceptHandler) and large(h) and muet(h)]
         self.assertEqual(muets, [])
 
+    def test_modules_declares_a_pyinstaller(self):
+        spec = app_sources.texte("Vlocal.spec")
+        manquants = [m for m in MODULES if m != "app" and f'"{m}"' not in spec]
+        self.assertEqual(manquants, [])
+
     def test_tailles_des_modules(self):
         tailles = {m: app_sources.texte(m + ".py").count("\n") for m in MODULES}
         self.assertLessEqual(tailles["app"], 1200)
