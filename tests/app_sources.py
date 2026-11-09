@@ -22,6 +22,7 @@ FICHIERS = (
     "dictation.py",
     "meetings.py",
     "engine_runtime.py",
+    "hotkeys.py",
     "app.py",
 )
 

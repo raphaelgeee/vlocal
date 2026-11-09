@@ -65,6 +65,7 @@ def enfant(sortie):
 
     import app
     import appstate
+    import hotkeys
     app._load_engine_async = lambda *a, **k: None       # le moteur n'a rien à faire ici
 
     _vrai_start = app.start_global_hotkey
@@ -130,11 +131,11 @@ def enfant(sortie):
 
         # v1.3.3 — changer le mode dans les Réglages doit prendre effet tout de
         # suite : ancien raccourci arrêté, nouveau démarré avec le bon mode.
-        ancien = app._hotkey_state
+        ancien = hotkeys._hotkey_state
         try:
             appstate.api.save_settings({"hotkey_mode": "tap"})
             time.sleep(2.5)
-            nouveau = app._hotkey_state
+            nouveau = hotkeys._hotkey_state
             note("rearme_a_chaud", {
                 "ancien_arrete": bool(ancien is not None and ancien.get("stopped")),
                 "nouveau_distinct": bool(nouveau is not None and nouveau is not ancien),
