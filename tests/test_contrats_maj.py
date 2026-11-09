@@ -185,7 +185,7 @@ class TestTelechargementDesModeles(unittest.TestCase):
             out = api_settings.SettingsApi().download_models()
         self.assertEqual(out, {"ok": False, "error": "Espace disque insuffisant : "
                                                      "libérez environ 3 Go puis réessayez."})
-        self.assertFalse(api_settings._dl_in_flight)
+        self.assertFalse(api_settings._DL_LOCK.locked())   # garde relâchée
 
     def test_autre_echec_message_par_defaut(self):
         with mock.patch.object(model_store, "download_models",
@@ -193,7 +193,7 @@ class TestTelechargementDesModeles(unittest.TestCase):
             out = api_settings.SettingsApi().download_models()
         self.assertFalse(out["ok"])
         self.assertIn("connexion", out["error"])
-        self.assertFalse(api_settings._dl_in_flight)
+        self.assertFalse(api_settings._DL_LOCK.locked())   # garde relâchée
 
 
 if __name__ == "__main__":
