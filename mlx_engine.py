@@ -150,12 +150,17 @@ def _next_seq() -> int:
 _MLX_JOB_TIMEOUT = 60.0
 
 
+# Priorité de la sentinelle d'arrêt : APRÈS tout travail déjà en file, que
+# l'ancien worker termine avant de s'arrêter (cf. renew_worker).
+_PRIO_STOP = 99
+
+
 def _worker_loop(jobs):
     while True:
         item = jobs.get()
-        if item is None:                  # sentinelle (jamais utilisée, garde)
-            return
         _prio, _seq, fn, args, kwargs, box, done, started = item
+        if fn is None:                    # sentinelle de renew_worker
+            return
         try:
             started.set()      # v1.0.22 : le job a QUITTÉ la file (voir _on_worker)
             box["value"] = fn(*args, **kwargs)
@@ -214,6 +219,20 @@ def _on_worker(fn, *args, _timeout=_MLX_JOB_TIMEOUT, _prio=PRIO_BACKGROUND, **kw
     if "error" in box:
         raise box["error"]
     return box.get("value")
+
+
+def renew_worker() -> None:
+    """v1.6 — Remplace le worker MLX par un neuf au prochain appel, après une
+    ERREUR (pas un gel) d'inférence. L'ancien termine les travaux déjà en file
+    puis s'arrête (sentinelle) : aucun thread orphelin. Le modèle est conservé :
+    mesuré, un modèle chargé sur un thread s'utilise tel quel sur un autre
+    (MLX 0.31), le second essai ne paie donc aucun rechargement."""
+    global _mlx_worker
+    with _mlx_worker_lock:
+        if _mlx_worker is None:
+            return
+        _mlx_jobs.put((_PRIO_STOP, _next_seq(), None, None, None, None, None, None))
+        _mlx_worker = None              # _on_worker en crée un neuf, file neuve
 
 
 def _base_dir():
