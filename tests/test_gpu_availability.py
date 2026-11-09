@@ -321,9 +321,12 @@ class WarmupMarkersTests(MlxStateCase):
         super().setUp()
         self.assertTrue(mlx_engine.available())
         mlx_engine._kernels_warm = False
-        p = mock.patch.object(mlx_engine, "loaded", lambda: False)
-        p.start()
-        self.addCleanup(p.stop)
+        # v1.6 : la préchauffe charge le modèle (encodeur accéléré) avant
+        # l'inférence à blanc ; les modules mlx factices n'ont pas de modèle.
+        for p in (mock.patch.object(mlx_engine, "loaded", lambda: False),
+                  mock.patch.object(mlx_engine, "_ensure_model", lambda: None)):
+            p.start()
+            self.addCleanup(p.stop)
 
     def _warmup_raising(self, exc):
         def boom(*a, **k):

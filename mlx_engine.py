@@ -512,6 +512,96 @@ def reset_availability(reason: str) -> None:
     _diag(f"verdict GPU réinitialisé ({reason}) : nouvelle sonde au prochain usage.")
 
 
+# v1.6 — ENCODEUR ACCÉLÉRÉ. L'encodeur traite TOUJOURS une fenêtre de 30 s
+# (1500 positions x 32 couches), quelle que soit la durée dictée : c'est lui, et
+# non le décodage, qui fait le coût fixe d'une dictée courte (mesuré sur M5 :
+# ~1,2 s d'encodeur sur ~1,35 s de dictée de 5 s). Trois gains, texte inchangé
+# (corpus de 17 extraits FR, sortie identique au caractère près) :
+#   1. attention FUSIONNÉE (mx.fast.scaled_dot_product_attention) au lieu de
+#      la matrice 20 x 1500 x 1500 explicite : encodeur -7 % (1195 -> 1108 ms) ;
+#   2. évaluation COUCHE PAR COUCHE : évalué d'un bloc, le graphe paresseux des
+#      32 couches gardait ~650 Mo de tampons vivants en même temps ; couche par
+#      couche, le surcoût tombe à ~60 Mo (pic MLX ~1,47 -> ~0,9 Go, +5 ms) ;
+#   3. MÉMO d'une entrée : la même fenêtre est ré-encodée à chaque palier du
+#      repli en température et, en réunion, une seconde fois pour l'alignement
+#      des mots (word_timestamps). Le mémo rend le résultat déjà calculé
+#      (~1,1 s gagnée par ré-encodage évité). Vidé à la fin de chaque
+#      transcription : il ne retient jamais de mémoire entre deux appels.
+# Tout s'exécute sur le worker MLX : le mémo n'est jamais partagé entre threads.
+_fast_encoder_cls = None
+_enc_memo = None        # (mel, sortie) de la dernière fenêtre encodée
+
+
+def _fused_attention(q, k, v, n_head: int):
+    import mlx.core as mx
+    b, n, d = q.shape
+    q, k, v = (t.reshape(b, t.shape[1], n_head, -1).transpose(0, 2, 1, 3)
+               for t in (q, k, v))
+    o = mx.fast.scaled_dot_product_attention(q, k, v, scale=(d // n_head) ** -0.5)
+    return o.transpose(0, 2, 1, 3).reshape(b, n, d)
+
+
+def _encoder_class():
+    """Sous-classe de l'encodeur de mlx_whisper (définie à la demande : mlx
+    n'est importé qu'une fois le GPU confirmé)."""
+    global _fast_encoder_cls
+    if _fast_encoder_cls is None:
+        import mlx.core as mx
+        import mlx.nn as nn
+        from mlx_whisper.whisper import AudioEncoder
+
+        class FastAudioEncoder(AudioEncoder):
+            def __call__(self, x):
+                global _enc_memo
+                memo = _enc_memo
+                if (memo is not None and memo[0].shape == x.shape
+                        and memo[0].dtype == x.dtype
+                        and mx.array_equal(memo[0], x).item()):
+                    return memo[1]
+                h = nn.gelu(self.conv1(x))
+                h = nn.gelu(self.conv2(h))
+                assert h.shape[1:] == self._positional_embedding.shape, \
+                    "incorrect audio shape"
+                h = h + self._positional_embedding
+                for blk in self.blocks:
+                    a = blk.attn
+                    y = blk.attn_ln(h)
+                    h = h + a.out(_fused_attention(a.query(y), a.key(y),
+                                                   a.value(y), a.n_head))
+                    h = h + blk.mlp2(nn.gelu(blk.mlp1(blk.mlp_ln(h))))
+                    mx.eval(h)
+                out = self.ln_post(h)
+                mx.eval(out)
+                _enc_memo = (x, out)
+                return out
+
+        _fast_encoder_cls = FastAudioEncoder
+    return _fast_encoder_cls
+
+
+def _accelerate(model) -> None:
+    """Branche l'encodeur accéléré sur un modèle mlx_whisper (idempotent)."""
+    cls = _encoder_class()
+    if type(model.encoder) is not cls:
+        model.encoder.__class__ = cls
+
+
+def _forget_encoding() -> None:
+    global _enc_memo
+    _enc_memo = None
+
+
+def _ensure_model():
+    """Charge (ou retrouve) le modèle GPU, encodeur accéléré branché.
+    Worker MLX uniquement. mlx_whisper.transcribe retrouve ensuite ce même
+    objet dans ModelHolder (même chemin, même type)."""
+    import mlx.core as mx
+    from mlx_whisper.transcribe import ModelHolder
+    model = ModelHolder.get_model(model_ref(), mx.float16)
+    _accelerate(model)
+    return model
+
+
 def _warmup_impl() -> None:
     global _last_use, _kernels_warm
     try:
@@ -522,9 +612,13 @@ def _warmup_impl() -> None:
             # vidage du scratch. (Tout est sur le worker, jamais concurrent.)
             import numpy as np
             import mlx_whisper
+            _ensure_model()
             buf = (np.random.randn(8000).astype(np.float32) * 0.01)
-            mlx_whisper.transcribe(buf, path_or_hf_repo=model_ref(),
-                                   language="fr", fp16=True)
+            try:
+                mlx_whisper.transcribe(buf, path_or_hf_repo=model_ref(),
+                                       language="fr", fp16=True)
+            finally:
+                _forget_encoding()
             _kernels_warm = True
             try:
                 import mlx.core as mx
@@ -535,9 +629,7 @@ def _warmup_impl() -> None:
         else:
             # Rechargements suivants : charger les poids seuls (kernels déjà
             # compilés) -> dictée suivante instantanée, RAM rendue entre-temps.
-            from mlx_whisper.transcribe import ModelHolder
-            import mlx.core as mx
-            ModelHolder.get_model(model_ref(), mx.float16)
+            _ensure_model()
             print("[mlx] modèle GPU rechargé (poids seuls).")
     except Exception as e:
         print(f"[mlx] préchauffe KO (sans gravité) : {e}")
@@ -581,6 +673,7 @@ def _transcribe_impl(a, language, initial_prompt, word_timestamps,
         # de récupération qualité. None (réunion) = défaut 6 niveaux inchangé.
         if temperature is not None:
             kw["temperature"] = temperature
+        _ensure_model()
         return mlx_whisper.transcribe(
             a, path_or_hf_repo=model_ref(), language=language,
             condition_on_previous_text=False,
@@ -588,6 +681,7 @@ def _transcribe_impl(a, language, initial_prompt, word_timestamps,
             word_timestamps=word_timestamps, fp16=True, **kw)
     finally:
         _last_use = time.time()
+        _forget_encoding()
         # v23.1 RAM — libère le POOL de buffers Metal de l'inférence (~590 Mo
         # mesurés) après CHAQUE transcription. Modèle gardé chaud (« active »
         # inchangée), coût mesuré +8 ms. Sûr ici : on est sur le worker, donc
@@ -632,6 +726,7 @@ def loaded() -> bool:
 
 
 def _unload_impl() -> None:
+    _forget_encoding()
     try:
         from mlx_whisper.transcribe import ModelHolder
         ModelHolder.model = None
