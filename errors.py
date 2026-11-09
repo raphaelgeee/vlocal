@@ -36,6 +36,9 @@ class E:
     MIC_DENIED = "mic_denied"              # permission micro refusée
     MIC_DEVICE_FAIL = "mic_device_fail"    # périphérique audio indisponible/déconnecté
     MIC_RECOVERED = "mic_recovered"        # micro récupéré tout seul (repli périphérique explicite)
+    MIC_OVERFLOW = "mic_overflow"          # v1.5 — blocs audio perdus pendant une dictée
+                                           # (dépassement CoreAudio ou file du worker
+                                           # pleine) : un par dictée, compteurs en contexte
     SILENCE = "silence"                    # son capté trop faible (porte d'énergie du moteur)
     # v1.4.4 — le texte vide n'est plus rangé en bloc sous « silence » : une
     # panne moteur rend aussi "", et le message « son très faible » mentait.

@@ -279,9 +279,6 @@ SILENCE_WIN_S = 0.03
 SPEECH_MIN_S = 0.15
 
 
-_QOS_WARNED = False
-
-
 def _qos_user_initiated() -> None:
     """v21 — Place le thread APPELANT en QOS_CLASS_USER_INITIATED (0x19).
     Sur Apple Silicon, la QoS détermine le placement P-core vs E-core : un
@@ -289,18 +286,11 @@ def _qos_user_initiated() -> None:
     2-3x, aléatoire. NB (vérifié, source libpthread Apple) : les workers du
     pool CTranslate2 n'héritent PAS de cette QoS (pthread_create -> DEFAULT
     0x15, déjà éligible P-cores) — l'appel protège le thread PYTHON (GIL,
-    pré/post-traitement, itération du générateur). Best-effort, no-op hors
-    macOS ; EPERM loggé une fois (thread opté-out du système QoS)."""
-    global _QOS_WARNED
-    try:
-        import ctypes
-        err = ctypes.CDLL(None).pthread_set_qos_class_self_np(0x19, 0)
-        if err and not _QOS_WARNED:
-            _QOS_WARNED = True
-            print(f"[qos] pthread_set_qos_class_self_np a renvoyé {err} "
-                  "(thread hors système QoS — placement P-core non garanti).")
-    except Exception:
-        pass
+    pré/post-traitement, itération du générateur). Le primitif (et son
+    journal d'échec) vit dans micworker, qui l'utilise aussi pour ses threads."""
+    if _micworker is not None:
+        _micworker.set_thread_qos(_micworker.QOS_USER_INITIATED)
+
 
 # v15 — Liste noire d'hallucinations Whisper (génériques d'entraînement qui
 # remontent sur les silences/musiques). Regex insensibles à la casse.
@@ -680,6 +670,15 @@ class VlocalEngine:
         # micro fermé au repos. _rec_via_worker = la dictée EN COURS passe par lui.
         self._remote_mic = None
         self._rec_via_worker = False
+        # v1.5 — jeton de la capture en cours : les chunks qui arrivent APRÈS le
+        # relâchement mais AVANT le « stopped » du worker (la fin de la phrase)
+        # lui appartiennent encore ; ceux d'une capture abandonnée, non.
+        self._cap_token = None
+        self._xruns = 0                      # dépassements du chemin in-process
+        self.last_capture_stats = None       # {"xruns","dropped"} de la dernière capture
+        # Appelé (sans argument) quand l'ouverture du micro s'annonce lente
+        # (Bluetooth) : l'app y affiche « connexion du micro ».
+        self.on_mic_connecting = None
         # v15 — faster-whisper WhisperModel n'est PAS thread-safe : deux appels
         # transcribe() concurrents (ex. dictée pendant qu'une réunion se
         # transcrit en fond) peuvent corrompre l'état CTranslate2 ou crasher.
@@ -933,44 +932,48 @@ class VlocalEngine:
         flux MORT pendant l'enregistrement (micro débranché, sortie de veille, casque
         BT coupé) : le callback PortAudio cesse d'être appelé -> cet écart grimpe. Une
         SILENCE normale n'augmente PAS l'écart (le callback livre toujours des
-        échantillons silencieux). Lecture seule (un float -> atomique pour ce garde-fou)."""
+        échantillons silencieux). Lecture seule (un float -> atomique pour ce garde-fou).
+        v1.5 — 0 tant que le PREMIER échantillon n'est pas arrivé : une ouverture
+        Bluetooth de 3 s n'est pas un flux mort."""
         t = getattr(self, "_last_audio_t", 0.0)
         return max(0.0, _time.monotonic() - t) if t else 0.0
 
     def list_input_devices(self) -> list:
-        """v1.0.21 — Index PortAudio des micros disponibles, micro INTÉGRÉ en tête.
-        Sert au repli quand le périphérique par DÉFAUT est coincé ou tenu par une
-        autre app (le défaut peut être « valide » et refuser quand même de s'ouvrir).
-        Best-effort strict : jamais d'exception, liste vide si indisponible."""
+        """v1.0.21 — NOMS des micros disponibles, micro INTÉGRÉ en tête. Sert au
+        repli quand le périphérique par DÉFAUT est coincé ou tenu par une autre
+        app. v1.5 — en mode worker, la liste vient du WORKER (PortAudio à jour
+        après une bascule de périphérique) et les noms y sont résolus ; un index
+        énuméré ici, dans un PortAudio figé à son initialisation, pouvait viser
+        un autre micro. Best-effort strict : liste vide si indisponible."""
+        if _MIC_PROC_ENABLED and _micworker is not None and self._remote_mic is not None:
+            try:
+                return self._remote_mic.list_devices()
+            except _micworker.WorkerUnavailable as e:
+                print(f"[audio] liste des micros via le worker indisponible : {e}")
         try:
             import sounddevice as sd
-            ranked = []
             # v1.0.22 — query_devices() N'EST PAS BORNÉ et c'est précisément
             # l'appel qui fige quand CoreAudio est coincé (un api_guard
             # PortAudioError sur ce chemin a été journalisé le 16/07). On le
             # borne comme les autres appels audio (patron _close_stream_bounded).
             _devs = _call_bounded(sd.query_devices, 1.0, default=None)
-            if _devs is None:
-                print("[audio] énumération des périphériques figée (>1s) -> abandonnée.")
-                return []
-            for i, d in enumerate(_devs):
-                try:
-                    if int(d.get("max_input_channels", 0)) < 1:
-                        continue
-                    nm = str(d.get("name", "")).lower()
-                    builtin = ("macbook" in nm or "built-in" in nm or "intégr" in nm)
-                    ranked.append((0 if builtin else 1, i))
-                except Exception:
-                    continue
-            ranked.sort()
-            return [i for _, i in ranked]
-        except Exception:
+        except Exception as e:
+            print(f"[audio] énumération des périphériques impossible : {e}")
             return []
+        if _devs is None:
+            print("[audio] énumération des périphériques figée (>1s) -> abandonnée.")
+            return []
+        return _micworker.input_names_builtin_first(_devs) if _micworker is not None else []
+
+    def _mic_opening_slow(self) -> None:
+        cb = self.on_mic_connecting
+        if cb is not None:
+            cb()
 
     def start_recording(self, device=None, prefer=None, deadline=None) -> bool:
         """Ouvre le micro et accumule l'audio en arrière-plan. False si déjà en cours.
-        v1.0.21 — `device` (index PortAudio) permet de VISER un micro précis quand le
-        défaut est coincé. `device=None` (défaut) = comportement historique INCHANGÉ.
+        `device` = NOM du micro à viser (v1.5 : résolu dans le worker ; absent ->
+        défaut). `device=None` = micro par défaut du système.
         v1.0.22 — VOIE PRIMAIRE = worker micro (process jetable) : l'app ne touche
         plus PortAudio pour la dictée -> plus JAMAIS corrompue par un device figé.
         `prefer="builtin"` (worker seulement) : résout le micro intégré côté worker
@@ -979,26 +982,41 @@ class VlocalEngine:
         inchangé. Repli in-process automatique si le worker est indisponible."""
         import sounddevice as sd
 
+        token = object()
         with self._lock:
             if self._recording:
                 return False
             self._frames = []
             self._recording = True
             self._rec_via_worker = False
-            self._last_audio_t = _time.monotonic()   # v1.0.11 : horloge « flux vivant »
+            self._cap_token = token
+            self._xruns = 0
+            self.last_capture_stats = None
+            self._last_audio_t = 0.0   # v1.5 : « flux vivant » armé au 1er échantillon
+
+        def _keep(arr):
+            with self._lock:
+                if self._cap_token is token:
+                    self._frames.append(arr)
+                    self._last_audio_t = _time.monotonic()
 
         def _callback(indata, frames, time_info, status):  # noqa: ANN001
             if status:
-                pass  # sur-/sous-charge audio : on continue silencieusement
+                self._xruns += 1   # remonté en fin de capture (mic_overflow)
+            _keep(indata.copy())
+
+        def _abandon():
+            # CRITIQUE : relâcher l'état de capture avant de lever, sinon
+            # _recording resterait True et TOUT start ultérieur renverrait
+            # False (micro bloqué à vie).
             with self._lock:
-                if self._recording:
-                    self._frames.append(indata.copy())
-                    self._last_audio_t = _time.monotonic()   # v1.0.11 : « flux vivant »
+                self._recording = False
+                self._cap_token = None
 
         # ------------------------------------------------------------------
         # v1.0.22 — VOIE PRIMAIRE : worker micro. IMPORTANT : appelé HORS
         # self._lock (contrat anti-deadlock : les premiers chunks peuvent
-        # arriver AVANT l'événement "started" et _on_chunk prend le verrou).
+        # arriver AVANT l'événement "started" et _keep prend le verrou).
         # ------------------------------------------------------------------
         if _MIC_PROC_ENABLED and _micworker is not None:
             rm = self._remote_mic
@@ -1006,61 +1024,54 @@ class VlocalEngine:
                 rm = self._remote_mic = _micworker.RemoteMic(self.sample_rate)
 
             def _on_chunk(b):
-                arr = np.frombuffer(b, dtype=np.float32).copy()
-                with self._lock:
-                    if self._recording:
-                        self._frames.append(arr)
-                        self._last_audio_t = _time.monotonic()
+                _keep(np.frombuffer(b, dtype=np.float32).copy())
 
             _worker_exc = None
-            for _attempt in (1, 2):
-                # v1.0.22 — BUDGET DUR (deadline = time.monotonic() cible) :
-                # l'utilisateur ne doit JAMAIS attendre plus que le budget que
-                # lui accorde l'appelant. Épuisé -> on renonce ICI ; l'appelant
-                # rend la main tout de suite et répare EN FOND pour l'appui
-                # suivant (l'utilisateur réappuie sous ~3 s d'après le terrain).
-                _budget = None
-                if deadline is not None:
-                    _budget = deadline - _time.monotonic()
-                    if _budget <= 0.05:
-                        # CRITIQUE : relâcher l'état de capture avant de lever,
-                        # sinon _recording resterait True et TOUT start ultérieur
-                        # renverrait False (micro bloqué à vie).
+            # v1.5 — L'APPUI GAGNE : pendant tout l'essai, une réparation de
+            # fond lui cède la place au lieu de le faire attendre.
+            with rm.press():
+                for _attempt in (1, 2):
+                    # v1.0.22 — BUDGET DUR (deadline = time.monotonic() cible) :
+                    # l'utilisateur ne doit JAMAIS attendre plus que le budget que
+                    # lui accorde l'appelant (hors ouverture Bluetooth annoncée).
+                    # Épuisé -> on renonce ICI ; l'appelant rend la main et répare
+                    # EN FOND pour l'appui suivant.
+                    _budget = None
+                    if deadline is not None:
+                        _budget = deadline - _time.monotonic()
+                        if _budget <= 0.05:
+                            _abandon()
+                            raise RuntimeError("budget d'ouverture micro épuisé")
+                    try:
+                        rm.start(_on_chunk, device=device, prefer=prefer,
+                                 budget=_budget, on_connecting=self._mic_opening_slow)
                         with self._lock:
-                            self._recording = False
-                        raise RuntimeError("budget d'ouverture micro épuisé")
-                try:
-                    rm.start(_on_chunk, device=device, prefer=prefer,
-                             budget=_budget)
-                    with self._lock:
-                        self._rec_via_worker = True
-                    self._stream = None
-                    return True
-                except _micworker.MicStartError as e:
-                    # Le worker TOURNE mais le device refuse (occupé/absent) :
-                    # échec FRANC remonté à l'escalade app-level (respawn +
-                    # micro intégré), comme le levait le chemin historique.
-                    with self._lock:
-                        self._recording = False
-                    raise RuntimeError(str(e))
-                except _micworker.WorkerUnavailable as e:
-                    # Worker mort ou FIGÉ (déjà tué par RemoteMic) : un respawn
-                    # = process neuf = état CoreAudio neuf -> 2e chance quasi
-                    # certaine. Après 2 échecs de spawn, repli in-process.
-                    _worker_exc = e
-                    if _attempt == 1:
-                        _rsp = None
-                        if deadline is not None:
-                            _rsp = max(0.1, deadline - _time.monotonic())
-                        if rm.respawn(_rsp):
-                            continue
-                    break
+                            self._rec_via_worker = True
+                        self._stream = None
+                        return True
+                    except _micworker.MicStartError as e:
+                        # Le worker TOURNE mais le device refuse (occupé/absent) :
+                        # échec FRANC remonté à l'escalade app-level (respawn +
+                        # micro intégré), comme le levait le chemin historique.
+                        _abandon()
+                        raise RuntimeError(str(e))
+                    except _micworker.WorkerUnavailable as e:
+                        # Worker mort ou FIGÉ (déjà tué par RemoteMic) : un respawn
+                        # = process neuf = état CoreAudio neuf -> 2e chance quasi
+                        # certaine. Après 2 échecs de spawn, repli in-process.
+                        _worker_exc = e
+                        if _attempt == 1:
+                            _rsp = None
+                            if deadline is not None:
+                                _rsp = max(0.1, deadline - _time.monotonic())
+                            if rm.respawn(_rsp):
+                                continue
+                        break
             # v1.0.22 — le repli in-process (open borné 4 s) ne doit être tenté
             # que si le budget le permet : c'est LE chemin qui se corrompt, il
             # n'a pas à faire exploser l'attente de l'utilisateur.
             if deadline is not None and (deadline - _time.monotonic()) <= 0.05:
-                with self._lock:
-                    self._recording = False
+                _abandon()
                 raise RuntimeError(f"micro indisponible ({_worker_exc}), budget épuisé")
             print(f"[micworker] indisponible ({_worker_exc}) -> repli in-process.")
 
@@ -1075,7 +1086,7 @@ class VlocalEngine:
                     dtype="float32",
                     callback=_callback,
                 )
-                if device is not None:      # v1.0.21 — repli micro explicite
+                if device is not None:      # v1.0.21 — repli micro explicite (nom)
                     _kw["device"] = device
                 return sd.InputStream(**_kw)
             # v1.0.9 — ouverture BORNÉE (4 s) : un open figé (device en cours de
@@ -1088,8 +1099,7 @@ class VlocalEngine:
             if self._stream is None:
                 raise RuntimeError("flux micro non créé")
         except Exception:
-            with self._lock:
-                self._recording = False
+            _abandon()
             # Libère un éventuel handle PortAudio (fermeture bornée, sans bloquer).
             _close_stream_bounded(self._stream, 2.0)
             self._stream = None
@@ -1178,7 +1188,8 @@ class VlocalEngine:
             print(f"[whisper] préchargement anticipé KO (sans gravité) : {e}")
 
     def stop_recording(self) -> np.ndarray:
-        """Ferme le micro et renvoie l'audio capturé (float32 mono 16 kHz)."""
+        """Ferme le micro et renvoie l'audio capturé (float32 mono 16 kHz).
+        v1.5 — publie last_capture_stats (dépassements de la capture)."""
         with self._lock:
             if not self._recording:
                 return np.zeros(0, dtype=np.float32)
@@ -1190,13 +1201,17 @@ class VlocalEngine:
         # (borné ; s'il fige, RemoteMic tue le worker — les frames sont déjà
         # ici, rien n'est perdu, et le prochain start respawne). Le process
         # principal ne touche plus PortAudio -> aucun figeage possible ici.
+        # v1.5 — le jeton reste valide pendant ce stop : les derniers chunks
+        # (la fin de la phrase), qui précèdent le « stopped », sont gardés.
+        stats = None
         if via_worker:
             rm = self._remote_mic
             if rm is not None:
                 try:
                     rm.stop()
-                except Exception:
-                    pass
+                    stats = rm.last_stats
+                except Exception as e:   # l'audio est déjà ici : on le rend quand même
+                    print(f"[micworker] arrêt de la capture en échec : {e}")
         else:
             # DICT-05 / v1.0.9 : si le périphérique a disparu (casque débranché,
             # device basculé), stop()/close() peut LEVER ou FIGER. On détache la
@@ -1206,10 +1221,13 @@ class VlocalEngine:
             s = self._stream
             self._stream = None
             _close_stream_bounded(s, 3.0)
+            stats = {"xruns": self._xruns, "dropped": 0}
 
         with self._lock:
+            self._cap_token = None
             chunks = self._frames
             self._frames = []
+        self.last_capture_stats = stats
 
         if not chunks:
             return np.zeros(0, dtype=np.float32)
@@ -1223,21 +1241,21 @@ class VlocalEngine:
         enregistrement n'est en cours."""
         with self._lock:
             self._recording = False
+            self._cap_token = None
             via_worker = self._rec_via_worker
             self._rec_via_worker = False
             s = self._stream
             self._stream = None
+            self._frames = []
         if via_worker:
             rm = self._remote_mic
             if rm is not None:
                 try:
                     rm.stop()   # v1.0.22 : borné, kill si figé — jamais bloquant
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[micworker] annulation de la capture en échec : {e}")
         else:
             _close_stream_bounded(s, 3.0)   # v1.0.9 : fermeture bornée (anti-figeage device)
-        with self._lock:
-            self._frames = []
 
     def reset_audio(self, deep: bool = False) -> bool:
         """v1.0.9 — AUTO-HEAL : remet le sous-système audio de DICTÉE dans un état
@@ -1251,22 +1269,14 @@ class VlocalEngine:
         Coûteux (re-énumère les périphériques) -> réservé au cas où l'ouverture du
         micro a réellement échoué. `deep=False` (défaut) = comportement v1.0.9
         INCHANGÉ (le superviseur, fréquent, reste léger)."""
-        s = None
-        try:
-            with self._lock:
-                self._recording = False
-                via_worker = self._rec_via_worker
-                self._rec_via_worker = False
-                s = self._stream
-                self._stream = None
-                self._frames = []
-        except Exception:
-            via_worker = False
-            try:
-                s = self._stream
-                self._stream = None
-            except Exception:
-                s = None
+        with self._lock:
+            self._recording = False
+            self._cap_token = None
+            via_worker = self._rec_via_worker
+            self._rec_via_worker = False
+            s = self._stream
+            self._stream = None
+            self._frames = []
         _close_stream_bounded(s, 2.5)
         # v1.0.22 — mode worker : le geste profond = RESPAWN du worker (process
         # neuf, état CoreAudio neuf -> récupération GARANTIE et bornée) ; le
@@ -1274,14 +1284,11 @@ class VlocalEngine:
         # de ceinture si le respawn lui-même échoue (env cassé).
         rm = self._remote_mic
         if rm is not None:
-            try:
-                if deep:
-                    return bool(rm.respawn()) or _reinit_portaudio_bounded(3.0)
-                if via_worker:
-                    rm.stop()
-                return True
-            except Exception:
-                pass
+            if via_worker:
+                rm.stop()   # avant tout respawn : RemoteMic refuse de tuer une capture
+            if deep:
+                return bool(rm.respawn()) or _reinit_portaudio_bounded(3.0)
+            return True
         if deep:
             # flux déjà détaché ci-dessus -> ré-init PortAudio sûre, bornée, best-effort.
             # v1.0.21 — On REND le verdict : False = ré-init abandonnée (>3 s, PortAudio
@@ -1291,24 +1298,32 @@ class VlocalEngine:
             return _reinit_portaudio_bounded(3.0)
         return True
 
-    def hard_mic_reset(self, timeout: float = None) -> bool:
+    def _mic_client(self):
+        """Client du worker micro (créé au besoin), ou None hors mode worker."""
+        if not (_MIC_PROC_ENABLED and _micworker is not None):
+            return None
+        if self._remote_mic is None:
+            self._remote_mic = _micworker.RemoteMic(self.sample_rate)
+        return self._remote_mic
+
+    def hard_mic_reset(self, timeout: float = None, wait: bool = True) -> bool:
         """v1.0.22 — LE geste de récupération de l'escalade dictée : en mode
         worker, kill -9 + respawn du process de capture (état CoreAudio NEUF,
         borné ~1 s, toujours efficace — c'est ce que « relancer l'app » faisait
-        à la main) ; sinon repli sur la ré-init in-process historique."""
-        if _MIC_PROC_ENABLED and _micworker is not None:
-            rm = self._remote_mic
-            if rm is None:
-                rm = self._remote_mic = _micworker.RemoteMic(self.sample_rate)
-            try:
-                if rm.respawn(timeout):
-                    return True
-            except Exception:
-                pass
+        à la main) ; sinon repli sur la ré-init in-process historique.
+        v1.5 — `wait=False` : lance le worker neuf sans l'attendre ; l'ouverture
+        qui suit le rejoint (aucune attente fixe prélevée sur le budget de
+        l'appui). Lancé hors appui, le geste cède à un appui qui survient."""
+        rm = self._mic_client()
+        if rm is not None:
+            if rm.respawn(timeout, wait=wait):
+                return True
             # v1.0.22 — sous budget serré, on NE retombe PAS sur la ré-init
             # in-process (3 s de plus, et c'est justement le sous-système
             # corrompu) : le respawn est le seul geste qui répare vraiment.
-            if timeout is not None and timeout <= 2.0:
+            # v1.5 — ni pendant une capture : le respawn l'a épargnée (dictée
+            # enchaînée), le reset profond la jetterait.
+            if not wait or self._recording or (timeout is not None and timeout <= 2.0):
                 return False
         return self.reset_audio(deep=True)
 
@@ -1316,8 +1331,8 @@ class VlocalEngine:
         """v1.0.22 — SANTÉ PROACTIVE : ping du worker micro AU REPOS ; mort ou
         figé -> respawn PRÉVENTIF. Appelé par le superviseur (~10 s, jamais
         pendant une dictée) : un worker coincé est remplacé PENDANT l'inactivité,
-        pas au moment où l'utilisateur appuie -> l'appui part sur un process
-        sain (budget « jamais bloqué > 2 s »). Best-effort silencieux."""
+        pas au moment où l'utilisateur appuie. v1.5 : un appui qui survient
+        pendant ce contrôle a la priorité (RemoteMic.heal lui cède la place)."""
         if not (_MIC_PROC_ENABLED and _micworker is not None):
             return
         rm = self._remote_mic
@@ -1326,37 +1341,31 @@ class VlocalEngine:
         with self._lock:
             if self._recording:
                 return
-        # v1.0.22 — JAMAIS EN CONCURRENCE AVEC UN APPUI : si le verrou du client
-        # worker est déjà pris (une dictée démarre à cet instant), on abandonne
-        # le check immédiatement. Sinon le healthcheck préventif pouvait retenir
-        # l'ouverture du micro de l'utilisateur (jusqu'à ping+respawn).
-        if not rm._lock.acquire(blocking=False):
+        rm.heal()
+
+    def mic_after_wake(self) -> None:
+        """v1.5 — Sortie de veille : CoreAudio a pu redémarrer, le PortAudio du
+        worker décrit un monde disparu. Worker neuf tout de suite, AU REPOS,
+        pour que le premier appui après le réveil n'en paie pas le prix (et ne
+        tombe pas sur l'ancien micro). Sans effet pendant une capture."""
+        rm = self._remote_mic
+        if rm is None or not (_MIC_PROC_ENABLED and _micworker is not None):
             return
-        try:
-            if not rm.healthcheck():
-                print("[micworker] worker mort/figé détecté au repos -> respawn préventif.")
-                rm.respawn()
-        except Exception:
-            pass
-        finally:
-            try:
-                rm._lock.release()
-            except Exception:
-                pass
+        if rm.respawn():
+            print("[micworker] worker micro renouvelé après la veille.")
 
     def prewarm_mic_worker(self) -> None:
         """v1.0.22 — spawne le worker micro À L'AVANCE (au démarrage de l'app,
         en thread) : la 1re dictée n'attend jamais le spawn (~0,5-1 s en app
         gelée). Micro FERMÉ tant qu'aucune dictée ne démarre (pastille orange
-        seulement pendant l'enregistrement). Best-effort silencieux."""
-        if not (_MIC_PROC_ENABLED and _micworker is not None):
+        seulement pendant l'enregistrement)."""
+        rm = self._mic_client()
+        if rm is None:
             return
         try:
-            if self._remote_mic is None:
-                self._remote_mic = _micworker.RemoteMic(self.sample_rate)
-            self._remote_mic.ensure()
+            rm.ensure()
             print("[micworker] worker micro préchauffé.")
-        except Exception as e:
+        except _micworker.WorkerUnavailable as e:
             print(f"[micworker] préchauffage KO ({e}) -> repli in-process au 1er usage.")
 
     def _base_kwargs(self, mode: str) -> dict:
