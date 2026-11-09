@@ -21,6 +21,7 @@ FICHIERS = (
     "reminder_flow.py",
     "dictation.py",
     "meetings.py",
+    "engine_runtime.py",
     "app.py",
 )
 
