@@ -333,10 +333,25 @@ WAKE_SETTLE_S = 2.0
 _wake_observers = []   # jeton de l'observateur : le garder vivant
 
 
+def _renew_mic_after_wake(engine) -> None:
+    """Micro #9 — appelé WAKE_SETTLE_S après la sortie de veille. Au repos :
+    worker micro neuf tout de suite (engine.mic_after_wake). Dictée en cours :
+    mic_after_wake refuserait et ne réessaierait jamais -> on demande un
+    renouvellement au prochain repos (engine.request_mic_renewal)."""
+    try:
+        if engine.recording:
+            log.info("[micworker] réveil pendant une dictée -> renouvellement au prochain repos.")
+            engine.request_mic_renewal()
+        else:
+            engine.mic_after_wake()
+    except Exception:
+        log.warning("[micworker] renouvellement du micro après la veille KO", exc_info=True)
+
+
 def _watch_system_wake(engine) -> None:
-    """v1.5 — Sortie de veille -> worker micro neuf, AU REPOS (engine.
-    mic_after_wake), pour que le premier appui après le réveil n'ouvre ni un
-    PortAudio périmé ni l'ancien micro, et ne paie pas la réparation."""
+    """v1.5 — Sortie de veille -> worker micro neuf, AU REPOS, pour que le
+    premier appui après le réveil n'ouvre ni un PortAudio périmé ni l'ancien
+    micro, et ne paie pas la réparation (cf. _renew_mic_after_wake)."""
     try:
         from AppKit import NSWorkspace, NSWorkspaceDidWakeNotification
     except ImportError as e:
@@ -344,7 +359,7 @@ def _watch_system_wake(engine) -> None:
         return
 
     def _on_wake(_note):
-        t = threading.Timer(WAKE_SETTLE_S, engine.mic_after_wake)
+        t = threading.Timer(WAKE_SETTLE_S, _renew_mic_after_wake, args=(engine,))
         t.daemon = True
         t.start()
 
@@ -405,16 +420,32 @@ def _start_auto_diag():
         log.debug("start : échec ignoré", exc_info=True)
 
 
-def _acquire_single_instance():
+# Fiabilité #11 — relancer Vlocal pendant que l'instance précédente se ferme :
+# son verrou tombe à sa mort (une à quelques secondes de nettoyage). On réessaie
+# donc pendant INSTANCE_RETRY_S avant de conclure qu'une instance VIVANTE tourne.
+INSTANCE_RETRY_S = 4.0
+INSTANCE_RETRY_STEP_S = 0.25
+
+
+def _acquire_single_instance(sleep=time.sleep, clock=time.monotonic):
     """Empêche DEUX instances de Vlocal de tourner : deux raccourcis globaux, deux
     bulles, le même texte inséré deux fois, et la RAM doublée. Renvoie les handles
-    à garder vivants, ou None si une autre instance tourne déjà.
+    à garder vivants, ou None si une autre instance tourne toujours après
+    INSTANCE_RETRY_S (horloge et attente injectables pour les tests).
     v1.3.3 — deux couches (dossier de support ET dossier privé de l'utilisateur,
     indépendant de $HOME), et seul EWOULDBLOCK vaut « déjà lancé » : un HOME sur
     un partage réseau sans flock ne peut plus empêcher Vlocal de s'ouvrir.
     Détail et raisons dans instance_lock.py."""
     import instance_lock
-    return instance_lock.acquire(_APP_SUPPORT)
+    deadline = clock() + INSTANCE_RETRY_S
+    handles = instance_lock.acquire(_APP_SUPPORT)
+    if handles is None:
+        log.info("[vlocal] verrou d'instance tenu -> nouvel essai pendant "
+                 f"{INSTANCE_RETRY_S:.0f} s (instance en cours de fermeture ?).")
+    while handles is None and clock() < deadline:
+        sleep(INSTANCE_RETRY_STEP_S)
+        handles = instance_lock.acquire(_APP_SUPPORT)
+    return handles
 
 
 def _hand_over_to_running_instance():
