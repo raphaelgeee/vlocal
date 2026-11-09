@@ -52,7 +52,9 @@ ASSETS_DIR = BASE_DIR / "assets"
 APP_SUPPORT = Path(os.path.expanduser("~/Library/Application Support/Vlocal"))
 BUNDLE_PATH = APP_SUPPORT / "VlocalNotify.app"
 # Marqueur de version : bump pour forcer une reconstruction du bundle.
-_BUNDLE_VERSION = "1"
+# 2 : glyphe de la barre des menus peint en blanc (l'ancien, noir, était
+# invisible sur le fond charbon de l'icône).
+_BUNDLE_VERSION = "2"
 _BUNDLE_MARKER = APP_SUPPORT / ".notify_bundle_v"
 
 # Résolu paresseusement au premier show() : None = pas encore tenté,
@@ -110,18 +112,43 @@ _APPLESCRIPT = (
 )
 
 
+def _white_glyph(path):
+    """Copie blanche d'une image gabarit (noire sur transparent), ou None.
+    SourceAtop ne peint que là où le glyphe a de l'encre."""
+    from AppKit import (NSColor, NSImage, NSRectFillUsingOperation,
+                        NSCompositingOperationSourceAtop,
+                        NSCompositingOperationSourceOver)
+    from Foundation import NSMakeRect, NSZeroRect
+    src = NSImage.alloc().initWithContentsOfFile_(path)
+    if src is None:
+        return None
+    size = src.size()
+    out = NSImage.alloc().initWithSize_(size)
+    out.lockFocus()
+    try:
+        src.drawAtPoint_fromRect_operation_fraction_(
+            (0, 0), NSZeroRect, NSCompositingOperationSourceOver, 1.0)
+        NSColor.whiteColor().set()
+        NSRectFillUsingOperation(NSMakeRect(0, 0, size.width, size.height),
+                                 NSCompositingOperationSourceAtop)
+    finally:
+        out.unlockFocus()
+    return out
+
+
 def _generate_icon_png(out_path: Path) -> bool:
     """Génère l'icône premium (V blanc sur carré charbon arrondi) en 1024px
-    via rendu off-screen pyobjc. Aucune NSWindow → sûr hors main thread."""
+    via rendu off-screen pyobjc. Aucune NSWindow → sûr hors main thread.
+    Le glyphe est celui de la barre des menus (image gabarit noire) : il est
+    peint en blanc, sinon il disparaîtrait sur le fond charbon."""
     try:
         from AppKit import (NSBitmapImageRep, NSGraphicsContext, NSColor,
-                            NSImage, NSBezierPath,
-                            NSCompositingOperationSourceOver,
+                            NSBezierPath, NSCompositingOperationSourceOver,
                             NSDeviceRGBColorSpace)
         from Foundation import NSMakeRect
     except Exception:
         return False
-    glyph_path = ASSETS_DIR / "vocal-glyph-v-36.png"
+    glyph_path = ASSETS_DIR / "vlocal-menubar-36.png"
     if not glyph_path.exists():
         return False
     try:
@@ -138,7 +165,7 @@ def _generate_icon_png(out_path: Path) -> bool:
             18 / 255, 20 / 255, 28 / 255, 1.0).set()
         NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
             rect, radius, radius).fill()
-        glyph = NSImage.alloc().initWithContentsOfFile_(str(glyph_path))
+        glyph = _white_glyph(str(glyph_path))
         if glyph is not None:
             gw = (SZ - 2 * inset) * 0.52
             gx = (SZ - gw) / 2

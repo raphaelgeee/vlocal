@@ -12,7 +12,6 @@ dist
 dist/
 build
 build/*
-!build/make_icon.py
 *.app/
 *.dmg
 *.pkg

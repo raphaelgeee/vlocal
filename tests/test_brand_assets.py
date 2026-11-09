@@ -14,10 +14,6 @@ sys.path.insert(0, os.path.join(RACINE, "tools"))
 import brand_paths  # noqa: E402
 import make_icon    # noqa: E402
 
-# notifier.py n'appartient pas au lot interface : il dessine encore l'icône de
-# son applet de notification avec l'ancien PNG. Exception tenue à jour ici, à
-# retirer quand notifier.py lira assets/vlocal-menubar-36.png.
-EXCEPTIONS_ANCIENNE_MARQUE = {"notifier.py"}
 
 
 def _png_size(path):
@@ -28,6 +24,10 @@ def _png_size(path):
 
 
 class TestMarque(unittest.TestCase):
+    def test_ancien_glyphe_supprime(self):
+        """notifier.py lit le glyphe de la barre des menus : l'ancien PNG est parti."""
+        self.assertFalse(os.path.exists(os.path.join(RACINE, "assets", "vocal-glyph-v-36.png")))
+
     def test_svg_livres_conformes_a_la_construction(self):
         for path, subpaths in ((make_icon.WORDMARK_SVG, brand_paths.wordmark()),
                                (make_icon.SYMBOL_SVG, brand_paths.symbol())):
@@ -70,7 +70,7 @@ class TestMarque(unittest.TestCase):
                                 text=True, check=True).stdout.split()
         fautifs = []
         for rel in suivis:
-            if rel in EXCEPTIONS_ANCIENNE_MARQUE or rel.startswith("tests/test_brand"):
+            if rel.startswith("tests/test_brand"):
                 continue
             if not rel.endswith((".py", ".html", ".sh", ".spec", ".css", ".svg", ".json")):
                 continue
