@@ -60,6 +60,8 @@ PROTOCOLE (volontairement minuscule) :
       {"ev":"devices","names":[...]} {"ev":"refreshed","reason":"..."}
       {"ev":"volume","value":0.0..1.0|null}   (réponse à {"cmd":"volume"})
       {"ev":"warn","msg":"..."}
+      {"ev":"error","src":"resample","err":"..."} : erreur de FLUX (pas une
+        réponse de commande), signalée une fois par flux, la capture continue
       {"ev":"rerouted","device":nom,"gap_s":s,"reason":"stalled"|"default_changed"}
         (v1.5 — capture rouverte SUR PLACE après la perte du périphérique : le
         flux audio continue dans la même capture, seul le trou gap_s manque)
@@ -395,7 +397,7 @@ class _Outbox:
                     # compris). Signalé une fois par flux.
                     if transform is not self._failed_transform:
                         self._failed_transform = transform
-                        payload = json.dumps({"ev": "error",
+                        payload = json.dumps({"ev": "error", "src": "resample",
                                               "err": f"rééchantillonnage : {e}"[:300]}
                                              ).encode("utf-8")
                         typ = b"J"
@@ -1113,6 +1115,13 @@ class RemoteMic:
         name = ev.get("ev")
         if name == "ready":
             ready.set()
+            return
+        if name == "error" and ev.get("src"):
+            # Erreur de FLUX (rééchantillonnage), pas la réponse à une
+            # commande : journalisée, elle ne doit faire échouer ni une
+            # ouverture en cours ni une liste des micros.
+            print(f"[micworker] {ev.get('err')}")
+            self._payloads["stream_error"] = ev
             return
         if name == "error":
             self._last_error = ev.get("err") or "?"

@@ -233,6 +233,27 @@ class TestReechantillonneur(unittest.TestCase):
         ob.close()
         os.close(w)
 
+    def test_erreur_de_flux_ne_fait_pas_echouer_l_ouverture(self):
+        """Le premier bloc casse le rééchantillonneur : l'ouverture réussit
+        quand même et le flux ne reste pas ouvert après le stop."""
+        sd = FakeSD([device(MAC)], MAC, refuse_rates=(16000,), auto_feed=True)
+        fab = ProcFactory(sd, None)
+        self.addCleanup(fab.shutdown)
+        rm = micworker.RemoteMic(SR, spawn=fab)
+        rm.ensure()
+        casse = micworker.StreamResampler.process_bytes
+        try:
+            micworker.StreamResampler.process_bytes = lambda self, d: 1 / 0
+            rm.start(lambda b: None, budget=2.0)
+            time.sleep(0.3)
+            self.assertEqual(rm.list_devices(), [MAC])
+            rm.stop()
+        finally:
+            micworker.StreamResampler.process_bytes = casse
+        self.assertEqual(rm.last_open["sr_native"], 48000)
+        self.assertIn("rééchantillonnage", rm._payloads["stream_error"]["err"])
+        self.assertTrue(all(s.closed for s in sd.streams))
+
     def test_bloc_vide_ne_produit_rien(self):
         x = np.sin(np.arange(4800, dtype=np.float32) / 10.0)
         a, b = micworker.StreamResampler(48000, 16000), micworker.StreamResampler(48000, 16000)
