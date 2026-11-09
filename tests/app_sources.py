@@ -24,6 +24,7 @@ FICHIERS = (
     "engine_runtime.py",
     "hotkeys.py",
     "api_system.py",
+    "api_settings.py",
     "app.py",
 )
 
