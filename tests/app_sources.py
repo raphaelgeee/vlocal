@@ -19,6 +19,7 @@ FICHIERS = (
     "ui_bridge.py",
     "lifecycle.py",
     "reminder_flow.py",
+    "dictation.py",
     "app.py",
 )
 
