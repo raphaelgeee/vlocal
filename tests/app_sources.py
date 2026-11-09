@@ -27,6 +27,8 @@ FICHIERS = (
     "api_settings.py",
     "api_meetings.py",
     "api_files.py",
+    "api_dictation.py",
+    "api.py",
     "app.py",
 )
 
