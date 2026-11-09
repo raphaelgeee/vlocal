@@ -81,11 +81,11 @@ class TestModeClairDashboard(unittest.TestCase):
 
 class TestModeClairOverlay(unittest.TestCase):
     def test_overlay_html(self):
-        # La pilule passe tout son thème par des jetons (--surface, --ink...) :
+        # La pilule passe tout son thème par des jetons (--ink, --sim-fill...) :
         # le thème clair n'a qu'à les redéfinir.
         html = _lire("dictation_overlay.html")
         clair = html.split('html[data-theme="light"]{', 1)[1].split("}", 1)[0]
-        for jeton in ("--surface:", "--edge:", "--ink:", "--ink-2:", "--rest:", "--accent:", "--alert:"):
+        for jeton in ("--ink:", "--ink-2:", "--accent:", "--alert:", "--sim-fill:", "--sim-edge:", "--sim-light:"):
             self.assertIn(jeton, clair, jeton)
         self.assertIn("window.ovTheme = function", html)
 

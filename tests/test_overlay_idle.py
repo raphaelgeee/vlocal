@@ -3,6 +3,7 @@
 Le script de dictation_overlay.html est exécuté pour de vrai dans JavaScriptCore
 (pyobjc, macOS), sur un DOM minimal : on compte les images demandées
 (requestAnimationFrame) en attente après chaque appel du contrat."""
+import json
 import os
 import re
 import unittest
@@ -15,12 +16,12 @@ except ImportError:          # hors macOS
     JavaScriptCore = None
 
 DOM = r"""
-var __now = 0, __reduced = false;
+var __now = 0, __reduced = false, __geo = [];
 var __raf = {next: 1, pending: {}}, __timers = {}, __tn = 1;
 function El(tag){
   var self = this;
-  this.tagName = tag; this.children = []; this.attrs = {}; this.style = {transform: ''};
-  this.textContent = ''; this.className = '';
+  this.tagName = tag; this.children = []; this.attrs = {}; this.textContent = ''; this.className = '';
+  this.style = {transform: '', _p: {}, setProperty: function(k, v){ this._p[k] = v; }};
   this._cls = {};
   this.classList = {add: function(c){ self._cls[c] = 1; }, remove: function(c){ delete self._cls[c]; },
                     contains: function(c){ return !!self._cls[c]; }};
@@ -29,24 +30,31 @@ El.prototype.setAttribute = function(k, v){ this.attrs[k] = String(v); };
 El.prototype.getAttribute = function(k){ return k in this.attrs ? this.attrs[k] : null; };
 El.prototype.removeAttribute = function(k){ delete this.attrs[k]; };
 El.prototype.appendChild = function(c){ this.children.push(c); return c; };
+// Mesures factices : 7 px par caractère, une ligne de carte = 18 px.
+Object.defineProperty(El.prototype, 'offsetWidth', {get: function(){
+  if(this === __els.ctext) return Math.min(263, 7 * Math.max(__els.ctitle.textContent.length, __els.csub.textContent.length));
+  return 7 * this.textContent.length; }});
+Object.defineProperty(El.prototype, 'offsetHeight', {get: function(){ return __els.csub.textContent ? 36 : 18; }});
 var __els = {};
-['hint', 'ctitle', 'csub', 'done', 'status', 'wave'].forEach(function(id){ __els[id] = new El('div'); });
 var document = {body: new El('body'), documentElement: new El('html'),
-                getElementById: function(id){ return __els[id] || null; },
+                getElementById: function(id){ return __els[id] || (__els[id] = new El('div')); },
                 createElement: function(t){ return new El(t); }};
 document.body.setAttribute('data-state', 'idle');
 var window = this;
 var performance = {now: function(){ return __now; }};
 window.matchMedia = function(q){ return {matches: __reduced}; };
+window.webkit = {messageHandlers: {vlocal: {postMessage: function(m){ __geo.push(m); }}}};
 window.requestAnimationFrame = function(cb){ var id = __raf.next++; __raf.pending[id] = cb; return id; };
 window.cancelAnimationFrame = function(id){ delete __raf.pending[id]; };
 var setTimeout = function(f, ms){ var id = __tn++; __timers[id] = f; return id; };
 var clearTimeout = function(id){ delete __timers[id]; };
 function __pump(n){ for(var i = 0; i < n; i++){ __now += 16; var p = __raf.pending; __raf.pending = {};
   for(var k in p) p[k](__now); } }
+function __runTimers(){ var t = __timers; __timers = {}; for(var k in t) t[k](); }
 function __rafs(){ return Object.keys(__raf.pending).length; }
 function __timersPending(){ return Object.keys(__timers).length; }
 function __bar(i){ return __els.wave.children[i].style.transform; }
+function __last(){ return JSON.stringify(__geo[__geo.length - 1]); }
 """
 
 
@@ -55,8 +63,9 @@ def _script():
         return re.search(r"<script>(.*?)</script>", f.read(), flags=re.S).group(1)
 
 
-@unittest.skipIf(JavaScriptCore is None, "JavaScriptCore (pyobjc) : macOS")
-class TestRepos(unittest.TestCase):
+class _Page(unittest.TestCase):
+    """Le script de la page chargé dans un JSContext neuf."""
+
     def charger(self, reduced=False):
         self.ctx = JavaScriptCore.JSContext.alloc().init()
         self.js(DOM + ("__reduced = true;" if reduced else ""))
@@ -72,6 +81,10 @@ class TestRepos(unittest.TestCase):
 
     def rafs(self):
         return self.js("__rafs()").toInt32()
+
+
+@unittest.skipIf(JavaScriptCore is None, "JavaScriptCore (pyobjc) : macOS")
+class TestRepos(_Page):
 
     def test_rien_ne_tourne_apres_chargement(self):
         self.charger()
@@ -119,9 +132,39 @@ class TestRepos(unittest.TestCase):
         self.charger()
         self.js("ovLang('en'); ovRecording(); ovLocked('Ctrl + Cmd')")
         self.assertEqual(self.js("document.body.getAttribute('data-locked')").toString(), "1")
-        self.assertEqual(self.js("__els.hint.textContent").toString(), "Mic open · Ctrl + Cmd to finish")
+        self.assertEqual(self.js("__els.label.textContent").toString(), "Ctrl + Cmd to finish")
+        self.assertEqual(self.js("__els.status.textContent").toString(), "Mic open · Ctrl + Cmd to finish")
         self.js("ovReset()")
         self.assertTrue(self.js("document.body.getAttribute('data-locked') === null").toBool())
+
+
+@unittest.skipIf(JavaScriptCore is None, "JavaScriptCore (pyobjc) : macOS")
+class TestFormeEnvoyeeAuVerre(_Page):
+    """Chaque état envoie au verre natif la forme qu'il occupe (canal vlocal)."""
+
+    def forme(self, appel):
+        self.js(appel)
+        return json.loads(self.js("__last()").toString())
+
+    def test_formes_par_etat(self):
+        self.charger()
+        self.assertEqual(self.forme("ovReset()"), {"state": "idle", "w": 36, "h": 22, "r": 11})
+        self.assertEqual(self.forme("ovRecording()"), {"state": "recording", "w": 146, "h": 36, "r": 18})
+        verrouille = self.forme("ovLocked('Ctrl + Cmd')")
+        self.assertEqual((verrouille["h"], verrouille["r"]), (36, 18))
+        self.assertGreater(verrouille["w"], 146)
+        self.assertEqual(self.forme("ovTranscribing(2)"), {"state": "transcribing", "w": 56, "h": 36, "r": 18})
+        self.js("__runTimers()")                      # attente longue : le libellé élargit la pilule
+        self.assertGreater(json.loads(self.js("__last()").toString())["w"], 56)
+        resultat = self.forme("ovResult(0.4,true,null,'x')")
+        self.assertEqual((resultat["h"], resultat["r"]), (36, 18))
+        carte = self.forme("ovMicNeeded()")
+        self.assertEqual(carte["state"], "mic")
+        self.assertTrue(220 <= carte["w"] <= 320)
+        self.assertEqual((carte["h"], carte["r"]), (60, 18))
+        for g in json.loads(self.js("JSON.stringify(__geo)").toString()):
+            self.assertEqual(g["w"] % 2, 0, g)        # centrage au pixel entier
+            self.assertLessEqual(g["w"], 340, g)
 
 
 class TestReposCSS(unittest.TestCase):
