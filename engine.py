@@ -28,6 +28,7 @@ import weakref
 import numpy as np
 
 import errors       # journal d'événements (codes stables, best-effort)
+import memory_policy
 import mlx_engine   # backend GPU optionnel (repli CPU auto si indisponible)
 
 
@@ -207,6 +208,9 @@ SILENCE_RMS = 0.012
 # reste très au-dessus du légitime et borne quand même tout vrai figeage.
 DICT_GPU_TIMEOUT_BASE_S = 22.0
 DICT_GPU_TIMEOUT_PER_AUDIO_S = 0.5
+# v1.6 : une erreur GPU levée en moins de 3 s (pas un gel) est retentée une fois
+# sur le GPU avant le repli CPU (cf. VlocalEngine._mlx_text).
+GPU_RETRY_WITHIN_S = 3.0
 
 
 def dictation_gpu_timeout(audio_s: float) -> float:
@@ -841,8 +845,15 @@ class VlocalEngine:
         CPU en ARRIÈRE-PLAN : les dictées suivantes, envoyées au CPU pendant la
         suspension, n'ont plus à payer son chargement (1,6 Go) dans le budget du
         chien de garde. Rien à faire si le GPU reste disponible (simple attente
-        de file) ou si le modèle CPU est déjà là."""
+        de file) ou si le modèle CPU est déjà là.
+        v1.6 — seulement si la mémoire le permet (memory_policy.
+        cpu_preload_allowed : pas de pression, >= 3,3 Go disponibles pour un pic
+        mesuré de 2,25 Go). Sinon rien : imposer 2,2 Go à une machine serrée la
+        ferait swapper ; une dictée qui en a besoin le charge à la demande."""
         if self.model is not None or mlx_engine.status()[0] == "ok":
+            return
+        if not memory_policy.cpu_preload_allowed():
+            print("[whisper] repli CPU non préchargé : mémoire insuffisante.")
             return
         with self._cpu_preload_lock:
             if self._cpu_preloading:
@@ -1850,9 +1861,28 @@ class VlocalEngine:
         # il consommait son propre timeout de 22 s à faire la queue, et déclarait
         # un faux « gel Metal » qui condamnait le GPU pour toute la session.
         _budget = dictation_gpu_timeout(len(audio_np) / float(SAMPLE_RATE))
-        r = mlx_engine.transcribe(audio_np, language="fr", initial_prompt=prompt,
-                                  temperature=(0.0, 0.2, 0.4, 0.6), _timeout=_budget,
-                                  _prio=getattr(mlx_engine, "PRIO_DICTATION", 0))
+        kw = dict(language="fr", initial_prompt=prompt,
+                  temperature=(0.0, 0.2, 0.4, 0.6),
+                  _prio=getattr(mlx_engine, "PRIO_DICTATION", 0))
+        # v1.6 — LE CPU EN DERNIER RECOURS. Une ERREUR GPU rapide (pas un gel :
+        # TimeoutError garde la suspension) envoyait la dictée au CPU : chargement
+        # du turbo int8 (14 s disque froid mesuré, 2,2 Go) puis ~9 s d'inférence
+        # pour 4 s d'audio. Un second essai sur un worker MLX neuf coûte ~1,3 s
+        # (modèle conservé). Une seule fois, dans le même budget : le chien de
+        # garde de finalisation n'attend jamais plus qu'avant.
+        t0 = _time.monotonic()
+        try:
+            r = mlx_engine.transcribe(audio_np, _timeout=_budget, **kw)
+        except TimeoutError:
+            raise
+        except Exception as e:
+            spent = _time.monotonic() - t0
+            if spent > GPU_RETRY_WITHIN_S or not mlx_engine.available():
+                raise
+            print(f"[mlx] erreur GPU ({type(e).__name__}: {e}) -> second essai "
+                  "sur un worker neuf avant le CPU.")
+            mlx_engine.renew_worker()
+            r = mlx_engine.transcribe(audio_np, _timeout=_budget - spent, **kw)
         # v3.3.1 — aligne la dictée sur le chemin réunion : collapse_repetition_loops
         # supprime les queues parasites (« 3 3 3 », « 4. ») sur les fins en silence.
         # Post-traitement texte uniquement : zéro impact vitesse / RAM, qualité ↑.

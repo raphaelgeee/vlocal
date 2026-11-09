@@ -321,9 +321,12 @@ class WarmupMarkersTests(MlxStateCase):
         super().setUp()
         self.assertTrue(mlx_engine.available())
         mlx_engine._kernels_warm = False
-        p = mock.patch.object(mlx_engine, "loaded", lambda: False)
-        p.start()
-        self.addCleanup(p.stop)
+        # v1.6 : la préchauffe charge le modèle (encodeur accéléré) avant
+        # l'inférence à blanc ; les modules mlx factices n'ont pas de modèle.
+        for p in (mock.patch.object(mlx_engine, "loaded", lambda: False),
+                  mock.patch.object(mlx_engine, "_ensure_model", lambda: None)):
+            p.start()
+            self.addCleanup(p.stop)
 
     def _warmup_raising(self, exc):
         def boom(*a, **k):
@@ -509,7 +512,11 @@ class DictationOutcomeTests(unittest.TestCase):
         self.gpu.update(available=True, status=("suspended", "gel"),
                         result=TimeoutError("transcription MLX figée"))
         self.eng.model = None               # GPU actif : turbo CPU jamais chargé
-        with mock.patch.object(self.eng, "load_model") as load:
+        # v1.6 : préchargement soumis à la mémoire disponible ; ici, on teste
+        # le déclenchement, pas la mémoire de la machine qui lance les tests.
+        with mock.patch.object(engine.memory_policy, "cpu_preload_allowed",
+                               return_value=True), \
+                mock.patch.object(self.eng, "load_model") as load:
             self.eng.transcribe_window(self.LOUD)
             for t in threading.enumerate():
                 if t.name == "cpu-fallback-preload":
