@@ -23,6 +23,7 @@ Optimisations Whisper actives (cf. brief v15) :
 import os
 import re
 import threading
+import weakref
 
 import numpy as np
 
@@ -213,28 +214,51 @@ def dictation_gpu_timeout(audio_s: float) -> float:
     return DICT_GPU_TIMEOUT_BASE_S + DICT_GPU_TIMEOUT_PER_AUDIO_S * max(0.0, float(audio_s))
 
 
-# v1.4.4 : RÉSERVE DU REPLI CPU dans le budget de finalisation. Après un gel GPU
-# (budget dictation_gpu_timeout entièrement consommé), le repli doit encore
-# charger le turbo int8 (1,6 Go ; ~0,7 s page cache chaud, plusieurs secondes sur
-# un Mac 8 Go au cache évincé, small en plus pour la cascade) puis transcrire
-# (~7x temps réel mesuré pour turbo CPU, cascade small -> turbo au pire). Le chien
-# de garde de l'app ne lui laissait que 3 s : la dictée était perdue. Le budget
-# est un PLAFOND (il ne retarde que la récupération d'un vrai gel), on le prend
-# donc large et toujours chargement compris : l'état chargé du modèle peut
-# changer entre le calcul et le repli (déchargement à l'inactivité).
-CPU_FALLBACK_LOAD_S = 15.0          # chargement turbo (+ small) à froid
-CPU_FALLBACK_BASE_S = 5.0           # amorçage de l'inférence, VAD, post-traitement
-CPU_FALLBACK_PER_AUDIO_S = 0.5      # cascade small + turbo au pire, machine chargée
+# v1.4.4 : BUDGET DE TRANSCRIPTION D'UNE DICTÉE, calculé sur le chemin RÉEL.
+# Le chien de garde de l'app ne laissait que 3 s au repli CPU après un gel GPU :
+# chargement du turbo int8 compris, la dictée était perdue. À l'inverse, compter
+# toujours GPU + chargement CPU gonflait le plafond (50 s pour 5 s d'audio) et
+# retardait d'autant la récupération d'un vrai gel. On n'ajoute donc :
+#   - le budget GPU que si la dictée PARTIRA sur le GPU (status « ok », ou
+#     « unknown » : la 1re sonde peut le valider) — rien sur Intel ni pendant
+#     une suspension ou un délai de nouvel essai, où la dictée va au CPU ;
+#   - le chargement du turbo CPU que s'il n'est pas déjà en mémoire
+#     (~0,7 s page cache chaud, quelques secondes sur un Mac 8 Go au cache
+#     évincé ; small en plus pour la cascade) ;
+#   - toujours l'inférence CPU (repli après un gel, ou moteur principal) :
+#     turbo CPU ~7x temps réel mesuré, cascade small -> turbo au pire.
+CPU_FALLBACK_LOAD_S = 8.0           # chargement turbo (+ small) à froid
+CPU_FALLBACK_BASE_S = 2.0           # amorçage de l'inférence, VAD, post-traitement
+CPU_FALLBACK_PER_AUDIO_S = 0.3      # cascade small + turbo, machine chargée
+
+# Instance vivante du moteur (une par app) : finalize_budget_s y lit l'état du
+# modèle CPU sans que l'app ait à le lui passer. Référence faible : n'allonge
+# pas la vie de l'instance.
+_ENGINE_REF = None
 
 
-def finalize_budget_s(audio_s: float) -> float:
+def _cpu_model_resident() -> bool:
+    eng = _ENGINE_REF() if _ENGINE_REF is not None else None
+    return eng is not None and eng.model is not None
+
+
+def finalize_budget_s(audio_s: float, cpu_loaded: "bool | None" = None) -> float:
     """Temps dont la transcription d'une dictée de `audio_s` secondes peut avoir
-    besoin au pire : tentative GPU complète (dictation_gpu_timeout) puis repli
-    CPU (chargement du modèle + inférence). Ne couvre PAS la fusion et
-    l'insertion côté app, qui ajoute sa propre marge. Fonction pure."""
+    besoin au pire sur le chemin qu'elle prendra (cf. bloc ci-dessus). Ne couvre
+    PAS la fusion et l'insertion côté app, qui ajoute sa propre marge.
+    `cpu_loaded` : état du turbo CPU ; None = lu sur l'instance du moteur.
+    Sans effet de bord (mlx_engine.status ne sonde rien)."""
     audio_s = max(0.0, float(audio_s))
-    return (dictation_gpu_timeout(audio_s) + CPU_FALLBACK_LOAD_S
-            + CPU_FALLBACK_BASE_S + CPU_FALLBACK_PER_AUDIO_S * audio_s)
+    if cpu_loaded is None:
+        cpu_loaded = _cpu_model_resident()
+    budget = CPU_FALLBACK_BASE_S + CPU_FALLBACK_PER_AUDIO_S * audio_s
+    if mlx_engine.status()[0] in ("ok", "unknown"):
+        budget += dictation_gpu_timeout(audio_s)
+    if not cpu_loaded:
+        budget += CPU_FALLBACK_LOAD_S
+    return budget
+
+
 SILENCE_SEARCH_S = 8.0   # fenêtre de recherche d'un silence après la cible
 
 # Garde-fous anti-hallucination sur silence/bruit faible (RMS gate amont).
@@ -613,6 +637,8 @@ class VlocalEngine:
         # de « panne moteur » (transcribe renvoie "" dans les deux cas). Notée par
         # thread pendant la transcription (le live-tail transcrit en parallèle sur
         # son propre thread), publiée sous verrou à la fin de stop_and_transcribe.
+        global _ENGINE_REF
+        _ENGINE_REF = weakref.ref(self)
         self._outcome_tls = threading.local()
         self._outcome_lock = threading.Lock()
         self._last_backend = ""
@@ -801,6 +827,10 @@ class VlocalEngine:
         def _go():
             try:
                 self.load_model()
+                # Marque l'activité : sinon l'idle-unloader de l'app, qui juge sur
+                # last_use, rendrait aussitôt le modèle qu'on vient de charger. C'est
+                # aussi lui qui le décharge une fois le GPU revenu (plus d'usage CPU).
+                self.last_use = _time.time()
                 print("[whisper] repli CPU préchargé après un gel GPU.")
             except Exception as e:
                 print(f"[whisper] préchargement du repli CPU KO : {e}")
@@ -1892,12 +1922,11 @@ class VlocalEngine:
                 segments, info = model.transcribe(audio_np, **kwargs)
                 pieces = [seg.text for seg in segments]
             except Exception as e:
-                # Le contrat visible reste "" (l'app gère le vide) ; la cause va
-                # au journal et à last_empty_reason pour ne plus la confondre
-                # avec un silence.
+                # Le contrat visible reste "" ; la cause passe par
+                # last_empty_reason, que l'app journalise UNE fois par appui (et
+                # seulement si la transcription FINALE a échoué : une cascade
+                # rattrapée par small n'est pas un échec).
                 print(f"[engine] transcribe échec : {e}")
-                errors.log(errors.E.TRANSCRIBE_FAIL, backend="cpu",
-                           error=type(e).__name__, detail=str(e)[:120])
                 self._note("", "fail")
                 return ""
         finally:

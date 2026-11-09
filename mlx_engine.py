@@ -68,6 +68,25 @@ _retry_n = 0          # essais ratés consécutifs (indexe _RETRY_DELAYS_S)
 # « library » ou « gpu » n'importe quelle erreur de chargement Python.
 _METAL_ERROR_MARKERS = ("metal", "command buffer", "no stream")
 
+# v1.4.4 — LA SONDE NE TOURNE JAMAIS SANS BORNE SUR LE THREAD APPELANT. Elle
+# exécute un kernel Metal : sur un GPU qui gèle, elle gèle aussi. Or available()
+# est appelé par le thread qui DICTE. Règles :
+#   - toute sonde tourne sur un thread dédié « mlx-probe », une seule à la fois
+#     (_avail_lock + _probe_running) ;
+#   - NOUVEL ESSAI : available() renvoie False tout de suite et lance la sonde en
+#     fond ; le verdict vaut pour l'appel suivant (la dictée en cours part sur le
+#     CPU, comme pendant tout le délai) ;
+#   - 1re SONDE de la session : l'appelant attend le verdict, borné par
+#     _FIRST_PROBE_TIMEOUT_S. Elle a lieu au démarrage, en fond (construction
+#     du moteur) ; l'attendre évite de charger pour rien le turbo CPU (1,6 Go)
+#     sur une machine dont le GPU marche. Borne large : elle couvre aussi
+#     l'import à froid de mlx_whisper (plusieurs secondes sur disque froid) ;
+#   - une sonde qui dépasse sa borne compte comme un échec (palier suivant).
+#     Son thread, s'il reste coincé dans Metal, n'est pas doublé : tant qu'il
+#     vit, chaque essai dû échoue sans relancer de kernel.
+_PROBE_TIMEOUT_S = 4.0
+_FIRST_PROBE_TIMEOUT_S = 20.0
+
 
 def _now() -> float:
     """Horloge des délais de suspension et de nouvel essai (simulée en test)."""
@@ -93,6 +112,13 @@ def _short(text: str, limit: int = 80) -> str:
 # Cela sérialise aussi naturellement les opérations (plus besoin de verrou).
 import threading as _threading
 import queue as _queue
+
+_avail_lock = _threading.RLock()   # verdict, sonde en cours, gels (réentrant :
+                                    # _gpu_strike -> _force_cpu -> _set_unavailable)
+_probe_running = False
+_probe_done = _threading.Event()
+_probe_thread = None
+_probe_gen = 0                     # incrémenté par reset_availability (verdict périmé)
 
 _mlx_jobs = _queue.PriorityQueue()
 _mlx_worker = None
@@ -216,17 +242,19 @@ def _set_unavailable(reason: str, final_state: str = "",
     définitif pour la session ; sinon un nouvel essai est programmé selon
     _RETRY_DELAYS_S (au moins min_delay)."""
     global _available, _final_state, _state_reason, _retry_at, _retry_n
-    _available = False
-    _final_state = final_state
-    _state_reason = reason
-    if final_state:
-        msg = f"MLX indisponible ({reason}) -> moteur CPU pour la session."
-    else:
-        delay = max(min_delay, _RETRY_DELAYS_S[min(_retry_n, len(_RETRY_DELAYS_S) - 1)])
-        _retry_n += 1
-        _retry_at = _now() + delay
-        msg = (f"MLX indisponible ({reason}) -> moteur CPU, "
-               f"nouvel essai dans {delay / 60:.0f} min.")
+    with _avail_lock:
+        _available = False
+        _final_state = final_state
+        _state_reason = reason
+        if final_state:
+            msg = f"MLX indisponible ({reason}) -> moteur CPU pour la session."
+        else:
+            delay = max(min_delay,
+                        _RETRY_DELAYS_S[min(_retry_n, len(_RETRY_DELAYS_S) - 1)])
+            _retry_n += 1
+            _retry_at = _now() + delay
+            msg = (f"MLX indisponible ({reason}) -> moteur CPU, "
+                   f"nouvel essai dans {delay / 60:.0f} min.")
     print(f"[mlx] {msg}")
     _diag(msg)
 
@@ -262,18 +290,20 @@ def _gpu_strike(reason: str, *, dictation: bool = True) -> None:
     charge) suspend seulement : il ne dit rien de la fiabilité de la dictée et
     faisait basculer des machines saines après une longue réunion."""
     global _gpu_suspended_until, _gpu_strikes, _gpu_suspend_reason
-    now = _now()
-    if dictation:
-        _gpu_strikes = [t for t in _gpu_strikes if now - t < _GPU_STRIKE_WINDOW_S] + [now]
-        if len(_gpu_strikes) >= _GPU_MAX_STRIKES:
-            _force_cpu(f"{reason}, {len(_gpu_strikes)} gels de dictée en moins d'une heure",
-                       min_delay=_FORCE_CPU_RETRY_S)
-            return
-        tally = f"gel de dictée {len(_gpu_strikes)}/{_GPU_MAX_STRIKES}"
-    else:
-        tally = "gel hors dictée, non compté"
-    _gpu_suspended_until = now + _GPU_COOLDOWN_S
-    _gpu_suspend_reason = reason
+    with _avail_lock:
+        now = _now()
+        if dictation:
+            _gpu_strikes = [t for t in _gpu_strikes
+                            if now - t < _GPU_STRIKE_WINDOW_S] + [now]
+            if len(_gpu_strikes) >= _GPU_MAX_STRIKES:
+                _force_cpu(f"{reason}, {len(_gpu_strikes)} gels de dictée "
+                           "en moins d'une heure", min_delay=_FORCE_CPU_RETRY_S)
+                return
+            tally = f"gel de dictée {len(_gpu_strikes)}/{_GPU_MAX_STRIKES}"
+        else:
+            tally = "gel hors dictée, non compté"
+        _gpu_suspended_until = now + _GPU_COOLDOWN_S
+        _gpu_suspend_reason = reason
     msg = f"GPU suspendu {_GPU_COOLDOWN_S / 60:.0f} min ({reason}), {tally}"
     print(f"[mlx] {msg}")
     _diag(msg)
@@ -347,33 +377,96 @@ def _probe() -> tuple[str, str]:
     return "ok", ""
 
 
+def _run_probe_bounded(timeout: float) -> tuple[str, str]:
+    """Exécute _probe sur un thread dédié et attend au plus `timeout` s."""
+    global _probe_thread
+    if _probe_thread is not None and _probe_thread.is_alive():
+        return "retry", "sonde précédente toujours figée dans Metal"
+    box = {}
+    done = _threading.Event()
+
+    def _go():
+        try:
+            box["verdict"] = _probe()
+        finally:
+            done.set()
+
+    _probe_thread = _threading.Thread(target=_go, name="mlx-probe", daemon=True)
+    _probe_thread.start()
+    if not done.wait(timeout):
+        return "retry", f"sonde Metal figée (>{timeout:.0f}s)"
+    return box.get("verdict", ("retry", "sonde interrompue"))
+
+
+def _apply_verdict(gen: int, state: str, reason: str) -> None:
+    """Applique le verdict d'une sonde et libère le créneau « sonde en cours ».
+    Un verdict d'avant reset_availability() est ignoré (cause peut-être levée)."""
+    global _available, _retry_n, _state_reason, _probe_running
+    with _avail_lock:
+        _probe_running = False
+        _probe_done.set()
+        if gen != _probe_gen:
+            return
+        if state != "ok":
+            _set_unavailable(reason, final_state="" if state == "retry" else state)
+            return
+        _available = True
+        _retry_n = 0
+        _state_reason = ""
+    _diag(f"MLX DISPONIBLE (GPU Metal vérifié — probe OK). modèle={model_ref()}")
+
+
+def _probe_and_apply(gen: int, timeout: float) -> None:
+    state, reason = _run_probe_bounded(timeout)
+    _apply_verdict(gen, state, reason)
+
+
 def available() -> bool:
     """True si le backend GPU MLX est utilisable. Repli silencieux total :
     False -> moteur CPU. Verdict positif mis en cache ; verdict négatif
     définitif ou re-sondé après délai (cf. _RETRY_DELAYS_S). Pendant une
-    suspension ou un délai d'attente, renvoie False sans rien sonder."""
-    global _available, _gpu_suspended_until, _retry_n, _state_reason
-    if _available:
-        if _gpu_suspended_until:
+    suspension ou un délai d'attente, renvoie False sans rien sonder. Ne
+    bloque jamais plus que la 1re sonde bornée (cf. _PROBE_TIMEOUT_S)."""
+    global _gpu_suspended_until, _probe_running
+    with _avail_lock:
+        if _available:
+            if not _gpu_suspended_until:
+                return True
             if _now() < _gpu_suspended_until:
                 return False
             _gpu_suspended_until = 0.0
-            print("[mlx] fin de suspension : GPU réactivé.")
-            _diag("fin de suspension : GPU réactivé.")
+            resumed = True
+        else:
+            resumed = False
+            if _available is False and (_final_state or _now() < _retry_at):
+                return False
+            first = _available is None
+            if _probe_running:
+                if not first:
+                    return False
+                launch = False          # 1re sonde déjà partie : on attend son verdict
+            else:
+                _probe_running = True
+                _probe_done.clear()
+                launch = True
+            gen = _probe_gen
+            previous = _state_reason
+    if resumed:
+        print("[mlx] fin de suspension : GPU réactivé.")
+        _diag("fin de suspension : GPU réactivé.")
         return True
-    if _available is False:
-        if _final_state or _now() < _retry_at:
-            return False
-        _diag(f"nouvel essai GPU (précédent : {_state_reason}).")
-    state, reason = _probe()
-    if state != "ok":
-        _set_unavailable(reason, final_state="" if state == "retry" else state)
+    if not first:
+        _diag(f"nouvel essai GPU en fond (précédent : {previous}).")
+        _threading.Thread(target=_probe_and_apply, args=(gen, _PROBE_TIMEOUT_S),
+                          name="mlx-probe-retry", daemon=True).start()
         return False
-    _available = True
-    _retry_n = 0
-    _state_reason = ""
-    _diag(f"MLX DISPONIBLE (GPU Metal vérifié — probe OK). modèle={model_ref()}")
-    return True
+    if launch:
+        _probe_and_apply(gen, _FIRST_PROBE_TIMEOUT_S)
+    else:
+        _probe_done.wait(_FIRST_PROBE_TIMEOUT_S + 1.0)
+    with _avail_lock:
+        return bool(_available) and not (_gpu_suspended_until
+                                         and _now() < _gpu_suspended_until)
 
 
 def status() -> tuple[str, str]:
@@ -405,13 +498,17 @@ def reset_availability(reason: str) -> None:
     cache) est conservé : l'oublier ferait chercher le modèle dans le bundle
     seulement, et le refus reviendrait."""
     global _available, _final_state, _state_reason, _retry_at, _retry_n, _model_ref
-    if _model_ref is not None and not os.path.exists(os.path.join(_model_ref, "config.json")):
-        _model_ref = None
-    _available = None
-    _final_state = ""
-    _state_reason = ""
-    _retry_at = 0.0
-    _retry_n = 0
+    global _probe_gen
+    with _avail_lock:
+        if _model_ref is not None and not os.path.exists(
+                os.path.join(_model_ref, "config.json")):
+            _model_ref = None
+        _available = None
+        _final_state = ""
+        _state_reason = ""
+        _retry_at = 0.0
+        _retry_n = 0
+        _probe_gen += 1
     _diag(f"verdict GPU réinitialisé ({reason}) : nouvelle sonde au prochain usage.")
 
 
