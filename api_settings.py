@@ -178,7 +178,15 @@ class SettingsApi:
                 pass
         _dl_in_flight = True
         try:
-            model_store.download_models(progress=_prog)   # lève si échec définitif -> _api_safe renvoie le default
+            try:
+                model_store.download_models(progress=_prog)
+            except model_store.DownloadError as e:
+                # Disque plein pendant le téléchargement : le dire clairement plutôt
+                # que le message générique « vérifiez votre connexion ».
+                if e.code == "no_space":
+                    return {"ok": False, "error": "Espace disque insuffisant : "
+                            "libérez environ 3 Go puis réessayez."}
+                raise   # autre échec définitif : _api_safe renvoie le message par défaut
             if not _finish_model_download():
                 # S1 — DL « réussi » mais moteur introuvable : NE PAS débloquer en silence,
                 # remonter une erreur -> l'écran préparation montre Réessayer.

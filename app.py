@@ -82,7 +82,6 @@ os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
 
 import appstate  # noqa: E402  (après le verrou hors-ligne, comme tout ce qui suit)
 import telemetry  # noqa: E402
-import updater  # noqa: E402
 from api import Api  # noqa: E402
 from engine_runtime import (  # noqa: E402
     _choose_whisper_dir,
@@ -98,7 +97,7 @@ from lifecycle import (  # noqa: E402
     _start_auto_diag,
 )
 from settings import _load_settings, _save_settings, _setup_file_logging  # noqa: E402
-from startup import after_start  # noqa: E402
+from startup import after_start, on_main_window_loaded, settle_pending_update  # noqa: E402
 from storage import Store  # noqa: E402
 from window_mac import (  # noqa: E402
     _purge_webkit_cache_on_update,
@@ -170,13 +169,13 @@ def main():
     cpu_threads = _cpu_threads()
     _open_store()
 
-    # v1.0.5 — AUTO-RÉPARATION MAJ : si on tourne, on a démarré depuis
-    # /Applications/Vlocal.app ; tout reste d'une MAJ (backup/incoming) est donc
-    # périmé -> on le retire pour GARANTIR une seule version/icône.
-    try:
-        updater.cleanup_leftovers()
-    except Exception as _e:
-        print(f"[update] cleanup au démarrage ignoré : {_e}")
+    # Mise à jour en attente : confirmation, retour arrière ou nettoyage. Un
+    # retour arrière lancé impose de sortir : l'installateur attend notre mort.
+    # La boucle Cocoa ne tourne pas encore, _quit_app() (qui passe par elle)
+    # n'aurait aucun effet : on sort directement, base fermée.
+    if settle_pending_update():
+        _close_store()
+        sys.exit(0)
     _purge_webkit_cache_on_update()   # avant toute WKWebView (tableau de bord, overlay)
 
     # Paramètres du chargement différé du moteur (lancé par startup.after_start).
@@ -189,11 +188,19 @@ def main():
     _start_telemetry()
     _start_auto_diag()   # v1.0.11 — diagnostic auto consenti (cohorte early/testeurs)
     create_main_window(webview, HTML_PATH, appstate.api)
+    try:
+        appstate.window.events.loaded += on_main_window_loaded
+    except Exception as e:
+        print(f"[update]  confirmation du démarrage non branchée : {e}")
 
     webview.start(after_start)
-    # Sortie par fin de boucle Cocoa (fermeture sans passer par « Quitter ») :
-    # fermeture PROPRE de la base (WAL tronqué). Store.close() est idempotent,
-    # le double appel avec _on_quit est sûr.
+    # Sortie par fin de boucle Cocoa (fermeture sans passer par « Quitter »).
+    _close_store()
+
+
+def _close_store():
+    """Fermeture PROPRE de la base (WAL tronqué). Store.close() est idempotent :
+    le double appel avec le nettoyage de sortie (_perform_quit) est sûr."""
     try:
         if appstate.store:
             appstate.store.close()

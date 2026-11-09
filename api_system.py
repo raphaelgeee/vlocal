@@ -35,7 +35,7 @@ class SystemApi:
         cur = appstate.app_version
         out = {"current": cur, "latest": cur, "update": False, "offline": False,
                "url": "https://www.vlocal.org/telecharger", "notes": "", "message": "",
-               "length": 0}
+               "length": 0, "sha256": None}
         url = edge_url("get-latest-version")
         try:
             req = _u.Request(url)
@@ -53,12 +53,16 @@ class SystemApi:
                 out["length"] = int(d.get("length") or 0)
             except Exception:
                 out["length"] = 0
+            # Empreinte du DMG publiée avec la version : updater.download la vérifie.
+            out["sha256"] = d.get("sha256")
+            # Une version qui a déjà échoué à démarrer sur ce Mac (retour arrière)
+            # n'est plus proposée : l'app bouclerait sur la même panne.
             try:
                 pa = [int(x) for x in latest.split(".")]
                 pb = [int(x) for x in cur.split(".")]
-                out["update"] = pa > pb
+                out["update"] = pa > pb and not updater.is_blocked(latest)
             except Exception:
-                out["update"] = (latest != cur)
+                out["update"] = (latest != cur) and not updater.is_blocked(latest)
         except Exception:
             out["offline"] = True
         return out
@@ -71,7 +75,7 @@ class SystemApi:
           setUpdateProgress(frac,label) / updateStage(name) /
           updateReady(version) / updateError(msg).
         Rien n'est installé ici : c'est update_apply() qui déclenche le swap."""
-        global _update_busy, _update_staged
+        global _update_busy
         if _update_busy:
             return {"ok": False, "busy": True}
         info = self.check_updates()
@@ -102,14 +106,17 @@ class SystemApi:
                         % json.dumps(name))
 
                 _stage("download")
-                dmg = updater.download(url, length, ver, on_progress=_prog)
-                staged = updater.verify_and_stage(dmg, on_stage=_stage)
+                dmg = updater.download(url, length, ver, on_progress=_prog,
+                                       sha256=info.get("sha256"))
+                staged = updater.verify_and_stage(dmg, on_stage=_stage,
+                                                  expected_version=ver,
+                                                  current_version=appstate.app_version)
                 _update_staged = staged
                 _ui("if(typeof updateReady==='function') updateReady(%s);"
                     % json.dumps(ver))
             except updater.UpdateError as e:
                 _ui("if(typeof updateError==='function') updateError(%s);"
-                    % json.dumps(str(e)))
+                    % json.dumps(e.message(appstate.ui_lang)))
             except Exception as e:  # noqa: BLE001
                 print(f"[update] prepare KO : {e}")
                 _ui("if(typeof updateError==='function') updateError(%s);"
@@ -125,14 +132,13 @@ class SystemApi:
         attend la mort de l'app, remplace le bundle en 2 renames atomiques —
         JAMAIS deux versions — puis ROUVRE Vlocal à jour), affiche « Vlocal va
         se fermer » et termine ce process. Les modèles ne sont pas touchés."""
-        global _update_staged
         staged = _update_staged
         if not staged or not os.path.isdir(staged):
             return {"ok": False, "error": _te("Mise à jour non préparée.")}
         try:
-            updater.apply_update(staged, os.getpid())
+            updater.apply_update(staged, os.getpid(), from_version=appstate.app_version)
         except updater.UpdateError as e:
-            return {"ok": False, "error": str(e)}
+            return {"ok": False, "error": e.message(appstate.ui_lang)}
         except Exception as e:  # noqa: BLE001
             print(f"[update] apply KO : {e}")
             return {"ok": False, "error": _te("L'installation a échoué.")}

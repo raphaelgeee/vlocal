@@ -18,6 +18,7 @@ import model_store
 import notifier
 import overlay
 import permissions
+import updater
 from engine_runtime import _load_engine_async, _post_startup_model_checks
 from hotkeys import start_global_hotkey
 from lifecycle import _arm_freeze_watchdog, _lifecycle_show, _register_quit_hook
@@ -30,9 +31,58 @@ from ui_bridge import (
     _refresh_lists_ui,
     _refresh_menubar,
     _schedule_overlay_hide,
+    _toast,
     _ui,
 )
 from window_mac import _force_clear_window, _set_dock_visible
+
+# Version abandonnée par un retour arrière automatique, annoncée à l'utilisateur
+# au premier chargement de la fenêtre (le message ne peut pas partir avant).
+_rollback_notice = None
+
+
+def settle_pending_update():
+    """Au lancement, avant la fenêtre : décide du sort d'une mise à jour en
+    attente (updater.cleanup_leftovers : confirmation, retour arrière, blocage)
+    et nettoie les restes. Renvoie True quand un retour arrière vient d'être
+    lancé : l'installateur attend la mort de ce processus pour remettre
+    l'ancienne version et la relancer, l'app doit donc se fermer tout de suite."""
+    global _rollback_notice
+    rep = updater.cleanup_leftovers(appstate.app_version)   # ne lève jamais
+    status = rep.get("status")
+    if status == "rollback_started":
+        print(f"[update]  la version {rep.get('version')} n'a pas confirmé son "
+              "démarrage : retour arrière lancé, fermeture.")
+        return True
+    if status == "rolled_back":
+        _rollback_notice = rep.get("version")
+    elif status == "failed":
+        # L'app en place est intacte ; le détail est déjà au journal d'updater.
+        print(f"[update]  mise à jour vers {rep.get('version')} non aboutie "
+              f"({rep.get('reason')}) : version en place conservée.")
+    return False
+
+
+def rollback_message(version):
+    """Phrase dite à l'utilisateur après un retour arrière automatique."""
+    if appstate.ui_lang == "en":
+        return (f"Version {version} did not start correctly: Vlocal went back "
+                "to the previous version.")
+    return (f"La version {version} n'a pas démarré correctement : Vlocal est "
+            "revenu à la version précédente.")
+
+
+def on_main_window_loaded():
+    """Fenêtre principale chargée : ce démarrage est réussi. updater.confirm_startup
+    (idempotent, fichiers seulement) libère la sauvegarde de l'ancienne version ;
+    il part sur un thread, ce rappel de pywebview ne doit rien attendre. Un retour
+    arrière survenu au lancement est annoncé une seule fois."""
+    global _rollback_notice
+    threading.Thread(target=updater.confirm_startup, args=(appstate.app_version,),
+                     name="update-confirm", daemon=True).start()
+    version, _rollback_notice = _rollback_notice, None
+    if version:
+        _toast(rollback_message(version), kind="info")
 
 
 def after_start():
