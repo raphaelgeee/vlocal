@@ -133,6 +133,32 @@ PRIO_BACKGROUND = 1
 _mlx_seq = 0
 _mlx_seq_lock = _threading.Lock()
 
+# v1.7 — TRAVAIL INTERRUPTIBLE (anticipation de dictée, livetail.py). La file
+# prioritaire ne suffit pas : un travail de fond DÉJÀ lancé occupe le GPU
+# jusqu'au bout (encodeur ~1,1 s sur M5, quelle que soit la longueur). Un
+# travail porteur d'un jeton Cancel s'arrête au prochain point de contrôle :
+# entre deux couches de l'encodeur ou deux pas du décodeur (quelques dizaines
+# de ms). Toute DICTÉE mise en file interrompt le travail interruptible en
+# cours : la dictée finale n'attend jamais un calcul spéculatif.
+
+
+class Cancelled(Exception):
+    """Travail interrompu par son jeton (Cancel) : aucun résultat, GPU intact."""
+
+
+class Cancel(_threading.Event):
+    """Jeton d'interruption d'un travail GPU de fond."""
+
+
+_job_cancel = None      # jeton du travail en cours (écrit par le worker seul)
+
+
+def _check_cancel() -> None:
+    """Point de contrôle (worker MLX) : lève Cancelled si le jeton est levé."""
+    c = _job_cancel
+    if c is not None and c.is_set():
+        raise Cancelled()
+
 
 def _next_seq() -> int:
     global _mlx_seq
@@ -187,6 +213,10 @@ def _on_worker(fn, *args, _timeout=_MLX_JOB_TIMEOUT, _prio=PRIO_BACKGROUND, **kw
             _mlx_worker.start()
         jobs = _mlx_worker, _mlx_jobs
     box, done, started = {}, _threading.Event(), _threading.Event()
+    if _prio == PRIO_DICTATION:
+        running = _job_cancel
+        if running is not None:
+            running.set()       # v1.7 : la dictée passe devant le spéculatif EN COURS
     jobs[1].put((_prio, _next_seq(), fn, args, kwargs, box, done, started))
     if not done.wait(_timeout):
         # v1.0.22 — DISTINGUER L'ATTENTE EN FILE DU VRAI GEL METAL. Le timeout
@@ -583,6 +613,7 @@ def _encoder_class():
                     "incorrect audio shape"
                 h = h + self._positional_embedding
                 for blk in self.blocks:
+                    _check_cancel()
                     a = blk.attn
                     y = blk.attn_ln(h)
                     h = h + a.out(_fused_attention(a.query(y), a.key(y),
@@ -598,11 +629,32 @@ def _encoder_class():
     return _fast_encoder_cls
 
 
+_decoder_classes = {}
+
+
+def _decoder_class(base):
+    """Décodeur de mlx_whisper avec un point de contrôle d'interruption (v1.7)
+    avant chaque pas : même calcul, même sortie."""
+    cls = _decoder_classes.get(base)
+    if cls is None:
+        class CancellableTextDecoder(base):
+            def __call__(self, x, xa, kv_cache=None):
+                _check_cancel()
+                return super().__call__(x, xa, kv_cache=kv_cache)
+
+        cls = _decoder_classes[base] = CancellableTextDecoder
+    return cls
+
+
 def _accelerate(model) -> None:
-    """Branche l'encodeur accéléré sur un modèle mlx_whisper (idempotent)."""
+    """Branche l'encodeur accéléré et le décodeur interruptible sur un modèle
+    mlx_whisper (idempotent)."""
     cls = _encoder_class()
     if type(model.encoder) is not cls:
         model.encoder.__class__ = cls
+    dec = getattr(model, "decoder", None)
+    if dec is not None and type(dec) not in _decoder_classes.values():
+        dec.__class__ = _decoder_class(type(dec))
 
 
 def _forget_encoding() -> None:
@@ -675,10 +727,14 @@ def warmup() -> None:
 
 
 def _transcribe_impl(a, language, initial_prompt, word_timestamps,
-                     hallucination_silence_threshold=None, temperature=None) -> dict:
+                     hallucination_silence_threshold=None, temperature=None,
+                     cancel=None) -> dict:
     import mlx_whisper
-    global _last_use
+    global _last_use, _job_cancel
+    _job_cancel = cancel
+    interrupted = False
     try:
+        _check_cancel()        # interrompu avant même son tour : rien à calculer
         # NB : les seuils qualité de mlx_whisper (température-fallback 0->1,
         # compression_ratio 2.4, logprob -1.0, no_speech 0.6) sont ACTIFS par
         # défaut. hallucination_silence_threshold (anti-hallucination sur
@@ -698,7 +754,13 @@ def _transcribe_impl(a, language, initial_prompt, word_timestamps,
             condition_on_previous_text=False,
             initial_prompt=(initial_prompt or None),
             word_timestamps=word_timestamps, fp16=True, **kw)
+    except Cancelled:
+        # v1.7 — l'exception est lâchée ICI avec sa pile, qui tenait les
+        # tampons du décodage interrompu (cache KV, sortie de l'encodeur) :
+        # le vidage ci-dessous les rend vraiment.
+        interrupted = True
     finally:
+        _job_cancel = None
         _last_use = time.time()
         _forget_encoding()
         # v23.1 RAM — libère le POOL de buffers Metal de l'inférence (~590 Mo
@@ -707,27 +769,34 @@ def _transcribe_impl(a, language, initial_prompt, word_timestamps,
         # aucune autre inférence MLX ne tourne en parallèle.
         try:
             import mlx.core as mx
+            mx.synchronize()        # calculs déjà lancés (async_eval) terminés
             mx.clear_cache()
         except Exception:
             pass
+    if interrupted:
+        raise Cancelled()
 
 
 def transcribe(audio_np, language: str = "fr", initial_prompt=None,
                word_timestamps: bool = False,
                hallucination_silence_threshold=None, temperature=None,
-               _timeout=_MLX_JOB_TIMEOUT, _prio=PRIO_BACKGROUND) -> dict:
+               _timeout=_MLX_JOB_TIMEOUT, _prio=PRIO_BACKGROUND, cancel=None) -> dict:
     """Transcrit un buffer float32 mono 16 kHz sur le GPU. Renvoie le dict
     mlx_whisper brut {text, segments[...]}. Lève si MLX indisponible (l'appelant
     doit avoir vérifié available() et gérer le repli). Exécuté sur l'UNIQUE thread
     worker MLX -> pas de partage de modèle entre threads (sinon crash Metal).
     _timeout : plafond du worker pour CET appel. La DICTÉE en passe un plus court
     (< watchdog de finalisation) pour que le repli CPU parte AVANT que le watchdog
-    ne libère le verrou -> jamais de chevauchement. La réunion garde le défaut 60 s."""
+    ne libère le verrou -> jamais de chevauchement. La réunion garde le défaut 60 s.
+    cancel (v1.7, travail de fond seulement) : jeton Cancel ; levé par l'appelant
+    ou par la mise en file d'une dictée, il interrompt le travail (Cancelled)."""
     import numpy as np
+    if cancel is not None and _prio == PRIO_DICTATION:
+        raise ValueError("une dictée n'est jamais interruptible")
     a = np.asarray(audio_np, dtype=np.float32)
     return _on_worker(_transcribe_impl, a, language, initial_prompt,
                       word_timestamps, hallucination_silence_threshold, temperature,
-                      _timeout=_timeout, _prio=_prio)
+                      cancel, _timeout=_timeout, _prio=_prio)
 
 
 def idle_seconds() -> float:
