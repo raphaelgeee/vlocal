@@ -18,7 +18,10 @@ Ce calcul sert de deux façons :
     et le morceau sera repris, plus long, à la pause suivante. Whisper
     ponctue mal quelques mots isolés : les « 4 mots après la pause » restent
     rattachés au morceau suivant ou à la fin.
-Au relâchement, seule la fin non validée reste à transcrire.
+Au relâchement, seule la fin non validée reste à transcrire. v1.5 — « rien
+n'a été dit depuis » se juge avec la porte de silence du moteur (_is_silent),
+plus sensible que SILENCE_RMS : un dernier mot faible (sous -38 dBFS) après
+une pause n'est jamais jeté, il est transcrit avec la fin.
 
 Une dictée finale n'attend jamais un calcul spéculatif : la mise en file d'une
 dictée interrompt le travail de fond en cours (mlx_engine), et le relâchement
@@ -53,7 +56,8 @@ import numpy as np
 
 import memory_policy
 import mlx_engine
-from engine import DICTATION_CONTEXT_CHARS, SAMPLE_RATE, SILENCE_RMS, dictation_context
+from engine import (DICTATION_CONTEXT_CHARS, SAMPLE_RATE, SILENCE_RMS, _is_silent,
+                    dictation_context)
 
 
 class _VoiceTrack:
@@ -347,7 +351,9 @@ class DictationLiveTail:
             if job is not None and not (job.done.is_set() and job.error is not None):
                 resume = self._track.voice_start(job.cut, vmin)
                 if resume is None:
-                    wait, final = job, True         # il rend le texte final
+                    # Calme selon SILENCE_RMS : il rend le texte final, sauf si
+                    # un mot faible suit (alors morceau validé, fin transcrite).
+                    wait, final = job, not self._audible_after(audio, job.cut)
                 elif not self._committable(job, resume):
                     self._drop(job, resume)
                 elif job.ok() and job.text:
@@ -372,9 +378,15 @@ class DictationLiveTail:
             # sinon calcul perdu : la fin depuis `pos` sera transcrite
         if not texts:
             return [], 0
-        if audio is not None and self._track.voice_start(pos, vmin) is None:
+        if (audio is not None and self._track.voice_start(pos, vmin) is None
+                and not self._audible_after(audio, pos)):
             return texts, len(audio)    # rien n'a été dit depuis le dernier morceau
         return texts, min(pos * self._win, n_total * self._win)
+
+    def _audible_after(self, audio, w: int) -> bool:
+        """Le PCM après la fenêtre `w` passe-t-il la porte de silence du moteur ?
+        Sans PCM (appelant sans audio), on s'en tient à SILENCE_RMS."""
+        return audio is not None and not _is_silent(audio[w * self._win:])
 
     def abort(self):
         """Dictée annulée ou réinitialisée : tout s'arrête, rien n'est gardé."""

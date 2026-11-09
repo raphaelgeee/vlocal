@@ -43,6 +43,13 @@ AVAIL_CRITICAL_GB = 0.5
 # Délai de grâce sous AVERTISSEMENT : on ne décharge pas un modèle utilisé il y
 # a moins de 30 s (dictées en rafale). Sous pression CRITIQUE : aucun délai.
 PRESSURE_GRACE_S = 30.0
+# v1.5 — HYSTÉRÉSIS DU MODÈLE GPU sous AVERTISSEMENT. Un avertissement dure
+# souvent des heures sur un Mac 8 Go : avec la grâce de 30 s, le modèle GPU
+# (0,8 Go) partait après chaque dictée et revenait à la suivante (9
+# rechargements en 15 min mesurés, chacun une transition Metal, cause prouvée
+# de gels). Il ne part plus qu'après 5 min sans dictée ; la pression CRITIQUE
+# garde son déchargement immédiat.
+GPU_WARN_IDLE_S = 300.0
 # Modèle CPU de repli inutilisé depuis 5 min alors que le GPU fonctionne.
 CPU_FALLBACK_IDLE_S = 300.0
 
@@ -117,15 +124,22 @@ def plan(level: int, *, busy: bool, gpu_loaded: bool, gpu_idle_s: float,
     """Actions de déchargement à exécuter maintenant, dans l'ordre : "cpu"
     (turbo + small) puis "gpu". Jamais pendant un travail en cours (dictée,
     réunion, import). Sous AVERTISSEMENT, un seul modèle par passage, le CPU
-    d'abord : le GPU ne part qu'au passage suivant si la pression persiste."""
+    d'abord : le GPU ne part qu'au passage suivant si la pression persiste, et
+    seulement après GPU_WARN_IDLE_S d'inactivité.
+    `cpu_is_fallback` vaut True exactement quand le GPU est utilisable (état
+    « ok ») : sinon (suspendu, désactivé, en attente d'un nouvel essai) le
+    modèle GPU encore résident ne sert à rien, à côté du turbo CPU qui le
+    remplace : il est déchargé quelle que soit la pression (v1.5)."""
     if busy:
         return ()
+    if gpu_loaded and not cpu_is_fallback and level != CRITICAL:
+        return ("gpu",)
     if level == CRITICAL:
         return tuple(a for a, on in (("cpu", cpu_loaded), ("gpu", gpu_loaded)) if on)
     if level == WARN:
         if cpu_loaded:
             return ("cpu",) if cpu_idle_s >= PRESSURE_GRACE_S else ()
-        if gpu_loaded and gpu_idle_s >= PRESSURE_GRACE_S:
+        if gpu_loaded and gpu_idle_s >= GPU_WARN_IDLE_S:
             return ("gpu",)
         return ()
     if cpu_loaded and cpu_is_fallback and cpu_idle_s >= CPU_FALLBACK_IDLE_S:

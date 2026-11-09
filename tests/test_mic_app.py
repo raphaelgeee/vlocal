@@ -145,12 +145,14 @@ class TestBluetoothLent(_Base):
                          [("activity",), ("info", "Connexion du micro"), ("recording",)])
         self.assertEqual(j.evts, [])
 
-    def test_flux_mort_compte_a_partir_du_premier_echantillon(self):
+    def test_flux_mort_compte_a_partir_du_started(self):
+        # v1.5 : armé au « started » (l'ouverture Bluetooth est déjà finie) ;
+        # un flux qui ne livre jamais rien est donc vu (constat micro #2).
         sd = FakeSD([device(MAC)], MAC)                  # aucun bloc livré
         c = self.monte(sd)
         self.appui(c)
         time.sleep(0.2)
-        self.assertEqual(self.eng.seconds_since_audio(), 0.0)
+        self.assertGreater(self.eng.seconds_since_audio(), 0.1)
         sd.streams[-1].feed(np.zeros(800, np.float32))
         deadline = time.monotonic() + 2.0
         while self.eng.recorded_samples() < 800 and time.monotonic() < deadline:

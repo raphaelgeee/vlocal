@@ -208,9 +208,24 @@ SILENCE_RMS = 0.012
 # reste très au-dessus du légitime et borne quand même tout vrai figeage.
 DICT_GPU_TIMEOUT_BASE_S = 22.0
 DICT_GPU_TIMEOUT_PER_AUDIO_S = 0.5
+# v1.5 : le budget GPU d'une dictée se partage entre l'attente de son TOUR
+# (au plus DICT_GPU_QUEUE_S) et le calcul (le reste, compté depuis son
+# démarrage effectif : seul un calcul trop long est un gel). Le plus long
+# travail qui puisse la précéder est un bloc d'import de IMPORT_MLX_CHUNK_S
+# (quelques secondes de GPU) ; le spéculatif, lui, est interrompu. Le total
+# reste dictation_gpu_timeout : le chien de garde de finalisation est inchangé.
+DICT_GPU_QUEUE_S = 6.0
+IMPORT_MLX_CHUNK_S = 60.0
 # v1.6 : une erreur GPU levée en moins de 3 s (pas un gel) est retentée une fois
 # sur le GPU avant le repli CPU (cf. VlocalEngine._mlx_text).
 GPU_RETRY_WITHIN_S = 3.0
+
+
+def _acquire_until(lock, deadline) -> bool:
+    """Prend `lock` au plus tard à `deadline` (time.monotonic) ; None = sans borne."""
+    if deadline is None:
+        return lock.acquire()
+    return lock.acquire(timeout=max(0.0, deadline - _time.monotonic()))
 
 
 def dictation_gpu_timeout(audio_s: float) -> float:
@@ -666,7 +681,22 @@ def _mlx_clean_text(r) -> str:
 
 
 
+class MicRefused(RuntimeError):
+    """Le worker micro est SAIN mais le périphérique refuse de s'ouvrir (tenu
+    en exclusivité par une autre app, absent), micro intégré compris : un
+    respawn du worker n'y changerait rien."""
+    worker_healthy = True
+
+
 class VlocalEngine:
+    # v1.5 — renouvellement du worker micro différé (request_mic_renewal).
+    _mic_renewal_due = False
+    # v1.5 — un flux annoncé « started » qui ne livre aucun bloc dans ce délai
+    # (HAL périmé après la veille, Continuity) est rouvert sur un worker neuf ;
+    # un flux qui ne livre que des zéros numériques (volume d'entrée à 0,
+    # micro coupé matériellement, défaut virtuel muet) bascule sur l'intégré.
+    FIRST_BLOCK_S = 1.0
+
     def __init__(self, model_dir: str = MODEL_DIR_DEFAULT, sample_rate: int = SAMPLE_RATE,
                  cpu_threads: int = 4):
         from faster_whisper import WhisperModel
@@ -739,6 +769,10 @@ class VlocalEngine:
         # allocation RAM). Séparé de _infer_lock pour ne pas bloquer l'inférence
         # de turbo pendant le chargement de small.
         self._fast_model_lock = threading.Lock()
+        # v1.5 — chargement du turbo CPU, HORS _infer_lock : un import ou une
+        # réunion qui tient l'inférence plusieurs minutes ne retient plus le
+        # chargement, et la dictée borne chacune de ses attentes.
+        self._load_lock = threading.Lock()
         # Vlocal 2 — modèle « rapide » (small) chargé À LA DEMANDE pour la dictée
         # rapide / la cascade. Reste None tant qu'on n'en a pas besoin.
         # small ~0,5 Go : assez léger pour être chargé sur toute machine (8 Go
@@ -785,14 +819,19 @@ class VlocalEngine:
         gc.collect()
         print("[whisper] modèle rapide (small) déchargé (RAM rendue).")
 
-    def load_model(self):
+    def load_model(self, deadline=None):
         """Recharge turbo en mémoire après un unload_model(). Idempotent.
         Renvoie l'instance chargée (référence locale anti-course pour les
-        appelants)."""
+        appelants). v1.5 — chargé HORS _infer_lock (un unload concurrent ne
+        touche pas la référence rendue) ; `deadline` (time.monotonic) borne
+        l'attente d'un chargement concurrent : TimeoutError au-delà."""
         _qos_user_initiated()   # v21 — le pool CT2 recréé hérite de la QoS
-        with self._infer_lock:
-            if self.model is not None:
-                return self.model
+        if not _acquire_until(self._load_lock, deadline):
+            raise TimeoutError("chargement du modèle CPU déjà en cours")
+        try:
+            m = self.model
+            if m is not None:
+                return m
             # Garde-fou : sans dossier modèle, WhisperModel tenterait un
             # téléchargement HuggingFace au runtime (ou échouerait avec une
             # erreur HF cryptique). Échec LOCAL propre, avant tout réseau.
@@ -800,23 +839,25 @@ class VlocalEngine:
                 raise RuntimeError(
                     f"Modèle Whisper introuvable : {self.model_dir}")
             from faster_whisper import WhisperModel
-            self.model = WhisperModel(self.model_dir, device="cpu",
-                                      compute_type="int8",
-                                      cpu_threads=self._cpu_threads)
-            m = self.model
+            m = WhisperModel(self.model_dir, device="cpu", compute_type="int8",
+                             cpu_threads=self._cpu_threads)
+            self.model = m
+        finally:
+            self._load_lock.release()
         print("[whisper] modèle rechargé.")
         return m
 
-    def _ensure_model(self):
+    def _ensure_model(self, deadline=None):
         """Chargement PARESSEUX : recharge turbo s'il a été déchargé (économie
         RAM à l'inactivité). Appelé en tête de chaque inférence -> on peut
         décharger librement quand l'app est inactive. Marque l'activité.
         Renvoie la RÉFÉRENCE LOCALE au modèle : une fois capturée non-None, un
-        unload_model() concurrent ne peut plus l'invalider sous l'appelant."""
+        unload_model() concurrent ne peut plus l'invalider sous l'appelant.
+        `deadline` : cf. load_model (chemin de la dictée)."""
         self.last_use = _time.time()
         m = self.model
         if m is None:
-            m = self.load_model()
+            m = self.load_model(deadline)
         return m
 
     def _ensure_fast_model(self):
@@ -961,10 +1002,15 @@ class VlocalEngine:
 
     # ------------------------------------------------------------------ #
     def _log_input_device(self):
-        """Log le device d'entrée par défaut, et utilise VLOCAL_AUDIO_DEVICE si défini."""
+        """Applique VLOCAL_AUDIO_DEVICE (développement) s'il est défini.
+        v1.5 — sans lui, rien : l'app ne touche plus PortAudio au démarrage
+        (énumération non bornée, figée quand CoreAudio est coincé) ; la
+        capture passe par le worker micro, qui énumère de son côté."""
+        override = os.environ.get("VLOCAL_AUDIO_DEVICE")
+        if not override:
+            return
         try:
             import sounddevice as sd
-            override = os.environ.get("VLOCAL_AUDIO_DEVICE")
             if override:
                 # Permet un index numérique ou un nom partiel
                 try:
@@ -972,7 +1018,8 @@ class VlocalEngine:
                 except ValueError:
                     pass
                 sd.default.device = (override, None)  # (input, output)
-            dev = sd.query_devices(kind="input")
+            dev = _call_bounded(lambda: sd.query_devices(kind="input"), 1.0,
+                                default=None) or {}
             self.last_device_name = dev.get("name", "?")
             print(f"[audio]   micro : {self.last_device_name}  "
                   f"(sample_rate par défaut : {dev.get('default_samplerate')})")
@@ -1080,8 +1127,16 @@ class VlocalEngine:
             if rm is None:
                 rm = self._remote_mic = _micworker.RemoteMic(self.sample_rate)
 
+            # Pic des blocs reçus, noté AVANT le verrou de _keep : la
+            # surveillance du premier bloc voit un bloc arrivé même quand le
+            # parent est affamé (verrou tenu), sans le confondre avec un flux mort.
+            heard = {"peak": None}
+
             def _on_chunk(b):
-                _keep(np.frombuffer(b, dtype=np.float32).copy())
+                arr = np.frombuffer(b, dtype=np.float32)
+                p = float(np.max(np.abs(arr))) if len(arr) else 0.0
+                heard["peak"] = p if heard["peak"] is None else max(heard["peak"], p)
+                _keep(arr.copy())
 
             _worker_exc = None
             # v1.5 — L'APPUI GAGNE : pendant tout l'essai, une réparation de
@@ -1100,18 +1155,26 @@ class VlocalEngine:
                             _abandon()
                             raise RuntimeError("budget d'ouverture micro épuisé")
                     try:
-                        rm.start(_on_chunk, device=device, prefer=prefer,
-                                 budget=_budget, on_connecting=self._mic_opening_slow)
-                        with self._lock:
-                            self._rec_via_worker = True
-                        self._stream = None
-                        return True
+                        try:
+                            rm.start(_on_chunk, device=device, prefer=prefer,
+                                     budget=_budget, on_connecting=self._mic_opening_slow)
+                        except _micworker.MicStartError as e:
+                            # v1.5 — le worker TOURNE mais le device refuse
+                            # (tenu en exclusivité, absent) : micro intégré
+                            # TOUT DE SUITE, sans tuer un worker sain.
+                            if prefer == "builtin":
+                                raise
+                            print(f"[micworker] micro refusé ({e}) -> micro intégré.")
+                            rm.start(_on_chunk, prefer="builtin",
+                                     budget=self._budget_left(deadline),
+                                     on_connecting=self._mic_opening_slow)
+                        return self._worker_capture_opened(token, rm, _on_chunk,
+                                                           heard, device, prefer)
                     except _micworker.MicStartError as e:
-                        # Le worker TOURNE mais le device refuse (occupé/absent) :
-                        # échec FRANC remonté à l'escalade app-level (respawn +
-                        # micro intégré), comme le levait le chemin historique.
+                        # Même le micro intégré refuse : échec FRANC remonté à
+                        # l'escalade app-level (autres micros), sans respawn.
                         _abandon()
-                        raise RuntimeError(str(e)) from e
+                        raise MicRefused(str(e)) from e
                     except _micworker.WorkerUnavailable as e:
                         # Worker mort ou FIGÉ (déjà tué par RemoteMic) : un respawn
                         # = process neuf = état CoreAudio neuf -> 2e chance quasi
@@ -1152,7 +1215,10 @@ class VlocalEngine:
             # redémarrable. En cas de figeage : TimeoutError, on échoue proprement
             # (l'appelant affiche « micro indisponible ») et le prochain essai
             # repart sur un flux neuf.
-            self._stream = _open_input_stream_bounded(_mk, timeout=4.0)
+            # v1.5 — borné aussi par le budget restant de l'appui.
+            _left = self._budget_left(deadline)
+            self._stream = _open_input_stream_bounded(
+                _mk, timeout=4.0 if _left is None else max(0.05, min(4.0, _left)))
             if self._stream is None:
                 raise RuntimeError("flux micro non créé")
         except Exception:
@@ -1162,6 +1228,76 @@ class VlocalEngine:
             self._stream = None
             raise
         return True
+
+    @staticmethod
+    def _budget_left(deadline):
+        """Secondes restantes avant `deadline` (time.monotonic), None sans borne."""
+        return None if deadline is None else deadline - _time.monotonic()
+
+    def _worker_capture_opened(self, token, rm, on_chunk, heard, device,
+                               prefer) -> bool:
+        """Capture worker ouverte (« started ») : la valide pour CETTE dictée et
+        arme la surveillance du premier bloc. v1.5 — un reset (force_reset,
+        superviseur) survenu pendant une ouverture lente a déjà invalidé le
+        jeton : la capture orpheline est refermée (sinon le worker restait en
+        capture, pastille orange allumée) et l'ouverture rend False."""
+        with self._lock:
+            current = self._cap_token is token
+            if current:
+                self._rec_via_worker = True
+                self._last_audio_t = _time.monotonic()   # flux mort : armé ici
+        if not current:
+            try:
+                rm.stop()
+            except Exception as e:
+                print(f"[micworker] fermeture d'une capture orpheline en échec : {e}")
+            return False
+        self._stream = None
+        threading.Thread(target=self._watch_first_block,
+                         args=(token, rm, on_chunk, heard, device, prefer),
+                         name="mic-first-block", daemon=True).start()
+        return True
+
+    def _watch_first_block(self, token, rm, on_chunk, heard, device, prefer) -> None:
+        """FIRST_BLOCK_S après « started » : aucun bloc -> réouverture sur un
+        worker neuf ; que des zéros numériques -> micro intégré. Une bascule
+        de périphérique annoncée par le worker (événement « rerouted », lu
+        dans rm.rerouted_at) n'est pas un flux mort."""
+        t_open = _time.monotonic()
+        _time.sleep(self.FIRST_BLOCK_S)
+        peak = heard["peak"]
+        if self._cap_token is not token or (
+                peak is not None and (peak > 0.0 or prefer == "builtin")):
+            return
+        if peak is None and getattr(rm, "rerouted_at", 0.0) >= t_open:
+            return
+        dead = peak is None
+        print("[micworker] " + ("flux sans aucun bloc après %.0f s -> worker neuf."
+                                if dead else
+                                "flux de zéros numériques pendant %.0f s -> micro intégré.")
+              % self.FIRST_BLOCK_S)
+        errors.log(errors.E.MIC_DEVICE_FAIL, level="warning",
+                   where="no_first_block" if dead else "digital_silence")
+        try:
+            rm.stop()
+            if dead and not rm.respawn(2.0):
+                return
+            with self._lock:
+                if self._cap_token is not token:
+                    return
+            if dead:
+                rm.start(on_chunk, device=device, prefer=prefer, budget=2.0)
+            else:
+                rm.start(on_chunk, prefer="builtin", budget=2.0)
+        except Exception as e:
+            print(f"[micworker] réparation du flux en échec : {e}")
+            return
+        with self._lock:
+            still = self._cap_token is token
+            if still:
+                self._last_audio_t = _time.monotonic()
+        if not still:
+            rm.stop()
 
     def rms_recent(self, window_s: float = 0.05) -> float:
         """v11 — Niveau RMS des derniers `window_s` (par défaut 50 ms) du buffer
@@ -1248,11 +1384,14 @@ class VlocalEngine:
         """Ferme le micro et renvoie l'audio capturé (float32 mono 16 kHz).
         v1.5 — publie last_capture_stats (dépassements de la capture)."""
         with self._lock:
-            if not self._recording:
-                return np.zeros(0, dtype=np.float32)
+            was_recording = self._recording
             self._recording = False
             via_worker = self._rec_via_worker
             self._rec_via_worker = False
+        # v1.5 — un worker resté en capture est arrêté même si la dictée ne
+        # « tourne » plus côté moteur (reset pendant une ouverture lente).
+        if not (was_recording or via_worker):
+            return np.zeros(0, dtype=np.float32)
 
         # v1.0.22 — mode worker : le stop se fait DANS le process jetable
         # (borné ; s'il fige, RemoteMic tue le worker — les frames sont déjà
@@ -1398,7 +1537,35 @@ class VlocalEngine:
         with self._lock:
             if self._recording:
                 return
+        if self._mic_renewal_due:
+            self._renew_mic_if_due()
+            return
         rm.heal()
+
+    def request_mic_renewal(self) -> None:
+        """v1.5 — Worker micro neuf DÛ (sortie de veille, changement de matériel
+        signalé par lifecycle) : fait tout de suite si le micro est au repos,
+        sinon au prochain repos (mic_health_heal, fin de capture). Ne bloque
+        jamais l'appelant. Un respawn refusé (appui en cours) reste dû."""
+        self._mic_renewal_due = True
+        self._renew_mic_if_due()
+
+    def _renew_mic_if_due(self) -> None:
+        if not self._mic_renewal_due or not (_MIC_PROC_ENABLED and _micworker is not None):
+            return
+        rm = self._remote_mic
+        if rm is None:
+            self._mic_renewal_due = False   # jamais lancé : le 1er sera neuf
+            return
+        with self._lock:
+            if self._recording:
+                return
+
+        def _go():
+            if self._mic_renewal_due and rm.respawn():
+                self._mic_renewal_due = False
+                print("[micworker] worker micro renouvelé (demande différée).")
+        threading.Thread(target=_go, name="mic-renewal", daemon=True).start()
 
     def mic_after_wake(self) -> None:
         """v1.5 — Sortie de veille : CoreAudio a pu redémarrer, le PortAudio du
@@ -1694,9 +1861,10 @@ class VlocalEngine:
         return {"text": text, "segments": seg_all, "avg_conf": avg_conf}
 
     def transcribe_import_mlx(self, audio_np, sr: int = SAMPLE_RATE,
-                              on_progress=None, chunk_s: float = 300.0) -> dict:
-        """v27 — IMPORT PLEIN DÉBIT sur GPU MLX : passe l'audio par GROS BLOCS
-        (~10 min) à mlx_whisper, qui gère nativement son fenêtrage 30 s -> on
+                              on_progress=None,
+                              chunk_s: float = IMPORT_MLX_CHUNK_S) -> dict:
+        """v27 — IMPORT PLEIN DÉBIT sur GPU MLX : passe l'audio par BLOCS
+        (IMPORT_MLX_CHUNK_S) à mlx_whisper, qui gère nativement son fenêtrage 30 s -> on
         évite l'overhead des fenêtres 25 s de transcribe_incremental (×28 temps
         réel mesuré, mots inclus, vs ~×13). Blocs coupés au CREUX D'ÉNERGIE
         (jamais en plein mot), conversion float32 PAR BLOC (RAM bornée ~40 Mo,
@@ -1704,7 +1872,11 @@ class VlocalEngine:
         RÉSERVÉ À L'IMPORT RÉUNION (jamais la dictée). Lève si MLX indisponible
         (l'appelant retombe sur transcribe_incremental).
 
-        RAM (mesuré, 34 min) : blocs 5 min -> pic ~1,5 Go (vs 2,0 Go à 10 min).
+        v1.5 — blocs de 60 s (300 s avant) : un bloc tient quelques secondes de
+        GPU, une dictée arrivée pendant un import n'attend donc jamais plus que
+        son délai de file (DICT_GPU_QUEUE_S) et ne retombe plus sur le CPU.
+        RAM (mesuré, 34 min) : blocs 5 min -> pic ~1,5 Go (vs 2,0 Go à 10 min) ;
+        des blocs plus courts ne peuvent que l'abaisser.
         Dérive du pool Metal ~18 Mo/bloc : un reset périodique a été testé et
         REJETÉ (le rechargement crée un pic transitoire +450 Mo, pire que la
         dérive). Au-delà de ~45 min, l'appelant route vers transcribe_
@@ -1917,7 +2089,8 @@ class VlocalEngine:
         # garde de finalisation n'attend jamais plus qu'avant.
         t0 = _time.monotonic()
         try:
-            r = mlx_engine.transcribe(audio_np, _timeout=_budget, **kw)
+            r = mlx_engine.transcribe(audio_np, _timeout=_budget - DICT_GPU_QUEUE_S,
+                                      _queue_timeout=DICT_GPU_QUEUE_S, **kw)
         except TimeoutError:
             raise
         except Exception as e:
@@ -1927,7 +2100,9 @@ class VlocalEngine:
             print(f"[mlx] erreur GPU ({type(e).__name__}: {e}) -> second essai "
                   "sur un worker neuf avant le CPU.")
             mlx_engine.renew_worker()
-            r = mlx_engine.transcribe(audio_np, _timeout=_budget - spent, **kw)
+            r = mlx_engine.transcribe(audio_np,
+                                      _timeout=_budget - spent - DICT_GPU_QUEUE_S,
+                                      _queue_timeout=DICT_GPU_QUEUE_S, **kw)
         text = _mlx_clean_text(r)
         # Pas de VAD sur ce chemin : un texte vide vient des seuils de décodage
         # (no_speech) ou des filtres anti-hallucination.
@@ -2025,7 +2200,14 @@ class VlocalEngine:
             except Exception as e:
                 print(f"[mlx] transcribe KO ({e}) -> repli CPU.")
                 self._after_gpu_failure()
-        model = self._ensure_model()
+        # v1.0.23 / v1.5 — ATTENTES BORNÉES SUR LE CHEMIN DICTÉE. `_infer_lock`
+        # est PARTAGÉ avec la transcription de fichier et de réunion, qui le
+        # tiennent pendant TOUT le fichier (plusieurs minutes sur un import
+        # d'une heure). Une dictée tombée dessus attendait sans borne. Au-delà
+        # de DICTATION_LOCK_WAIT_S (chargement concurrent compris), TimeoutError :
+        # `_do_finalize` l'attrape, informe l'utilisateur et rend la main.
+        deadline = _time.monotonic() + self.DICTATION_LOCK_WAIT_S
+        model = self._ensure_model(deadline)
         if fast:
             # Référence LOCALE au small : un unload_fast_model() concurrent ne
             # peut plus nullifier la référence entre le check et l'inférence.
@@ -2036,14 +2218,8 @@ class VlocalEngine:
         # NB : aucun appelant ne passe vad=False aujourd'hui (vad_filter=True
         # est déjà posé par _base_kwargs) ; paramètre conservé (API publique).
         kwargs["vad_filter"] = vad
-        # v1.0.23 — ACQUISITION BORNÉE SUR LE CHEMIN DICTÉE. `_infer_lock` est
-        # PARTAGÉ avec la transcription de fichier et de réunion, qui le tiennent
-        # pendant TOUT le fichier (plusieurs minutes sur un import d'une heure).
-        # Une dictée tombée dessus attendait sans borne. On lève au bout de 20 s :
-        # `_do_finalize` attrape déjà TimeoutError, informe l'utilisateur et rend
-        # la main — au lieu de le laisser croire que la dictée est perdue.
-        if not self._infer_lock.acquire(timeout=20.0):
-            print("[engine] moteur occupé (import/réunion) > 20 s -> dictée rendue.")
+        if not _acquire_until(self._infer_lock, deadline):
+            print("[engine] moteur occupé (import/réunion) -> dictée rendue.")
             raise TimeoutError("moteur occupé par une autre transcription")
         try:
             try:
@@ -2090,6 +2266,9 @@ class VlocalEngine:
     # Seuil conservateur : les courtes dictées restent sur la cascade (small y
     # suffit souvent et c'est plus rapide).
     ADAPTIVE_DIRECT_TURBO_S = 28.0
+    # Attente maximale du moteur CPU (chargement concurrent + verrou
+    # d'inférence) sur le chemin de la dictée.
+    DICTATION_LOCK_WAIT_S = 20.0
 
     def _small_with_conf(self, audio_np):
         """Transcrit avec small SANS biais glossaire (confiance stable et
@@ -2105,14 +2284,23 @@ class VlocalEngine:
         kwargs["best_of"] = 1
         kwargs["temperature"] = 0.0
         kwargs["word_timestamps"] = True
-        with self._infer_lock:
-            segments, _info = self._fast_model.transcribe(audio_np, **kwargs)
+        fm = self._fast_model
+        if fm is None:
+            raise RuntimeError("modèle rapide déchargé")
+        if not _acquire_until(self._infer_lock,
+                              _time.monotonic() + self.DICTATION_LOCK_WAIT_S):
+            print("[engine] moteur occupé (import/réunion) -> dictée rendue.")
+            raise TimeoutError("moteur occupé par une autre transcription")
+        try:
+            segments, _info = fm.transcribe(audio_np, **kwargs)
             probs, pieces = [], []
             for seg in segments:
                 pieces.append(seg.text)
                 for w in (getattr(seg, "words", None) or []):
                     probs.append(float(getattr(w, "probability", 1.0) or 0.0))
             text = assemble_segments(pieces)
+        finally:
+            self._infer_lock.release()
         if not probs:
             return strip_hallucinations(text), 1.0, 0.0, 0.0
         avg = sum(probs) / len(probs)
@@ -2159,6 +2347,8 @@ class VlocalEngine:
             return self.transcribe(audio_np, mode="dictee", use_gpu=use_gpu), "turbo"
         try:
             text_s, avg, frac03, frac05 = self._small_with_conf(audio_np)
+        except TimeoutError:
+            raise               # moteur tenu par un import : turbo attendrait autant
         except Exception as e:
             print(f"[cascade] small KO ({e}) — turbo direct.")
             return self.transcribe(audio_np, mode="dictee", use_gpu=use_gpu), "turbo"

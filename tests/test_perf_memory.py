@@ -54,7 +54,8 @@ class PlanTests(unittest.TestCase):
     def test_sans_pression_rien_n_est_decharge(self):
         # GPU inactif depuis une heure, CPU moteur principal (Intel) idem.
         self.assertEqual(_plan(mp.NORMAL), ())
-        self.assertEqual(_plan(mp.NORMAL, cpu_loaded=True, cpu_is_fallback=False), ())
+        self.assertEqual(_plan(mp.NORMAL, gpu_loaded=False, cpu_loaded=True,
+                               cpu_is_fallback=False), ())
 
     def test_sans_pression_le_repli_cpu_inutile_part(self):
         self.assertEqual(_plan(mp.NORMAL, cpu_loaded=True, cpu_idle_s=RECENT), ())
