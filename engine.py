@@ -544,6 +544,26 @@ _NO_SPACE_RE = re.compile(r"\s+([" + re.escape(_NO_SPACE_BEFORE) + r"])")
 _OPENER_RE = re.compile(r"([" + re.escape(_OPENERS) + r"])\s+")
 
 
+# v1.7 — CONTEXTE d'un morceau de dictée découpée : la fin du texte déjà
+# transcrit, en initial_prompt. Mesuré sur un corpus de 24 dictées avec
+# pauses : sans contexte, un morceau seul perd la langue (anglais traduit),
+# les minuscules et certains accords (WER 0,078 -> 0,101) ; avec contexte,
+# WER 0,0780 (single-pass 0,0781), identique à 120 et à 200 caractères. 120 :
+# le premier pas du décodeur traite tout le prompt, et 200 caractères
+# montaient le pic MLX de 4,7 % (929 -> 973 Mo) contre 1 % à 120.
+DICTATION_CONTEXT_CHARS = 120
+
+
+def dictation_context(texts, limit: int = DICTATION_CONTEXT_CHARS):
+    """Fin (au plus `limit` caractères, coupée à un mot) du texte assemblé de
+    `texts`, ou None s'il n'y a rien."""
+    text = assemble_segments(texts)
+    if len(text) > limit:
+        text = text[-limit:]
+        text = text.split(" ", 1)[1] if " " in text else text
+    return text or None
+
+
 def assemble_segments(segment_texts) -> str:
     """Assemble proprement les textes de segments Whisper en français correct.
 
@@ -618,6 +638,32 @@ def _common_whisper_kwargs(with_thresholds: bool = True) -> dict:
         kwargs["log_prob_threshold"] = -1.0
         kwargs["compression_ratio_threshold"] = 2.4
     return kwargs
+
+
+# v3.3.1 — DICTÉE GPU : ladder de température borné à 4 niveaux.
+_MLX_DICTATION_TEMPERATURE = (0.0, 0.2, 0.4, 0.6)
+
+
+def _mlx_dictation_prompt(context=None):
+    """initial_prompt de la dictée GPU : biais glossaire (l'API hotwords
+    étant propre à faster-whisper) puis, pour un morceau qui en suit
+    d'autres (v1.7, découpeur), la fin du texte déjà transcrit
+    (dictation_context) : Whisper poursuit alors la phrase, la langue et
+    le style au lieu de repartir de zéro."""
+    hw = _load_glossary_hotwords()
+    parts = [("Transcription en français. Termes : " + hw + ".") if hw else "",
+             context or ""]
+    return " ".join(p for p in parts if p) or None
+
+
+def _mlx_clean_text(r) -> str:
+    """Texte propre d'un résultat mlx_whisper de dictée. v3.3.1 — aligne la
+    dictée sur le chemin réunion : collapse_repetition_loops supprime les
+    queues parasites (« 3 3 3 », « 4. ») sur les fins en silence."""
+    text = collapse_repetition_loops(
+        strip_hallucinations(assemble_segments([r.get("text", "")])))
+    return "" if _is_known_hallucination(text) else text
+
 
 
 class VlocalEngine:
@@ -1842,14 +1888,13 @@ class VlocalEngine:
         avg_conf = round(sum(all_probs) / len(all_probs), 3) if all_probs else 1.0
         return {"text": text, "segments": seg_list, "avg_conf": avg_conf}
 
-    def _mlx_text(self, audio_np, mode: str = "dictee") -> str:
+    def _mlx_text(self, audio_np, mode: str = "dictee", context=None) -> str:
         """v23 — Transcription GPU (MLX/Metal) -> texte FR propre, AVEC le même
-        post-traitement que le chemin CPU : biais glossaire (en initial_prompt,
-        l'API hotwords étant propre à faster-whisper) + anti-hallucination.
+        post-traitement que le chemin CPU : biais glossaire + anti-hallucination.
         Le modèle est le MÊME turbo (parité qualité prouvée), 7x plus rapide.
+        `context` : texte qui précède (fin d'une dictée découpée, v1.7).
         Lève en cas d'échec GPU -> l'appelant retombe sur le CPU."""
-        hw = _load_glossary_hotwords()
-        prompt = ("Transcription en français. Termes : " + hw + ".") if hw else None
+        prompt = _mlx_dictation_prompt(context)
         # v1.1.0 — timeout DICTÉE proportionnel à l'audio (dictation_gpu_timeout),
         # sous le budget de finalisation (app._finalize_budget_s, même formule + 3 s).
         # Le plafond fixe de 22 s (v1.0.6) supposait un reliquat court grâce au
@@ -1862,7 +1907,7 @@ class VlocalEngine:
         # un faux « gel Metal » qui condamnait le GPU pour toute la session.
         _budget = dictation_gpu_timeout(len(audio_np) / float(SAMPLE_RATE))
         kw = dict(language="fr", initial_prompt=prompt,
-                  temperature=(0.0, 0.2, 0.4, 0.6),
+                  temperature=_MLX_DICTATION_TEMPERATURE,
                   _prio=getattr(mlx_engine, "PRIO_DICTATION", 0))
         # v1.6 — LE CPU EN DERNIER RECOURS. Une ERREUR GPU rapide (pas un gel :
         # TimeoutError garde la suspension) envoyait la dictée au CPU : chargement
@@ -1883,18 +1928,37 @@ class VlocalEngine:
                   "sur un worker neuf avant le CPU.")
             mlx_engine.renew_worker()
             r = mlx_engine.transcribe(audio_np, _timeout=_budget - spent, **kw)
-        # v3.3.1 — aligne la dictée sur le chemin réunion : collapse_repetition_loops
-        # supprime les queues parasites (« 3 3 3 », « 4. ») sur les fins en silence.
-        # Post-traitement texte uniquement : zéro impact vitesse / RAM, qualité ↑.
-        text = collapse_repetition_loops(
-            strip_hallucinations(assemble_segments([r.get("text", "")])))
-        if _is_known_hallucination(text):
-            text = ""
+        text = _mlx_clean_text(r)
         # Pas de VAD sur ce chemin : un texte vide vient des seuils de décodage
         # (no_speech) ou des filtres anti-hallucination.
         self._note("mlx", None if text else "filtered")
         if text:
             self.last_model = "mlx-turbo"
+        return text
+
+    def transcribe_chunk(self, audio_np, cancel=None, context=None) -> str:
+        """v1.7 — Morceau d'une dictée EN COURS, transcrit en fond par le
+        découpeur (livetail.py), avec les réglages et filtres de la dictée.
+
+        GPU : priorité basse, interruptible (`cancel`, un mlx_engine.Cancel),
+        sans second essai ni repli CPU : un échec lève et l'audio est
+        simplement transcrit à la finalisation. Lève mlx_engine.Cancelled si
+        le travail est interrompu. `context` : texte des morceaux précédents
+        (dictation_context). Sans GPU : chemin CPU de transcribe() (le
+        découpeur n'y envoie que des fenêtres longues). L'issue publiée de la
+        dictée (last_backend / last_empty_reason) n'est écrite que par la
+        finalisation : _note ne touche ici que l'état de CE thread."""
+        if audio_np is None or len(audio_np) == 0 or _is_silent(audio_np):
+            return ""
+        if not mlx_engine.available():
+            return self.transcribe(audio_np, use_gpu=False)
+        r = mlx_engine.transcribe(
+            audio_np, language="fr", initial_prompt=_mlx_dictation_prompt(context),
+            temperature=_MLX_DICTATION_TEMPERATURE,
+            _timeout=dictation_gpu_timeout(len(audio_np) / float(SAMPLE_RATE)),
+            _prio=mlx_engine.PRIO_BACKGROUND, cancel=cancel)
+        text = _mlx_clean_text(r)
+        self._note("mlx", None if text else "filtered")
         return text
 
     def _mlx_detailed(self, audio_np, time_offset: float = 0.0,
@@ -1940,14 +2004,15 @@ class VlocalEngine:
 
     def transcribe(self, audio_np: np.ndarray, vad: bool = True,
                    mode: str = "dictee", fast: bool = False,
-                   use_gpu: bool = True) -> str:
+                   use_gpu: bool = True, context=None) -> str:
         """Transcrit un float32 mono 16 kHz en texte FR propre.
         Mode 'dictee' = greedy rapide (latence minimale).
         fast=True : utilise le modèle small (dictée rapide) si disponible.
         v23 — Si le GPU MLX est dispo, il prime (turbo partout, ~7x, qualité
         turbo) ; repli CPU automatique et silencieux sinon.
         use_gpu=False : CPU direct, pour un repli dont le GPU vient d'échouer
-        dans la MÊME dictée (sinon double attente sur un GPU occupé)."""
+        dans la MÊME dictée (sinon double attente sur un GPU occupé).
+        context (v1.7, GPU seulement) : texte qui précède cet audio."""
         if audio_np is None or len(audio_np) == 0:
             self._note("", "gate")
             return ""
@@ -1956,7 +2021,7 @@ class VlocalEngine:
             return ""  # silence -> pas de transcription (anti-Amara)
         if use_gpu and mlx_engine.available():
             try:
-                return self._mlx_text(audio_np, mode)
+                return self._mlx_text(audio_np, mode, context)
             except Exception as e:
                 print(f"[mlx] transcribe KO ({e}) -> repli CPU.")
                 self._after_gpu_failure()
@@ -2167,7 +2232,9 @@ class VlocalEngine:
         if live_tail is not None and not fast:
             texts, tail_start = live_tail
             if texts and 0 < tail_start <= len(audio):
-                tail_text = self.transcribe(audio[tail_start:])
+                # v1.7 : la fin poursuit le texte déjà transcrit (contexte).
+                tail_text = self.transcribe(audio[tail_start:],
+                                            context=dictation_context(texts))
                 self.last_model = "turbo"
                 full = strip_hallucinations(
                     assemble_segments(list(texts) + [tail_text]))

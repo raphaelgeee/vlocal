@@ -135,6 +135,40 @@ def run():
     for n, r in u:
         print(f"  {'OK ' if r else 'KO '} {n}")
 
+    # v1.7 — Jointures des morceaux d'une DICTÉE découpée aux pauses (livetail) :
+    # assemblage de la finalisation (engine), textes réels du corpus de pauses.
+    from engine import assemble_segments, strip_hallucinations, dictation_context
+    print("\n" + "-" * 70)
+    print("JOINTURES DE DICTÉE (pauses)")
+    pauses = [
+        ("pause de 3 s entre deux phrases",
+         ["Le contrat prévoit une période d'essai de deux mois.",
+          " Les enfants sortent de l'école à 16h30, peux-tu passer les chercher?"],
+         "Le contrat prévoit une période d'essai de deux mois. Les enfants sortent "
+         "de l'école à 16h30, peux-tu passer les chercher?"),
+        ("reprise en milieu de phrase (morceau suivant en minuscule)",
+         ["Il faudrait demander à l'architecte si", "les plans définitifs peuvent être validés."],
+         "Il faudrait demander à l'architecte si les plans définitifs peuvent être validés."),
+        ("4 mots après la pause",
+         ["Le chantier avance bien, l'électricien passe lundi matin.", "Et voilà, c'est tout."],
+         "Le chantier avance bien, l'électricien passe lundi matin. Et voilà, c'est tout."),
+        ("fin sans voix (reliquat vide)",
+         ["Bonjour Marc, je te confirme le rendez-vous.", ""],
+         "Bonjour Marc, je te confirme le rendez-vous."),
+        ("espaces et ponctuation de bord",
+         ["  Merci de m'envoyer le devis signé ", " ? Oui, avant vendredi ."],
+         "Merci de m'envoyer le devis signé? Oui, avant vendredi."),
+    ]
+    for n, chunks, attendu in pauses:
+        got = strip_hallucinations(assemble_segments(chunks))
+        ok = got == attendu and not _has_adjacent_ngram_dup(got, n=3)
+        u.append((f"dictée : {n}", ok))
+        print(f"  {'OK ' if ok else 'KO '} {n} -> {got!r}")
+    ctx = dictation_context(["mot" + str(i) for i in range(200)])
+    u.append(("dictée : contexte borné et coupé à un mot",
+              len(ctx) <= 120 and ctx.split()[0].startswith("mot") and ctx.endswith("mot199")))
+    u.append(("dictée : pas de contexte sans texte", dictation_context(["", " "]) is None))
+
     npass = sum(1 for _, r in u if r)
     print("\n" + "=" * 70)
     print("VERDICTS PAR CAS :")
