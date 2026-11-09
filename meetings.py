@@ -115,11 +115,11 @@ DIAR_INPROC_MAX_MIN = 40
 LIVE_RETRANSCRIBE_MAX_MIN = 45
 
 
-def _recognize_voices(voices_map, log=False):
+def _recognize_voices(voices_map, verbose=False):
     """WhoTalks v1.2 — RECONNAISSANCE : compare le centroïde de chaque voix aux
     voix connues ; si match confiant, le nom apparaît tout seul. Conservateur
     (seuil + marge) : en cas de doute on laisse « Locuteur N ». Partagé par la
-    pipeline réunion et rediarize_meeting. log=True : trace les voix reconnues
+    pipeline réunion et rediarize_meeting. verbose=True : trace les voix reconnues
     et les échecs (chemin pipeline uniquement, comme avant factorisation)."""
     auto_names = {}
     try:
@@ -145,10 +145,10 @@ def _recognize_voices(voices_map, log=False):
                     continue
                 auto_names[spk] = name
                 used_v.add(vid)
-            if auto_names and log:
+            if auto_names and verbose:
                 log.info(f"[whotalks] voix reconnues : {auto_names}")
     except Exception as e:
-        if log:
+        if verbose:
             log.warning(f"[whotalks] reconnaissance ignorée ({e}).")
     return auto_names
 
@@ -844,10 +844,10 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
                         n_spk = len({b["speaker"] for b in blocks})
                         # WhoTalks v1.2 — RECONNAISSANCE des voix connues (SAUTÉE en
                         # visio : centroïdes du mix non fiables ; cf. _recognize_voices,
-                        # log=True : seul ce chemin imprime le détail).
+                        # verbose=True : seul ce chemin imprime le détail).
                         auto_names = ({"SPEAKER_00": "Vous", "SPEAKER_01": "Interlocuteur"}
                                       if _is_visio
-                                      else _recognize_voices(voices_map, log=True))
+                                      else _recognize_voices(voices_map, verbose=True))
                         # v1.0.23 — FIABILITÉ D'ATTRIBUTION, distincte de la
                         # confiance de TRANSCRIPTION (`avg_confidence`, qui est
                         # la moyenne des probabilités des mots Whisper). Les deux
