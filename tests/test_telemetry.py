@@ -334,9 +334,10 @@ class EngineFieldTests(unittest.TestCase):
     def test_app_profile_reads_the_engine_instance(self):
         """Garde-fou : app.py ne passe plus par mlx_engine.available() pour le
         profil, et lit last_backend() sur l'instance moteur."""
+        import ast
         src = app_sources.texte_complet()
-        corps = src[src.index("def _telemetry_profile"):]
-        corps = corps[:corps.index("\ndef ", 1)]
+        fichier, noeud = app_sources.definitions()["_telemetry_profile"]
+        corps = ast.get_source_segment(app_sources.texte(fichier), noeud)
         self.assertIn(".engine.last_backend()", corps)
         self.assertNotIn("available()", corps)
         self.assertNotIn("def _machine_profile", src)

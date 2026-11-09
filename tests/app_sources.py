@@ -20,6 +20,7 @@ FICHIERS = (
     "lifecycle.py",
     "reminder_flow.py",
     "dictation.py",
+    "meetings.py",
     "app.py",
 )
 
