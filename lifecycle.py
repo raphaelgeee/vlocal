@@ -25,7 +25,7 @@ log = applog.get("lifecycle")
 # v1.3.2 — CYCLE DE VIE : rouvrir et quitter ne dépendent plus du démarrage.
 #
 # Jusqu'en 1.3.0, le délégué d'application qui sait rouvrir la fenêtre et
-# quitter pour de vrai était posé par _after_start, tout à la fin. Si une étape
+# quitter pour de vrai était posé par _after_start (aujourd'hui startup.after_start), tout à la fin. Si une étape
 # précédente levait, il n'était jamais posé, et celui de pywebview restait
 # actif : fermer la fenêtre la masquait pour de bon, le clic sur le Dock ne
 # faisait rien, et « Quitter » était refusé (pywebview consulte notre gestionnaire
@@ -34,7 +34,7 @@ log = applog.get("lifecycle")
 # On remplace donc la CLASSE de délégué que pywebview instancie lui-même, avant
 # que la fenêtre n'existe : quel que soit l'ordre de démarrage et quoi qu'il
 # arrive ensuite, le délégué actif sait rouvrir et quitter.
-_lifecycle_quit_hook = None     # nettoyage complet (_perform_quit), posé par _after_start
+_lifecycle_quit_hook = None     # nettoyage complet (startup._perform_quit), posé par startup.after_start
 _LifecycleDelegate = None       # la classe installée dans pywebview
 
 
@@ -103,7 +103,7 @@ def _install_lifecycle_delegate_class():
         log.info("[cycle]   délégué de cycle de vie installé dans pywebview (rouvrir + quitter).")
         return True
     except Exception as e:
-        log.warning(f"[cycle]   délégué de cycle de vie indisponible ({e}) — repli sur _after_start.")
+        log.warning(f"[cycle]   délégué de cycle de vie indisponible ({e}) — Cmd+Q masquera la fenêtre, quitter par l'icône V.")
         return False
 
 
@@ -144,10 +144,6 @@ def _reveal_app_in_finder():
         log.debug("import AppKit : échec ignoré", exc_info=True)
 
 
-# --------------------------------------------------------------------------- #
-# Contrôleur de dictée — partagé par le bouton/espace ET le raccourci global.
-# Gère : capture, niveau audio (wave UI), transcription finale, copie presse-papier.
-# --------------------------------------------------------------------------- #
 # --------------------------------------------------------------------------- #
 # v21 — Anti-App Nap : pendant la dictée puis la transcription, la fenêtre est
 # cachée et le micro FERMÉ (après la relâche) -> macOS a le droit de throttler

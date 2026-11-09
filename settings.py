@@ -140,11 +140,6 @@ def _save_settings(patch: dict) -> dict:
     return current
 
 
-# v15 — Toute la machinerie « Puissance machine » / tier / téléchargement de
-# moteur SLM (Ollama) a été SUPPRIMÉE. Vlocal n'a plus qu'un seul moteur :
-# Whisper large-v3-turbo, déjà embarqué. Aucun appel réseau, aucun Ollama.
-
-
 def _load_glossary_text() -> str:
     try:
         with open(_GLOSSARY_FILE, "r", encoding="utf-8") as f:

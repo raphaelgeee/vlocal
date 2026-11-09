@@ -198,15 +198,6 @@ def _open_settings_modal_robust():
     threading.Thread(target=_inject_later, daemon=True).start()
 
 
-# v2 — L'ancienne 2e fenêtre Réglages (webview) a été supprimée : les Réglages
-# sont un modal HTML dans la fenêtre principale (pywebview ne crée pas de 2e
-# fenêtre fiable après start()).
-
-
-# --------------------------------------------------------------------------- #
-# Raccourci clavier GLOBAL : Ctrl + Espace, push-to-talk.
-# Maintien = enregistre (+ aperçu live) ; relâche = final + copie presse-papier.
-# --------------------------------------------------------------------------- #
 # v19 — Minuterie de fermeture de l'overlay (résultat -> fade -> orderOut).
 # Annulable si une nouvelle dictée démarre pendant l'affichage du résultat.
 _overlay_hide_timers = None

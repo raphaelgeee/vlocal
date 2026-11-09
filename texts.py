@@ -16,10 +16,6 @@ import appstate
 # au changement). Idempotent : une chaîne EN n'est pas une clé FR -> renvoyée telle
 # quelle. Les chaînes interpolées (variables) restent gérées au point d'appel.
 # ---------------------------------------------------------------------------
-# v1.0.11 — comptes "dev" : le DÉTAIL technique du diagnostic (état moteur, nombre
-# d'incidents) n'est affiché QUE pour ces licences. Un utilisateur lambda ne voit que
-# le formulaire d'envoi (l'envoi transmet quand même les métadonnées sanitisées au
-# support). Override possible par VLOCAL_DEV=1 (build dev local).
 _BT = {
   "Microphone indisponible. Vérifiez Réglages Système > Confidentialité et sécurité > Microphone (et qu'aucune autre app ne le capte).":
     "Microphone unavailable. Check System Settings > Privacy & Security > Microphone (and that no other app is using it).",

@@ -16,7 +16,9 @@ Déclencheurs :
 
 Le modèle Whisper est chargé PARESSEUSEMENT au 1er usage puis DÉCHARGÉ sous
 pression mémoire (memory_policy.py) pour tenir sur 8 Go ; rechargé tout seul au
-prochain usage, pendant la parole. Voir _start_idle_unloader.
+prochain usage, pendant la parole. Voir engine_runtime._start_idle_unloader.
+
+app.py n'assemble que le démarrage ; carte des modules : docs/ARCHITECTURE.md.
 
 Lancement :   ./venv/bin/python app.py
 Auto-test  :   ./venv/bin/python app.py --selftest   (sans fenêtre ni micro)
