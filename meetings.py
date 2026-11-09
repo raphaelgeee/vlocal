@@ -13,6 +13,7 @@ import os
 import threading
 import time
 
+import applog
 import appstate
 import errors as _EV
 import notifier
@@ -22,6 +23,8 @@ from engine import SAMPLE_RATE
 from lifecycle import _begin_activity, _end_activity
 from settings import _APP_SUPPORT, _diarization_enabled, _load_settings, _save_settings
 from ui_bridge import _refresh_lists_ui, _toast, _ui
+
+log = applog.get("meetings")
 
 
 # v12 — état du mode Réunion (recorder + meeting id en cours)
@@ -65,7 +68,7 @@ def _obsidian_meeting_sync(meeting_id):
                     pass
                 obsidian.capture_meeting(m, vault, blocks=blocks, names=names)
             except Exception as e:
-                print(f"[reunion] note Obsidian ignorée ({e}).")
+                log.warning(f"[reunion] note Obsidian ignorée ({e}).")
         threading.Thread(target=_run, name="obsidian-meeting", daemon=True).start()
     except Exception:
         pass
@@ -131,10 +134,10 @@ def _recognize_voices(voices_map, log=False):
                 auto_names[spk] = name
                 used_v.add(vid)
             if auto_names and log:
-                print(f"[whotalks] voix reconnues : {auto_names}")
+                log.info(f"[whotalks] voix reconnues : {auto_names}")
     except Exception as e:
         if log:
-            print(f"[whotalks] reconnaissance ignorée ({e}).")
+            log.warning(f"[whotalks] reconnaissance ignorée ({e}).")
     return auto_names
 
 
@@ -166,7 +169,7 @@ def _attribute_blocks(diar_obj, units, wav_path, spk_segs):
         try:
             blocks = diar_obj.assign_units(units)
         except Exception as e:
-            print(f"[whotalks] assign_units KO ({e}) -> repli attribution au mot.")
+            log.warning(f"[whotalks] assign_units KO ({e}) -> repli attribution au mot.")
             blocks = None
     if diar_obj is not None and not blocks:
         try:
@@ -186,12 +189,12 @@ def _attribute_blocks(diar_obj, units, wav_path, spk_segs):
             blocks = diar_obj.assign_words_precise(units, wav_path,
                                                    embed_batch_fn=_fn)
         except Exception as e:
-            print(f"[whotalks] assign_words_precise KO ({e}).")
+            log.warning(f"[whotalks] assign_words_precise KO ({e}).")
         if not blocks:
             try:
                 blocks = diar_obj.assign_words(units)
             except Exception as e:
-                print(f"[whotalks] assign_words KO ({e}).")
+                log.warning(f"[whotalks] assign_words KO ({e}).")
     if not blocks:
         blocks = diarizer.merge_transcript_with_speakers(units, spk_segs)
     # v28 — filet anti-boucles (« c'est c'est ... » x60) sur le texte AFFICHÉ
@@ -276,7 +279,7 @@ def _reunion_transcribe_pipeline(meeting_id, wav_path, audio_duree):
         # « Transcription en cours » tourner à l'infini. On la convertit en
         # erreur propre côté UI.
         import traceback as _tb
-        print(f"[reunion] pipeline EXCEPTION : {e}\n{_tb.format_exc()}")
+        log.error(f"[reunion] pipeline EXCEPTION : {e}\n{_tb.format_exc()}")
         try:
             _meeting_fail(meeting_id,
                           "La transcription de la réunion a échoué. L'audio est "
@@ -300,7 +303,7 @@ def _meeting_fail(meeting_id, message, extra_fields=None):
         if appstate.store and meeting_id:
             appstate.store.update_meeting(meeting_id, status="error", **(extra_fields or {}))
     except Exception as e:
-        print(f"[reunion] update_meeting(error) KO : {e}")
+        log.warning(f"[reunion] update_meeting(error) KO : {e}")
     if _EV: _EV.log(_EV.E.MEETING_FAIL, mid=str(meeting_id))
     if message:
         _toast(message, kind="error")
@@ -383,7 +386,7 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
                                if imp_diar is not None else None))
                 if detailed and detailed.get("text"):
                     wt_diar = imp_diar
-                    print(f"[import] batched x{_bs} pace={_pace_b} "
+                    log.info(f"[import] batched x{_bs} pace={_pace_b} "
                           f"({len(detailed.get('segments', []))} segments, "
                           f"RAM totale {_total_gb:.0f} Go).")
                 else:
@@ -418,10 +421,10 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
                         detailed = appstate.controller.engine.transcribe_import_mlx(
                             _au, sr=_sr,
                             on_progress=lambda p: _ui("setMeetingProgress(%.2f)" % p))
-                        print(f"[import] plein débit GPU "
+                        log.info(f"[import] plein débit GPU "
                               f"({len(detailed.get('segments', []))} segments).")
                     except Exception as e:
-                        print(f"[import] plein débit GPU KO ({e}) -> incrémental.")
+                        log.warning(f"[import] plein débit GPU KO ({e}) -> incrémental.")
                         detailed = None
                 if detailed is None:
                     # PACING ADAPTATIF v22.4 : MESURÉ sur fichier réel de 8,7 min,
@@ -445,12 +448,12 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
                         on_window=((lambda pcm, s, off: imp_diar.feed_window(pcm, s, off))
                                    if imp_diar is not None else None),
                         pace=_pace)
-                    print(f"[import] transcription incrémentale + diarisation en "
+                    log.info(f"[import] transcription incrémentale + diarisation en "
                           f"ligne ({len(detailed.get('segments', []))} segments, "
                           f"pacing={_pace}).")
                 wt_diar = imp_diar
         except Exception as e:
-            print(f"[import] incrémental KO ({e}) -> repli monobloc.")
+            log.warning(f"[import] incrémental KO ({e}) -> repli monobloc.")
             detailed = None
             # Libère CAM++ si l'incrémental a échoué AVANT la passation à
             # wt_diar : sinon l'extracteur resterait chargé pendant tout le
@@ -467,12 +470,12 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
         try:
             detailed = live.finalize()
             if detailed and detailed.get("text"):
-                print(f"[reunion] transcription incrémentale OK "
+                log.info(f"[reunion] transcription incrémentale OK "
                       f"({len(detailed.get('segments', []))} segments).")
             else:
                 detailed = None
         except Exception as e:
-            print(f"[reunion] finalize live KO : {e} — repli complet.")
+            log.warning(f"[reunion] finalize live KO : {e} — repli complet.")
             detailed = None
     elif live is not None:
         try:
@@ -503,7 +506,7 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
                     on_progress=lambda p: _ui("setMeetingProgress(%.2f)" % p))
                 if _clean and _clean.get("segments"):
                     detailed = _clean
-                    print("[reunion] live court -> re-transcription propre pour "
+                    log.info("[reunion] live court -> re-transcription propre pour "
                           f"diarisation ({len(_clean.get('segments', []))} seg).")
             elif (not _mlxq.available()) and _durq_min <= LIVE_RETRANSCRIBE_MAX_MIN:
                 # v1.0.1 — REPLI CPU (sans GPU MLX) : les segments live incrémentaux
@@ -517,10 +520,10 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
                     on_progress=lambda p: _ui("setMeetingProgress(%.2f)" % p))
                 if _cleancpu and _cleancpu.get("segments"):
                     detailed = _cleancpu
-                    print("[reunion] live court (repli CPU) -> re-transcription propre "
+                    log.info("[reunion] live court (repli CPU) -> re-transcription propre "
                           f"pour diarisation ({len(_cleancpu.get('segments', []))} seg).")
         except Exception as e:
-            print(f"[reunion] re-transcription propre KO ({e}) -> incrémental gardé.")
+            log.warning(f"[reunion] re-transcription propre KO ({e}) -> incrémental gardé.")
     if detailed is None:
         # v27 — repli ROUTÉ GPU d'abord : transcribe_detailed chargerait le
         # turbo CT2 (~1,7 Go) même sur machine MLX (contrat RAM violé). On
@@ -536,9 +539,9 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
                 detailed = appstate.controller.engine.transcribe_import_mlx(
                     _auf, sr=_srf,
                     on_progress=lambda p: _ui("setMeetingProgress(%.2f)" % p))
-                print("[reunion] repli plein débit GPU OK.")
+                log.info("[reunion] repli plein débit GPU OK.")
         except Exception as e:
-            print(f"[reunion] repli GPU KO ({e}) -> monobloc CPU.")
+            log.warning(f"[reunion] repli GPU KO ({e}) -> monobloc CPU.")
             detailed = None
     if detailed is None:
         try:
@@ -547,7 +550,7 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
                 on_progress=lambda p: _ui("setMeetingProgress(%.2f)" % p),
             )
         except Exception as e:
-            print(f"[reunion] transcription échouée : {e}")
+            log.warning(f"[reunion] transcription échouée : {e}")
             _meeting_fail(meeting_id,
                           "La transcription de la réunion n'a pas pu aboutir. "
                           "L'enregistrement audio est conservé, réessayez.")
@@ -582,7 +585,7 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
     try:
         structured = processor.format_by_rules(raw_text, segments=segments)
     except Exception as e:
-        print(f"[reunion] mise en forme KO : {e} — brut conservé.")
+        log.warning(f"[reunion] mise en forme KO : {e} — brut conservé.")
         structured = brut
     if glossary:
         structured = processor.apply_glossary(structured, glossary)
@@ -618,9 +621,9 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
                     {"blocks": _vb,
                      "names": {"SPEAKER_00": "Vous", "SPEAKER_01": "Interlocuteur"},
                      "voices": {}}, ensure_ascii=False)
-                print(f"[visio] diarisation par source (sans CAM++) -> {len(_vb)} blocs")
+                log.info(f"[visio] diarisation par source (sans CAM++) -> {len(_vb)} blocs")
         except Exception as _e:
-            print(f"[visio] diarisation source KO ({_e}) -> texte continu.")
+            log.warning(f"[visio] diarisation source KO ({_e}) -> texte continu.")
         _meeting_state.pop("n_spk_forced", None)   # purge (sinon contamine la réunion suivante)
     elif _diarization_enabled():
         try:
@@ -714,22 +717,22 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
                                 diar_obj = _dg
                                 if _dg is not wt_diar:
                                     dia = _dg   # libéré au finally (après l'attribution)
-                                print(f"[whotalks] frise GUIDÉE-TRANSCRIPTION : "
+                                log.info(f"[whotalks] frise GUIDÉE-TRANSCRIPTION : "
                                       f"{len(spk_segs)} segments en "
                                       f"{_t.perf_counter()-_tg0:.2f}s.")
                             else:
                                 if _dg is not wt_diar:
                                     dia = _dg
-                                print("[whotalks] guidé-transcription vide -> repli tuiles.")
+                                log.info("[whotalks] guidé-transcription vide -> repli tuiles.")
                         except Exception as e:
                             # même transfert que la branche frise-vide : pas
                             # d'extracteur orphelin si une étape future lève.
                             if _dg is not None and _dg is not wt_diar and dia is None:
                                 dia = _dg
-                            print(f"[reunion] diarisation guidée KO ({e}) -> repli tuiles.")
+                            log.warning(f"[reunion] diarisation guidée KO ({e}) -> repli tuiles.")
                             spk_segs = None
                     elif segments:
-                        print(f"[whotalks] réunion > {GUIDED_MAX_MIN} min -> "
+                        log.info(f"[whotalks] réunion > {GUIDED_MAX_MIN} min -> "
                               "diarisation tuiles (plafond RAM, fix sous-process à venir).")
                     if not spk_segs and wt_diar is not None and wt_diar.stream_count >= 3:
                         n_emb = wt_diar.stream_count
@@ -740,11 +743,11 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
                                 max_speakers=MAX_AUTO_SPEAKERS)
                             voices_map = wt_diar.last_voices()
                             diar_obj = wt_diar
-                            print(f"[whotalks] frise EN LIGNE : {n_emb} empreintes "
+                            log.info(f"[whotalks] frise EN LIGNE : {n_emb} empreintes "
                                   f"-> {len(spk_segs)} segments en "
                                   f"{_t.perf_counter()-_tl0:.2f}s.")
                         except Exception as e:
-                            print(f"[whotalks] finalize_stream KO ({e}) -> repli.")
+                            log.warning(f"[whotalks] finalize_stream KO ({e}) -> repli.")
                             spk_segs = None
                         if not spk_segs:
                             # Échec / frise vide : on libère CAM++ live TOUT DE
@@ -768,7 +771,7 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
                         # réunion longue (voie sous-process KO), on DÉGRADE proprement
                         # en « sans diarisation » plutôt que crasher. La transcription
                         # reste complète, affichée en continu.
-                        print(f"[reunion] repli diarisation in-process SAUTÉ "
+                        log.info(f"[reunion] repli diarisation in-process SAUTÉ "
                               f"(> {DIAR_INPROC_MAX_MIN} min, garde RAM) -> texte continu.")
                     elif not spk_segs:
                         try:
@@ -792,7 +795,7 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
                             voices_map = dia.last_voices()
                             diar_obj = dia
                         except Exception as e:
-                            print(f"[reunion] diarisation repli KO ({e}).")
+                            log.warning(f"[reunion] diarisation repli KO ({e}).")
                             spk_segs = None
                     if spk_segs:
                         # Fusion au MOT (timestamps mot Whisper) -> les tours courts
@@ -814,9 +817,9 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
                                 blocks = _visio_relabel_blocks(blocks, _domp)
                                 voices_map = {}     # centroïdes du mix non fiables -> pas d'apprentissage
                                 _is_visio = True
-                                print(f"[visio] réétiquetage par source -> {len(blocks)} blocs")
+                                log.info(f"[visio] réétiquetage par source -> {len(blocks)} blocs")
                         except Exception as _e:
-                            print(f"[visio] réétiquetage dominance ignoré : {_e}")
+                            log.warning(f"[visio] réétiquetage dominance ignoré : {_e}")
                         if glossary:
                             for b in blocks:
                                 b["text"] = processor.apply_glossary(b["text"], glossary)
@@ -840,12 +843,12 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
                             {"blocks": blocks, "names": auto_names,
                              "voices": voices_map,
                              "attr_conf": _attr}, ensure_ascii=False)
-                        print(f"[reunion] diarisation : {n_spk} locuteur(s), "
+                        log.info(f"[reunion] diarisation : {n_spk} locuteur(s), "
                               f"{len(blocks)} blocs en {_t.perf_counter()-td0:.1f}s"
                               + (f", fiabilité attribution {100*_attr:.0f} %."
                                  if _attr is not None else "."))
                     else:
-                        print("[reunion] diarisation vide -> affichage continu.")
+                        log.info("[reunion] diarisation vide -> affichage continu.")
                 finally:
                     # Libération GARANTIE de CAM++ (live OU repli) + rechargement
                     # de turbo, sur toutes les sorties du bloc diarisation
@@ -870,10 +873,10 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
                         except Exception:
                             pass
             else:
-                print("[reunion] diarisation indisponible (sherpa/modèles absents)"
+                log.warning("[reunion] diarisation indisponible (sherpa/modèles absents)"
                       " -> affichage continu.")
         except Exception as e:
-            print(f"[reunion] diarisation ignorée ({e}) -> affichage continu.")
+            log.warning(f"[reunion] diarisation ignorée ({e}) -> affichage continu.")
             speaker_blocks_json = None
 
     if appstate.store and meeting_id:

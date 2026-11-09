@@ -11,11 +11,14 @@ import sys
 import threading
 import time
 
+import applog
 import appstate
 import errors as _EV
 import notifier
 from settings import _APP_SUPPORT, _SHOW_REQUEST, _load_settings, _save_settings
 from texts import _te
+
+log = applog.get("lifecycle")
 
 
 # --------------------------------------------------------------------------- #
@@ -96,10 +99,10 @@ def _install_lifecycle_delegate_class():
 
         _cocoa.BrowserView.AppDelegate = VlocalLifecycleDelegate
         _LifecycleDelegate = VlocalLifecycleDelegate
-        print("[cycle]   délégué de cycle de vie installé dans pywebview (rouvrir + quitter).")
+        log.info("[cycle]   délégué de cycle de vie installé dans pywebview (rouvrir + quitter).")
         return True
     except Exception as e:
-        print(f"[cycle]   délégué de cycle de vie indisponible ({e}) — repli sur _after_start.")
+        log.warning(f"[cycle]   délégué de cycle de vie indisponible ({e}) — repli sur _after_start.")
         return False
 
 
@@ -234,7 +237,7 @@ def _arm_freeze_watchdog():
         _heartbeat_obj = hb
         _heartbeat_timer = t
     except Exception as e:
-        print(f"[watchdog] battement main-thread indispo ({e}) — détecteur OFF.")
+        log.warning(f"[watchdog] battement main-thread indispo ({e}) — détecteur OFF.")
         return
 
     def _freeze_monitor():
@@ -276,7 +279,7 @@ def _arm_freeze_watchdog():
                     _EV.log(_EV.E.MAIN_FREEZE_KILL, age=round(age, 1))
             except Exception:
                 pass
-            print(f"[watchdog] thread principal figé > {age:.0f}s -> arrêt "
+            log.warning(f"[watchdog] thread principal figé > {age:.0f}s -> arrêt "
                   "forcé de Vlocal (à relancer).")
             os._exit(70)
 
@@ -295,17 +298,17 @@ def _self_relaunch(reason: str = "") -> None:
     import time as _t
     now = _t.time()
     if now - _last_self_relaunch[0] < 300.0:
-        print("[auto-heal] relance déjà tentée récemment -> abstention (anti-boucle).")
+        log.warning("[auto-heal] relance déjà tentée récemment -> abstention (anti-boucle).")
         return
     try:
         exe = sys.executable or ""
         i = exe.find(".app/Contents/MacOS/")
         bundle = exe[:i + 4] if i > 0 else None
         if not bundle or not os.path.isdir(bundle):
-            print("[auto-heal] bundle introuvable -> relance annulée.")
+            log.warning("[auto-heal] bundle introuvable -> relance annulée.")
             return
         _last_self_relaunch[0] = now
-        print(f"[auto-heal] RELANCE de l'app ({reason}) : {bundle}")
+        log.warning(f"[auto-heal] RELANCE de l'app ({reason}) : {bundle}")
         try:
             notifier.show("Vlocal redémarre",
                           _te("La dictée était bloquée. Vlocal se relance, réessayez dans un instant."),
@@ -317,7 +320,7 @@ def _self_relaunch(reason: str = "") -> None:
                          start_new_session=True)
         _t.sleep(0.4)
     except Exception as e:
-        print(f"[auto-heal] relance KO ({e}).")
+        log.warning(f"[auto-heal] relance KO ({e}).")
         return
     os._exit(0)
 
@@ -335,7 +338,7 @@ def _watch_system_wake(engine) -> None:
     try:
         from AppKit import NSWorkspace, NSWorkspaceDidWakeNotification
     except ImportError as e:
-        print(f"[micworker] suivi du réveil indisponible : {e}")
+        log.warning(f"[micworker] suivi du réveil indisponible : {e}")
         return
 
     def _on_wake(_note):
@@ -348,7 +351,7 @@ def _watch_system_wake(engine) -> None:
         _wake_observers.append(center.addObserverForName_object_queue_usingBlock_(
             NSWorkspaceDidWakeNotification, None, None, _on_wake))
     except Exception as e:   # fonction d'appoint : le démarrage continue sans elle
-        print(f"[micworker] suivi du réveil non installé : {e}")
+        log.warning(f"[micworker] suivi du réveil non installé : {e}")
 
 
 # v1.0.11 — DIAGNOSTIC AUTO (CONSENTI). Pour la cohorte early (clés 'comp'/testeurs),
@@ -413,7 +416,7 @@ def _acquire_single_instance():
 def _hand_over_to_running_instance():
     """Vlocal tourne déjà : on lui demande de ré-afficher sa fenêtre et on
     l'active, plutôt que de mourir en silence (« ça ne s'ouvre pas »)."""
-    print("[vlocal] déjà en cours — demande d'affichage de l'instance existante.")
+    log.info("[vlocal] déjà en cours — demande d'affichage de l'instance existante.")
     # L'instance existante peut avoir sa fenêtre CACHÉE (agent en arrière-plan).
     # On dépose une « demande d'affichage » qu'elle surveille -> elle ré-affiche
     # sa fenêtre. (Sinon : relancer l'app ne montrait rien = « je n'arrive pas

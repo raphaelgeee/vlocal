@@ -9,8 +9,11 @@ principale) ; les fonctions de ce module ne bloquent jamais.
 import os
 import threading
 
+import applog
 import appstate
 from settings import _APP_SUPPORT
+
+log = applog.get("window_mac")
 
 # Géométrie de la fenêtre principale, point de vérité unique.
 WIN_W = 1180            # v3.1 — dashboard plein écran (était 380, carte flottante)
@@ -76,9 +79,9 @@ def _purge_webkit_cache_on_update():
                     _f.write(appstate.app_version)
             except Exception:
                 pass
-            print(f"[ui]      cache WebKit purgé (MAJ {_last_ui} -> {appstate.app_version}) : UI fraîche garantie.")
+            log.info(f"[ui]      cache WebKit purgé (MAJ {_last_ui} -> {appstate.app_version}) : UI fraîche garantie.")
     except Exception as _e:
-        print(f"[ui]      purge cache WebKit ignorée : {_e}")
+        log.warning(f"[ui]      purge cache WebKit ignorée : {_e}")
 
 
 def create_main_window(webview, html_path, api):
@@ -104,9 +107,9 @@ def create_main_window(webview, html_path, api):
     )
     try:
         appstate.window.events.closing += _on_window_closing
-        print("[window] fermeture = masquage (agent maintenu en vie).")
+        log.info("[window] fermeture = masquage (agent maintenu en vie).")
     except Exception as _e:
-        print(f"[window] hook closing indisponible : {_e}")
+        log.warning(f"[window] hook closing indisponible : {_e}")
     _install_native_style()
 
 
@@ -233,10 +236,10 @@ def _style_window_native(_tries=0):
             except Exception:
                 continue
     except Exception as e:
-        print(f"[window] style premium indisponible ({e}) — fenêtre macOS standard.")
+        log.warning(f"[window] style premium indisponible ({e}) — fenêtre macOS standard.")
         return
     if applied:
-        print("[window] premium : plein cadre + feux fondus + bande de déplacement.")
+        log.info("[window] premium : plein cadre + feux fondus + bande de déplacement.")
         return
     # Fenêtre pas encore prête -> on réessaie quelques tours de boucle.
     if _tries < 15:
@@ -313,9 +316,9 @@ def _force_clear_window():
             target.setBackgroundColor_(NSColor.clearColor())
             target.setHasShadow_(True)        # v3.2.9 — ombre premium rétablie
             target.invalidateShadow()
-            print(f"[window]  ombre premium rétablie ({target.frame().size.width:.0f}x{target.frame().size.height:.0f})")
+            log.info(f"[window]  ombre premium rétablie ({target.frame().size.width:.0f}x{target.frame().size.height:.0f})")
         else:
-            print("[window]  fenêtre dashboard introuvable")
+            log.warning("[window]  fenêtre dashboard introuvable")
     except Exception as e:
-        print(f"[window]  réglage fenêtre impossible : {e}")
+        log.warning(f"[window]  réglage fenêtre impossible : {e}")
 

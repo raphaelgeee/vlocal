@@ -10,10 +10,13 @@ import json
 import sys
 import threading
 
+import applog
 import appstate
 import errors as _EV
 import overlay
 from texts import _te
+
+log = applog.get("ui_bridge")
 
 
 def _ui(code: str):
@@ -69,7 +72,7 @@ def _api_safe(default=None):
                     _r["error"] = _te(_r["error"])
                 return _r
             except Exception as e:
-                print(f"[api] {fn.__name__} a échoué : {e}")
+                log.warning(f"[api] {fn.__name__} a échoué : {e}")
                 # v3.2.9 — tour de contrôle : tout échec d'API journalisé (code
                 # stable + méthode + type d'exception, SANS donnée sensible).
                 if _EV: _EV.log(_EV.E.API_GUARD, fn=fn.__name__, err=type(e).__name__)
@@ -142,7 +145,7 @@ def _refresh_menubar():
 #      bridge le temps de se reconnecter
 #   3) Loggue chaque étape pour qu'on voie noir sur blanc ce qui se passe
 def _open_settings_modal_robust():
-    print("[settings] ouverture demandée")
+    log.info("[settings] ouverture demandée")
 
     def _cocoa_show():
         try:
@@ -151,7 +154,7 @@ def _open_settings_modal_robust():
             from AppKit import NSApplication
             NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
         except Exception as e:
-            print(f"[settings] show/activate : {e}")
+            log.warning(f"[settings] show/activate : {e}")
 
     if sys.platform == "darwin":
         try:
@@ -171,7 +174,7 @@ def _open_settings_modal_robust():
         for delay in (0.05, 0.18, 0.42):
             _t.sleep(delay)
             if appstate.window is None:
-                print("[settings] _window None, abandon")
+                log.info("[settings] _window None, abandon")
                 return
             try:
                 # On vérifie que la fonction existe AVANT de l'appeler.
@@ -180,15 +183,15 @@ def _open_settings_modal_robust():
                 kind = appstate.window.evaluate_js(
                     "typeof openSettingsModal"
                 )
-                print(f"[settings] tentative t+{delay}s : "
+                log.info(f"[settings] tentative t+{delay}s : "
                       f"typeof openSettingsModal = {kind!r}")
                 if kind == "function":
                     appstate.window.evaluate_js("openSettingsModal();")
-                    print(f"[settings] OK : modal ouvert (t+{delay}s)")
+                    log.info(f"[settings] OK : modal ouvert (t+{delay}s)")
                     return
             except Exception as e:
-                print(f"[settings] evaluate_js exception (t+{delay}s) : {e}")
-        print("[settings] ÉCHEC FINAL : impossible d'ouvrir le modal "
+                log.warning(f"[settings] evaluate_js exception (t+{delay}s) : {e}")
+        log.warning("[settings] ÉCHEC FINAL : impossible d'ouvrir le modal "
               "après 3 tentatives.")
 
     threading.Thread(target=_inject_later, daemon=True).start()

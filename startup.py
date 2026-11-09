@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 
+import applog
 import appstate
 import errors as _EV
 import lifecycle
@@ -36,6 +37,8 @@ from ui_bridge import (
 )
 from window_mac import _force_clear_window, _set_dock_visible
 
+log = applog.get("startup")
+
 # Version abandonnée par un retour arrière automatique, annoncée à l'utilisateur
 # au premier chargement de la fenêtre (le message ne peut pas partir avant).
 _rollback_notice = None
@@ -51,14 +54,14 @@ def settle_pending_update():
     rep = updater.cleanup_leftovers(appstate.app_version)   # ne lève jamais
     status = rep.get("status")
     if status == "rollback_started":
-        print(f"[update]  la version {rep.get('version')} n'a pas confirmé son "
+        log.warning(f"[update]  la version {rep.get('version')} n'a pas confirmé son "
               "démarrage : retour arrière lancé, fermeture.")
         return True
     if status == "rolled_back":
         _rollback_notice = rep.get("version")
     elif status == "failed":
         # L'app en place est intacte ; le détail est déjà au journal d'updater.
-        print(f"[update]  mise à jour vers {rep.get('version')} non aboutie "
+        log.warning(f"[update]  mise à jour vers {rep.get('version')} non aboutie "
               f"({rep.get('reason')}) : version en place conservée.")
     return False
 
@@ -118,7 +121,7 @@ def after_start():
     try:
         notifier.prebuild_async()
     except Exception as _nt_err:
-        print(f"[notify]  pré-construction KO ({_nt_err})")
+        log.warning(f"[notify]  pré-construction KO ({_nt_err})")
         try:
             if _EV:
                 _EV.log(_EV.E.STARTUP_STAGE_FAIL, stage="notifier", err=type(_nt_err).__name__)
@@ -137,7 +140,7 @@ def _on_main_thread(fn, tag):
         from Foundation import NSOperationQueue
         NSOperationQueue.mainQueue().addOperationWithBlock_(fn)
     except Exception as e:
-        print(f"[{tag}] dispatch impossible ({e})")
+        log.warning(f"[{tag}] dispatch impossible ({e})")
 
 
 def _start_hotkey_or_warn():
@@ -149,10 +152,9 @@ def _start_hotkey_or_warn():
     # le reste du démarrage continue.
     try:
         if start_global_hotkey() is not None:
-            print("[hotkey]  actif : maintenez votre raccourci global pour dicter.")
+            log.info("[hotkey]  actif : maintenez votre raccourci global pour dicter.")
     except Exception as _hk_err:
-        import traceback as _tb
-        _tb.print_exc()
+        log.exception("[hotkey]  démarrage du raccourci global KO")
         try:
             if _EV:
                 _EV.log(_EV.E.HOTKEY_START_FAIL, err=type(_hk_err).__name__)
@@ -177,7 +179,7 @@ def _create_overlay():
         overlay.create()
         overlay.set_theme(_load_settings().get("theme", "dark"))   # v1.3.4 — Apparence
     except Exception as e:
-        print(f"[overlay] indisponible ({e}) — dictée sans overlay.")
+        log.warning(f"[overlay] indisponible ({e}) — dictée sans overlay.")
 
 
 def _start_show_request_watch():
@@ -329,10 +331,10 @@ def _perform_quit():
             mid = _meeting_state.get("id")
             if appstate.store and mid:
                 appstate.store.update_meeting(mid, status="error")
-            print("[quit]    réunion en cours sauvegardée (WAV clos, "
+            log.info("[quit]    réunion en cours sauvegardée (WAV clos, "
                   "statut error récupérable).")
     except Exception as e:
-        print(f"[quit]    finalisation réunion KO : {e}")
+        log.warning(f"[quit]    finalisation réunion KO : {e}")
     # Fermeture PROPRE de la base avant de quitter (WAL tronqué).
     # Store.close() est idempotent : le 2e appel (fin de boucle
     # Cocoa, après webview.start) est sans effet.
@@ -367,13 +369,13 @@ def _check_lifecycle_delegate():
         actif = (lifecycle._LifecycleDelegate is not None
                  and isinstance(d, lifecycle._LifecycleDelegate))
     except Exception as e:
-        print(f"[quit]    délégué illisible ({e}) — quit via icône V.")
+        log.warning(f"[quit]    délégué illisible ({e}) — quit via icône V.")
         return
     if actif:
-        print("[quit]    Cmd+Q / Dock / menu Pomme -> vrai quit "
+        log.info("[quit]    Cmd+Q / Dock / menu Pomme -> vrai quit "
               "(délégué de cycle de vie actif dès la fenêtre).")
     else:
-        print("[quit]    délégué de cycle de vie absent — quit via icône V.")
+        log.warning("[quit]    délégué de cycle de vie absent — quit via icône V.")
 
 
 def _on_dictate_toggle():
@@ -420,9 +422,9 @@ def _create_menubar_on_main():
             "toggle_task": _on_toggle_task,
         }, labels=_menubar_labels())
         _refresh_menubar()                       # peuple « Rappels récents »
-        print("[menubar] icône V installée.")
+        log.info("[menubar] icône V installée.")
     except Exception as e:
-        print(f"[menubar] icône indisponible ({e}) — repli sans icône menu-bar.")
+        log.warning(f"[menubar] icône indisponible ({e}) — repli sans icône menu-bar.")
 
 
 # v1.3.4 — Veille de mise à jour : au démarrage puis toutes les six heures,
@@ -439,5 +441,5 @@ def _update_watch():
                 appstate.update_latest = latest
                 _refresh_menubar()
         except Exception as _uw_err:
-            print(f"[update]  veille KO (ignorée) : {_uw_err}")
+            log.warning(f"[update]  veille KO (ignorée) : {_uw_err}")
         time.sleep(6 * 3600)

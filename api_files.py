@@ -8,6 +8,7 @@ décodage.
 import json
 import threading
 
+import applog
 import appstate
 from dictation import copy_to_clipboard
 from lifecycle import _begin_activity, _end_activity
@@ -16,6 +17,8 @@ from reminder_flow import _post_process_by_mode
 from settings import _current_mode, _load_settings
 from texts import _te
 from ui_bridge import _api_safe, _ui
+
+log = applog.get("api_files")
 
 
 class FilesApi:
@@ -284,7 +287,7 @@ class FilesApi:
             return {"ok": True, "id": mid}
         except Exception as e:
             _meeting_state["pipeline_busy"] = False
-            print(f"[import] réunion KO : {e}")
+            log.warning(f"[import] réunion KO : {e}")
             return {"ok": False, "error": f"Import en réunion échoué : {e}"}
         finally:
             if tmpdir:

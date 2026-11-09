@@ -9,6 +9,7 @@ import json
 import os
 import threading
 
+import applog
 import appstate
 import errors as _EV
 import model_store
@@ -27,6 +28,8 @@ from settings import (
 from supabase_config import auth_headers, edge_url
 from texts import _te
 from ui_bridge import _api_safe, _open_settings_modal_robust, _refresh_menubar, _ui
+
+log = applog.get("api_settings")
 
 _dl_in_flight = False       # v3.3 (N2) — garde anti-double téléchargement modèles
 
@@ -371,7 +374,7 @@ class SettingsApi:
             try:
                 overlay.set_theme(new.get("theme", "dark"))
             except Exception as _th_err:
-                print(f"[overlay] thème non appliqué : {_th_err}")
+                log.warning(f"[overlay] thème non appliqué : {_th_err}")
         # v1.1.0 — partage activé depuis les Réglages : premier envoi tout de suite.
         if (patch or {}).get("telemetry_enabled") is True and appstate.telemetry is not None:
             threading.Thread(target=appstate.telemetry.sync_now, name="telemetry-now",

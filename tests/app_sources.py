@@ -7,6 +7,7 @@ de doublures, ou motifs cherchés dans le texte. app.py a été découpé en mod
 défini qu'une fois dans l'ensemble (sinon l'extraction serait ambiguë).
 """
 import ast
+import logging
 import os
 
 RACINE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -34,6 +35,10 @@ FICHIERS = (
     "startup.py",
     "app.py",
 )
+
+
+# Noms définis dans chaque module, par construction : le logger du module.
+PAR_MODULE = {"log"}
 
 
 def chemin(nom):
@@ -68,7 +73,7 @@ def definitions():
         arbre = ast.parse(texte(nom_fichier), chemin(nom_fichier))
         for n in arbre.body:
             nom = _nom_defini(n)
-            if nom is None:
+            if nom is None or nom in PAR_MODULE:
                 continue
             if nom in vus and vus[nom][0] != nom_fichier:
                 raise AssertionError(f"{nom} défini dans {vus[nom][0]} et {nom_fichier}")
@@ -78,7 +83,9 @@ def definitions():
 
 def charge(noms, espace):
     """Exécute dans `espace` les définitions de premier niveau nommées dans
-    `noms`, chacune compilée sous son fichier d'origine (traces lisibles)."""
+    `noms`, chacune compilée sous son fichier d'origine (traces lisibles).
+    Le code chargé journalise dans un logger de test, sans gestionnaire."""
+    espace.setdefault("log", logging.getLogger("vlocal.tests"))
     defs = definitions()
     manquants = set(noms) - set(defs)
     if manquants:

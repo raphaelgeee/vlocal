@@ -10,6 +10,7 @@ import os
 import re
 import threading
 
+import applog
 import appstate
 import errors as _EV
 import overlay
@@ -36,6 +37,8 @@ from settings import (
 )
 from texts import _te
 from ui_bridge import _api_safe, _cancel_overlay_hide, _refresh_lists_ui, _toast, _ui
+
+log = applog.get("api_meetings")
 
 
 class MeetingsApi:
@@ -144,7 +147,7 @@ class MeetingsApi:
                                 _diar = _dz.Diarizer()
                                 _diar.reset_stream()
                         except Exception as e:
-                            print(f"[whotalks] diariseur live indispo ({e}).")
+                            log.warning(f"[whotalks] diariseur live indispo ({e}).")
                             _diar = None
                     # v1.0.12 — VISIO : fenêtres de transcription plus courtes
                     # (pic RAM MLX ↓ sous 2,10 Go, sans toucher modèle/qualité).
@@ -157,7 +160,7 @@ class MeetingsApi:
                     _meeting_state["live"] = lt
                     _meeting_state["diar"] = _diar
                 except Exception as e:
-                    print(f"[live] démarrage incrémental KO ({e}) — "
+                    log.warning(f"[live] démarrage incrémental KO ({e}) — "
                           "repli sur transcription complète au stop.")
                 # v21 — anti-App Nap pendant l'ENREGISTREMENT : le micro ouvert
                 # ne protège PAS d'App Nap (le critère Apple est « playing
@@ -210,7 +213,7 @@ class MeetingsApi:
                 _meeting_state["id"] = None
                 _meeting_state.pop("n_spk_forced", None)
                 _meeting_state.pop("mode", None)
-                print(f"[reunion] démarrage impossible : {e}")
+                log.warning(f"[reunion] démarrage impossible : {e}")
                 _toast("Impossible de démarrer l'enregistrement : "
                        f"{e}. Vérifiez le micro et l'espace disque.",
                        kind="error")
@@ -233,7 +236,7 @@ class MeetingsApi:
             try:
                 wav_path, duree = rec.stop()
             except Exception as e:
-                print(f"[reunion] arrêt : {e}")
+                log.warning(f"[reunion] arrêt : {e}")
                 _end_activity(_meeting_state.pop("activity", None))  # v21
                 return {"ok": False, "error": str(e)}
         # v15 — Remonte un éventuel incident d'enregistrement (disque plein…)
@@ -242,7 +245,7 @@ class MeetingsApi:
                 _te("Espace disque insuffisant : l'enregistrement a été tronqué. "
                     "La partie déjà captée va être transcrite.")))
         elif rec.error:
-            print(f"[reunion] incident enregistrement : {rec.error}")
+            log.warning(f"[reunion] incident enregistrement : {rec.error}")
             _toast("Un incident d'écriture a interrompu l'enregistrement ; "
                    "la partie déjà captée va être transcrite.", kind="error")
         # v15 — Audio trop court / silencieux : pas la peine de lancer Whisper.
@@ -303,7 +306,7 @@ class MeetingsApi:
             # laisser pipeline_busy coincé à True, sinon les Réunions sont bloquées
             # à vie ("réunion précédente en cours") jusqu'au redémarrage. On nettoie.
             _meeting_state["pipeline_busy"] = False
-            print(f"[reunion] lancement pipeline KO : {_err}")
+            log.warning(f"[reunion] lancement pipeline KO : {_err}")
             if appstate.store and mid:
                 try:
                     appstate.store.update_meeting(mid, status="error")
@@ -427,7 +430,7 @@ class MeetingsApi:
             return {"ok": True, "id": mid}
         except Exception as e:
             _meeting_state["pipeline_busy"] = False
-            print(f"[reunion] retry KO : {e}")
+            log.warning(f"[reunion] retry KO : {e}")
             return {"ok": False, "error": f"Réessai impossible : {e}"}
 
     def rediarize_meeting(self, mid, num_speakers=0):
@@ -500,7 +503,7 @@ class MeetingsApi:
                         _ui("if(typeof setRediarProgress==='function')"
                             "setRediarProgress(100);")
                     except Exception as e:
-                        print(f"[reunion] re-diarisation guidée KO ({e}) -> tuiles.")
+                        log.warning(f"[reunion] re-diarisation guidée KO ({e}) -> tuiles.")
                         if _EV: _EV.log(_EV.E.DIAR_FALLBACK, where="rediar_exception",
                                         err=str(e)[:120])
                         spk = None
@@ -511,7 +514,7 @@ class MeetingsApi:
                     # nettement moins bon, sans que rien ne l'indique — d'où des
                     # ré-identifications qui « ne changeaient rien ». On le
                     # journalise et on le dit à l'utilisateur.
-                    print("[reunion] voie guidée indisponible -> repli tuiles "
+                    log.warning("[reunion] voie guidée indisponible -> repli tuiles "
                           "(qualité dégradée).")
                     if _EV: _EV.log(_EV.E.DIAR_FALLBACK, where="rediar_empty")
                     _toast("L'analyse fine des voix n'a pas pu démarrer : le "
@@ -552,7 +555,7 @@ class MeetingsApi:
                     except Exception:
                         pass
         except Exception as e:
-            print(f"[reunion] re-diarisation KO : {e}")
+            log.warning(f"[reunion] re-diarisation KO : {e}")
             return False
 
     # ------------------------ v18.2 : panneau réunion à droite ----------------
@@ -696,10 +699,10 @@ class MeetingsApi:
                         _APP_SUPPORT, name, info["centroid"],
                         float(info.get("seconds", 0.0)))
                     if vid:
-                        print(f"[whotalks] voix « {name} » apprise ({vid}, "
+                        log.info(f"[whotalks] voix « {name} » apprise ({vid}, "
                               f"{round(float(info.get('seconds',0)))}s).")
             except Exception as e:
-                print(f"[whotalks] enrôlement ignoré ({e}).")
+                log.warning(f"[whotalks] enrôlement ignoré ({e}).")
         return True
 
     # ---------------- WhoTalks v1.2 : banque de voix connues -----------------

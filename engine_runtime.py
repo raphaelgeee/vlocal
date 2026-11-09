@@ -12,6 +12,7 @@ import sys
 import threading
 import time
 
+import applog
 import appstate
 import errors as _EV
 import model_store
@@ -28,6 +29,8 @@ from lifecycle import _watch_system_wake
 from meetings import _meeting_state
 from settings import _load_settings, _onboarding_done, _save_settings
 from ui_bridge import _toast
+
+log = applog.get("engine_runtime")
 
 
 def _resolve_model_dirs():
@@ -173,13 +176,13 @@ def _apply_memory_plan(eng, actions) -> None:
         try:
             if action == "cpu":
                 eng.unload_model()
-                print("[mémoire] modèle CPU déchargé (rechargé au prochain usage).")
+                log.info("[mémoire] modèle CPU déchargé (rechargé au prochain usage).")
             elif action == "gpu":
                 _mlx.unload()
-                print("[mémoire] modèle GPU déchargé (rechargé dès le début de "
+                log.info("[mémoire] modèle GPU déchargé (rechargé dès le début de "
                       "la prochaine dictée).")
         except Exception as e:
-            print(f"[mémoire] déchargement « {action} » KO : {type(e).__name__}: {e}")
+            log.warning(f"[mémoire] déchargement « {action} » KO : {type(e).__name__}: {e}")
 
 
 def _memory_tick() -> None:
@@ -204,7 +207,7 @@ def _memory_tick() -> None:
         cpu_idle_s=now - cpu_last,
         cpu_is_fallback=(_mlx.status()[0] == "ok"))
     if actions:
-        print(f"[mémoire] pression {_mp.LEVEL_NAMES[level]} -> "
+        log.info(f"[mémoire] pression {_mp.LEVEL_NAMES[level]} -> "
               f"déchargement : {', '.join(actions)}.")
         _apply_memory_plan(eng, actions)
 
@@ -214,7 +217,7 @@ def _start_idle_unloader():
         try:
             _memory_tick()
         except Exception as e:
-            print(f"[mémoire] passage KO : {type(e).__name__}: {e}")
+            log.warning(f"[mémoire] passage KO : {type(e).__name__}: {e}")
         finally:
             t = threading.Timer(_MEMORY_POLL_S, _check)
             t.daemon = True
@@ -240,7 +243,7 @@ def _finish_model_download():
     elif os.path.exists(os.path.join(appstate.small_model_dir, "model.bin")):
         _wd = appstate.small_model_dir
     if _wd is None:
-        print("[models] post-download : modèle introuvable malgré le téléchargement.")
+        log.warning("[models] post-download : modèle introuvable malgré le téléchargement.")
         return False
     appstate.engine_load_params = (_wd, appstate.cpu_threads)
     threading.Thread(target=_load_engine_async, daemon=True).start()
@@ -253,12 +256,12 @@ def _load_engine_async():
     if not appstate.engine_load_params:
         return
     whisper_dir, cpu_threads = appstate.engine_load_params
-    print(f"[whisper] chargement en arrière-plan "
+    log.info(f"[whisper] chargement en arrière-plan "
           f"({os.path.basename(whisper_dir)}, int8, cpu_threads={cpu_threads})…")
     try:
         engine = VlocalEngine(model_dir=whisper_dir, cpu_threads=cpu_threads)
     except Exception as e:
-        print(f"[whisper] échec chargement moteur : {e}")
+        log.warning(f"[whisper] échec chargement moteur : {e}")
         if _EV: _EV.log(_EV.E.ENGINE_LOAD_FAIL, err=type(e).__name__)   # S2 — capté par la tour de contrôle
         _toast("Le moteur de transcription n'a pas pu démarrer. Réessayez de "
                "lancer Vlocal.", kind="error")
@@ -270,15 +273,15 @@ def _load_engine_async():
             from engine import set_correction_terms
             terms = [c for _, c in appstate.store.glossary_pairs()]
             set_correction_terms(terms)
-            print(f"[glossaire] {len(terms)} terme(s) injecté(s).")
+            log.info(f"[glossaire] {len(terms)} terme(s) injecté(s).")
     except Exception as e:
-        print(f"[glossaire] injection KO : {e}")
+        log.warning(f"[glossaire] injection KO : {e}")
     try:
         import psutil as _ps
         rss = _ps.Process().memory_info().rss / 1e9
-        print(f"[whisper] prêt — turbo en mémoire, RAM {rss:.2f} Go.")
+        log.info(f"[whisper] prêt — turbo en mémoire, RAM {rss:.2f} Go.")
     except Exception:
-        print("[whisper] prêt.")
+        log.info("[whisper] prêt.")
     _engine_ready.set()
     _start_dictation_supervisor()   # v1.0.9 — auto-heal : la dictée ne reste jamais bloquée
     # v1.0.22 — MICRO BÉTON : préchauffe le worker micro (process jetable) pour
@@ -312,7 +315,7 @@ def _load_engine_async():
                 _gpu = False
             if speed in ("auto", "rapide") and not _gpu:
                 if engine._ensure_fast_model():
-                    print("[whisper] small préchargé en fond (dictée « auto »/« rapide »).")
+                    log.info("[whisper] small préchargé en fond (dictée « auto »/« rapide »).")
             # PRÉCHAUFFE : amortit la 1re inférence (cold-start) -> la PREMIÈRE
             # dictée réelle est aussi rapide que les suivantes.
             engine.warmup()
@@ -349,9 +352,9 @@ def _choose_whisper_dir():
         # (download_models) AVANT toute dictée, puis _finish_model_download charge le
         # moteur. _engine_load_params reste None d'ici là (la dictée attend les modèles).
         whisper_dir = None
-        print("[whisper] modèles absents -> téléchargement R2 requis (app thin).")
+        log.info("[whisper] modèles absents -> téléchargement R2 requis (app thin).")
     else:
-        print(f"[erreur]  aucun modèle Whisper trouvé sous {model_store.models_dir()}")
+        log.error(f"[erreur]  aucun modèle Whisper trouvé sous {model_store.models_dir()}")
         sys.exit(1)
     return whisper_dir
 

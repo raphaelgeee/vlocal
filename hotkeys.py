@@ -10,6 +10,7 @@ import os
 import threading
 import time
 
+import applog
 import appstate
 import errors as _EV
 import hotkey_mac
@@ -19,6 +20,8 @@ from dictation import _insert_serial_lock
 from settings import _load_settings
 from texts import _te
 from ui_bridge import _cancel_overlay_hide, _schedule_overlay_hide, _toast, _ui
+
+log = applog.get("hotkeys")
 
 
 _hotkey_state = None       # v1.3.3 — état du raccourci global (hotkey_mac.start), pour le réarmer à chaud
@@ -51,7 +54,7 @@ def start_global_hotkey():
     hotkey_mode = "tap" if _settings_now.get("hotkey_mode") == "tap" else "hold"
     if hotkey_name == "none":
         appstate.hotkey_label = ""   # raccourci désactivé -> pas de libellé (toast/UI)
-        print("[hotkey] désactivé via VLOCAL_HOTKEY=none — utilisez le bouton Dicter.")
+        log.info("[hotkey] désactivé via VLOCAL_HOTKEY=none — utilisez le bouton Dicter.")
         return None
 
     # Configs : nom -> (modificateurs requis, vk de la touche déclencheur,
@@ -104,7 +107,7 @@ def start_global_hotkey():
         # "indéterminé" (binaire fraîchement signé) sans être "refusé" : laisser
         # l'ouverture du flux audio déclencher le PROMPT MICRO NATIF de macOS.
         # Le micro réellement refusé est géré en aval (aucun son -> message clair).
-        print(f"[hotkey] BEGIN ({hotkey_label})")
+        log.info(f"[hotkey] BEGIN ({hotkey_label})")
         if not appstate.controller:
             # DICT-02 — moteur encore en chargement : feedback au lieu du silence.
             overlay.info(_te("Vlocal démarre"), _te("Le moteur se charge, réessayez dans un instant."))
@@ -132,7 +135,7 @@ def start_global_hotkey():
             started = bool(appstate.controller.start())
         except Exception as e:
             # DICT-04 — micro indisponible / périphérique monopolisé : on prévient.
-            print(f"[hotkey] micro indisponible : {e}")
+            log.warning(f"[hotkey] micro indisponible : {e}")
             overlay.mic_needed()
             _schedule_overlay_hide(4.0)
             return
@@ -159,7 +162,7 @@ def start_global_hotkey():
             else:
                 return
         rec_dur = appstate.controller.recording_duration()
-        print(f"[hotkey] END dur={rec_dur:.2f}s")
+        log.info(f"[hotkey] END dur={rec_dur:.2f}s")
         # ÉTAPE 4.4 — capture trop courte : pas d'appel Whisper (hallucinations).
         if rec_dur < 0.3:
             # v1.0.22 — cancel() ferme le micro (join worker 2 s + stop borné) :
@@ -203,7 +206,7 @@ def start_global_hotkey():
                 # notify_ui=False : la fenêtre principale ne réagit pas (overlay seul).
                 text = appstate.controller.stop_and_finalize(notify_ui=False)
             except Exception as e:
-                print(f"[hotkey]  transcription KO : {e}")
+                log.warning(f"[hotkey]  transcription KO : {e}")
                 if _own():
                     overlay.error(_te("Réessayez."))
                     _schedule_overlay_hide(4.0)
@@ -224,7 +227,7 @@ def start_global_hotkey():
             # force_reset (epoch bumpé : figeage récupéré par le superviseur)
             # invalide ce texte — c'était le vrai cas visé par l'anti-pollution.
             if getattr(appstate.controller, "_epoch", my_epoch) != my_epoch:
-                print("[hotkey] finalisation invalidée par un reset -> "
+                log.info("[hotkey] finalisation invalidée par un reset -> "
                       "insertion au curseur IGNORÉE (anti-pollution). "
                       "Texte au presse-papier.")
                 return
@@ -281,7 +284,7 @@ def start_global_hotkey():
                                "Confidentialité et sécurité > Accessibilité.",
                                kind="info")
             except Exception as e:
-                print(f"[insert]  insertion au curseur KO : {e}")
+                log.warning(f"[insert]  insertion au curseur KO : {e}")
             # Overlay État 3 : chrono de transcription + branche cascade + action.
             # Si une invite d'échec est déjà à l'écran (canal fiable), on NE
             # l'écrase PAS avec le résultat -> on prolonge juste l'affichage.
@@ -300,13 +303,13 @@ def start_global_hotkey():
         try:
             begin()
         except Exception as e:
-            print(f"[hotkey] begin KO (ignoré) : {e}")
+            log.warning(f"[hotkey] begin KO (ignoré) : {e}")
 
     def _end_safe():
         try:
             end()
         except Exception as e:
-            print(f"[hotkey] end KO (ignoré) : {e}")
+            log.warning(f"[hotkey] end KO (ignoré) : {e}")
 
     # v1.3.3 — appui bref isolé en mode double appui : rien à transcrire, on
     # annule et on montre le geste. Même mécanique que « trop court », avec le
@@ -321,7 +324,7 @@ def start_global_hotkey():
             overlay.too_short_tap()
             _schedule_overlay_hide(2.6)
         except Exception as e:
-            print(f"[hotkey] cancel KO (ignoré) : {e}")
+            log.warning(f"[hotkey] cancel KO (ignoré) : {e}")
 
     # v1.3.3 — double appui reçu : le micro reste ouvert, la pilule le dit et
     # dit comment terminer (avec le libellé du raccourci réel).
@@ -329,14 +332,14 @@ def start_global_hotkey():
         try:
             overlay.locked(hotkey_label)
         except Exception as e:
-            print(f"[hotkey] lock KO (ignoré) : {e}")
+            log.warning(f"[hotkey] lock KO (ignoré) : {e}")
 
     # Raccourci global via moniteurs NSEvent natifs (hotkey_mac), PLUS de
     # pynput : pynput crashait l'app (résolution TSM du caractère hors main
     # thread -> SIGTRAP). Les moniteurs ne lisent que les modificateurs /
     # keycodes -> aucun crash. (hotkey_mac est importé au niveau module, v1.3.2.)
     try:
-        print(f"[hotkey] '{hotkey_name}' ({hotkey_label}) | "
+        log.info(f"[hotkey] '{hotkey_name}' ({hotkey_label}) | "
               f"accessibility_ok={permissions.accessibility_ok()} "
               f"mic_ok={permissions.mic_ok()}")
     except Exception:
@@ -349,10 +352,10 @@ def start_global_hotkey():
                          max_seconds=600.0, chord_vk=chord_vk,
                          mode=hotkey_mode, on_cancel=_cancel_safe, on_lock=_lock_safe)
     if t is None:
-        print("[hotkey] raccourci inactif — accordez l'Accessibilité à Vlocal, "
+        log.warning("[hotkey] raccourci inactif — accordez l'Accessibilité à Vlocal, "
               "ou utilisez le bouton Dicter.")
     else:
-        print(f"[hotkey] mode de déclenchement : {hotkey_mode}")
+        log.info(f"[hotkey] mode de déclenchement : {hotkey_mode}")
     _hotkey_state = t
     return t
 
@@ -368,13 +371,12 @@ def _rearm_global_hotkey():
     try:
         hotkey_mac.stop(old)
     except Exception as e:
-        print(f"[hotkey] arrêt de l'ancien raccourci KO : {e}")
+        log.warning(f"[hotkey] arrêt de l'ancien raccourci KO : {e}")
     try:
         t = start_global_hotkey()
-        print("[hotkey] réarmé à chaud" + ("" if t is not None else " (inactif)"))
+        log.info("[hotkey] réarmé à chaud" + ("" if t is not None else " (inactif)"))
     except Exception as e:
-        import traceback as _tb
-        _tb.print_exc()
+        log.exception("[hotkey] réarmement à chaud KO")
         try:
             if _EV:
                 _EV.log(_EV.E.HOTKEY_START_FAIL, err=type(e).__name__, rearm=True)

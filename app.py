@@ -24,6 +24,7 @@ Auto-test  :   ./venv/bin/python app.py --selftest   (sans fenêtre ni micro)
 
 import sys
 
+
 def _hide_worker_from_dock():
     """v1.0.24 — UN SOUS-PROCESS NE DOIT JAMAIS APPARAÎTRE DANS LE DOCK.
 
@@ -106,6 +107,8 @@ from window_mac import (  # noqa: E402
     _set_dock_visible,
     create_main_window,
 )
+
+log = applog.get("app")
 
 # v16 — Base de ressources « frozen-aware » : en dev c'est le dossier du
 # script ; une fois empaqueté par PyInstaller, les ressources (HTML, assets,
@@ -192,7 +195,7 @@ def main():
     try:
         appstate.window.events.loaded += on_main_window_loaded
     except Exception as e:
-        print(f"[update]  confirmation du démarrage non branchée : {e}")
+        log.warning(f"[update]  confirmation du démarrage non branchée : {e}")
 
     webview.start(after_start)
     # Sortie par fin de boucle Cocoa (fermeture sans passer par « Quitter »).
@@ -214,10 +217,10 @@ def _open_store():
     s'affichent tout de suite. Le moteur Whisper (lent) charge en tâche de fond."""
     try:
         appstate.store = Store()
-        print(f"[base]    {appstate.store.path}")
+        log.info(f"[base]    {appstate.store.path}")
     except Exception as e:
         appstate.store = None
-        print(f"[base]    persistance désactivée ({e}) — mode brut intact.")
+        log.warning(f"[base]    persistance désactivée ({e}) — mode brut intact.")
 
 
 def _start_telemetry():
@@ -236,7 +239,7 @@ def _start_telemetry():
                                                  get_profile=_telemetry_profile)
         appstate.telemetry.start()
     except Exception as e:
-        print(f"[telemetry] non démarrée : {e}")
+        log.warning(f"[telemetry] non démarrée : {e}")
 
 
 if __name__ == "__main__":

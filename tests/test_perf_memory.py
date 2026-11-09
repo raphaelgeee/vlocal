@@ -171,9 +171,9 @@ class AppTickTests(unittest.TestCase):
 
     def test_echec_de_dechargement_journalise_pas_avale(self):
         with mock.patch.object(mlx_engine, "unload", side_effect=TimeoutError("GPU occupé")), \
-                mock.patch("builtins.print") as out:
+                self.assertLogs(self.ns["log"], level="WARNING") as journal:
             self.ns["_apply_memory_plan"](self.eng, ("gpu",))
-        self.assertIn("KO", " ".join(str(c) for c in out.call_args_list))
+        self.assertIn("KO", " ".join(journal.output))
 
 
 class ReloadOnNextPressTests(unittest.TestCase):

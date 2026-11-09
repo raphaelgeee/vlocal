@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 
+import applog
 import appstate
 import notifier
 import obsidian
@@ -18,6 +19,8 @@ import processor
 import reminders
 from settings import _load_settings
 from ui_bridge import _refresh_lists_ui, _refresh_menubar, _toast, _ui
+
+log = applog.get("reminder_flow")
 
 
 # v2 — Déclenchement d'un rappel : notification système FIABLE + bannière in-app
@@ -86,7 +89,7 @@ def _schedule_reminder(at_ts: float, titre: str, task_id=None):
         if _task_still_open(task_id):
             _fire_reminder((titre or "")[:120])
         else:
-            print(f"[rappel]  #{task_id} coché/supprimé avant l'échéance — silencieux.")
+            log.info(f"[rappel]  #{task_id} coché/supprimé avant l'échéance — silencieux.")
 
     t = _th.Timer(delay, _fire)
     t.daemon = True
@@ -151,7 +154,7 @@ def _post_process_by_mode(raw: str, mode: str):
         if reminders.is_reminder(raw):
             _create_reminder_from_text(raw)
     except Exception as e:
-        print(f"[dictée] auto-rappel ignoré ({e}).")
+        log.warning(f"[dictée] auto-rappel ignoré ({e}).")
     # v1.0.13 — Capture Obsidian (ADDITIF, 100% local) : si un coffre est connecté,
     # chaque dictée est rangée au bon endroit via un routeur à mots-clés déterministe.
     # Hors du chemin critique (on est déjà sur un thread daemon) ; échec silencieux,
@@ -161,7 +164,7 @@ def _post_process_by_mode(raw: str, mode: str):
         if _s.get("obsidian_enabled") and _s.get("obsidian_vault"):
             obsidian.capture(raw, _s.get("obsidian_vault"), time.time())
     except Exception as e:
-        print(f"[dictée] capture Obsidian ignorée ({e}).")
+        log.warning(f"[dictée] capture Obsidian ignorée ({e}).")
 
 
 def _create_reminder_from_text(raw: str):
@@ -181,7 +184,7 @@ def _create_reminder_from_text(raw: str):
     # rappel (il ne pourra jamais sonner) -> on ne le crée pas. Évite qu'une dictée
     # banale au déclencheur ambigu atterrisse dans Rappels avec « aucune » échéance.
     if not datetime_iso:
-        print("[dictée] rappel sans horaire -> ignoré (anti faux positif).")
+        log.info("[dictée] rappel sans horaire -> ignoré (anti faux positif).")
         return
     try:
         tid = appstate.store.add_task(titre=titre, echeance=echeance_naturelle,
@@ -235,7 +238,7 @@ def _rearm_pending_reminders():
                                    task_id=t.get("id"))
                 rearmed += 1
     except Exception as e:
-        print(f"[rappel]  ré-armement KO : {e}")
+        log.warning(f"[rappel]  ré-armement KO : {e}")
         return
     if rearmed:
-        print(f"[rappel]  {rearmed} rappel(s) re-planifié(s) au démarrage.")
+        log.info(f"[rappel]  {rearmed} rappel(s) re-planifié(s) au démarrage.")

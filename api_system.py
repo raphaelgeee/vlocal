@@ -10,6 +10,7 @@ import os
 import sys
 import threading
 
+import applog
 import appstate
 import notifier
 import permissions
@@ -18,6 +19,8 @@ from lifecycle import _quit_app, _reveal_app_in_finder
 from supabase_config import auth_headers, edge_url
 from texts import _te
 from ui_bridge import _ui
+
+log = applog.get("api_system")
 
 _update_busy = False       # v1.0.5 — une préparation de MAJ est en cours (anti-double)
 _update_staged = None      # v1.0.5 — chemin de la réplique vérifiée prête à installer
@@ -118,7 +121,7 @@ class SystemApi:
                 _ui("if(typeof updateError==='function') updateError(%s);"
                     % json.dumps(e.message(appstate.ui_lang)))
             except Exception as e:  # noqa: BLE001
-                print(f"[update] prepare KO : {e}")
+                log.warning(f"[update] prepare KO : {e}")
                 _ui("if(typeof updateError==='function') updateError(%s);"
                     % json.dumps(_te("La mise à jour a échoué. Réessayez.")))
             finally:
@@ -140,7 +143,7 @@ class SystemApi:
         except updater.UpdateError as e:
             return {"ok": False, "error": e.message(appstate.ui_lang)}
         except Exception as e:  # noqa: BLE001
-            print(f"[update] apply KO : {e}")
+            log.warning(f"[update] apply KO : {e}")
             return {"ok": False, "error": _te("L'installation a échoué.")}
 
         # laisse l'UI peindre l'écran « fermeture » avant de mourir ; l'installateur
@@ -198,7 +201,7 @@ class SystemApi:
                         try: s.close()
                         except Exception: pass
                     except Exception as _e:
-                        print(f"[perm] déclencheur micro KO : {_e}")
+                        log.warning(f"[perm] déclencheur micro KO : {_e}")
                 threading.Thread(target=_trig_mic, name="mic-perm-trigger", daemon=True).start()
                 # Déjà demandé mais refusé/restreint -> ouvrir les Réglages (l'app y est).
                 try:
@@ -255,7 +258,7 @@ class SystemApi:
             # `open -n` ouvrirait une 2e instance -> 2 icônes + insertion figée).
             _quit_app()
         except Exception as e:
-            print(f"[relaunch] KO : {e}")
+            log.warning(f"[relaunch] KO : {e}")
         return {"ok": True}
 
     def repair_insertion(self):
@@ -272,9 +275,9 @@ class SystemApi:
             import subprocess
             subprocess.run(["tccutil", "reset", "Accessibility", "com.vlocal.app"],
                            check=False, capture_output=True, timeout=10)
-            print("[repair] autorisation Accessibilité réinitialisée (case fantôme effacée).")
+            log.info("[repair] autorisation Accessibilité réinitialisée (case fantôme effacée).")
         except Exception as e:
-            print(f"[repair] tccutil reset KO : {e}")
+            log.warning(f"[repair] tccutil reset KO : {e}")
         try:
             # Ré-inscrit Vlocal dans la liste TCC (best-effort ; macOS met le statut
             # de confiance en cache PAR PROCESS, donc la ré-inscription dans CE
@@ -287,7 +290,7 @@ class SystemApi:
             permissions.open_settings("accessibility")
             _reveal_app_in_finder()
         except Exception as e:
-            print(f"[repair] ouverture Réglages Accessibilité KO : {e}")
+            log.warning(f"[repair] ouverture Réglages Accessibilité KO : {e}")
         return {"ok": True}
 
     # ------------------- v1.0.6 : diagnostic notifications (rappels) ---------
@@ -319,7 +322,7 @@ class SystemApi:
                 _te("Si vous voyez ceci, les rappels Vlocal fonctionnent."),
                 subtitle=None))
         except Exception as e:
-            print(f"[notif] test KO : {e}")
+            log.warning(f"[notif] test KO : {e}")
             st = "unknown"
         return {"status": st, "sent": sent}
 
@@ -335,7 +338,7 @@ class SystemApi:
                     "x-apple.systempreferences:com.apple.Notifications-Settings.extension")
                 NSWorkspace.sharedWorkspace().openURL_(url)
         except Exception as e:
-            print(f"[notif] ouverture Réglages Notifications KO : {e}")
+            log.warning(f"[notif] ouverture Réglages Notifications KO : {e}")
         return {"ok": True}
 
     def hide_window(self):
