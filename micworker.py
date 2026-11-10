@@ -102,7 +102,8 @@ def set_thread_qos(qos_class: int) -> bool:
     if err and qos_class not in _QOS_WARNED:
         _QOS_WARNED.add(qos_class)
         print(f"[qos] pthread_set_qos_class_self_np({qos_class:#x}) a renvoyé {err} "
-              "(thread hors système QoS : placement P-core non garanti).")
+              "(thread hors système QoS : placement P-core non garanti).",
+              file=sys.stderr)
     return not err
 
 
@@ -260,7 +261,7 @@ def open_coreaudio():
     try:
         return CoreAudio()
     except OSError as e:
-        print(f"[micworker] CoreAudio indisponible : {e}")
+        print(f"[micworker] CoreAudio indisponible : {e}", file=sys.stderr)
         return None
 
 
@@ -797,6 +798,9 @@ def worker_main(argv) -> int:
     (numpy seulement pour rééchantillonner) : spawn rapide, ~30 Mo. Le worker
     ne meurt que sur quit/EOF, ou tué par le parent, ce qui est un mode de
     sortie NORMAL ici."""
+    # fd 1 porte le protocole : tout print() du worker (ou d'une bibliothèque)
+    # part sur stderr, les trames passent par _write_all(1, ...).
+    sys.stdout = sys.stderr
     try:
         import sounddevice as sd
     except Exception as e:
