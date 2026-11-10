@@ -25,6 +25,23 @@ import json
 import threading
 import datetime as _dt
 
+import applog
+
+log = applog.get("obsidian")
+
+# Phrases FIXES renvoyées à l'appelant (clés de texts._BT) : aucun texte
+# d'exception ne remonte à l'écran, le détail va au journal.
+ERR_EMPTY = "Rien à ranger dans le coffre."
+ERR_NO_VAULT = "Coffre Obsidian introuvable."
+ERR_WRITE = "Écriture dans le coffre Obsidian impossible."
+ERR_CREATE = "Création du coffre impossible."
+
+
+def _failure(what, message):
+    """Journalise l'exception en cours et renvoie l'échec avec une phrase fixe."""
+    log.warning("[obsidian] %s a échoué", what, exc_info=True)
+    return {"ok": False, "error": message}
+
 # Verrou d'ecriture : deux dictees rapprochees finalisent sur deux threads daemon
 # distincts ; on serialise les read-modify-write d'une meme note.
 _WRITE_LOCK = threading.Lock()
@@ -233,9 +250,9 @@ def capture(text, vault, now_ts=None, routing=None):
     Renvoie {ok, path, bucket} ou {ok: False, error}."""
     text = (text or "").strip()
     if not text:
-        return {"ok": False, "error": "vide"}
+        return {"ok": False, "error": ERR_EMPTY}
     if not vault or not os.path.isdir(vault):
-        return {"ok": False, "error": "coffre introuvable"}
+        return {"ok": False, "error": ERR_NO_VAULT}
     try:
         now = _dt.datetime.fromtimestamp(now_ts) if now_ts else _dt.datetime.now()
     except Exception:
@@ -258,8 +275,8 @@ def capture(text, vault, now_ts=None, routing=None):
     try:
         with _WRITE_LOCK:
             _append_under_section(note_path, r.get("section"), line)
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+    except Exception:
+        return _failure("capture", ERR_WRITE)
     return {"ok": True, "path": note_path, "bucket": r["bucket"]}
 
 
@@ -388,8 +405,8 @@ def create_voice_vault(base=None):
         seed_routing(path, _VOICE_ROUTING)
         _register_in_obsidian(path)
         return {"ok": True, "path": path, "created": created}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+    except Exception:
+        return _failure("create_voice_vault", ERR_CREATE)
 
 
 def _safe_title(s, limit=60):
@@ -405,7 +422,7 @@ def capture_meeting(meeting, vault, blocks=None, names=None):
     remplacée à chaque ré-analyse ou renommage. Ne lève jamais."""
     try:
         if not vault or not os.path.isdir(vault) or not meeting:
-            return {"ok": False, "error": "coffre introuvable"}
+            return {"ok": False, "error": ERR_NO_VAULT}
         mid = int(meeting.get("id") or 0)
         try:
             when = _dt.datetime.fromtimestamp(float(meeting.get("created_at") or 0))
@@ -457,20 +474,20 @@ def capture_meeting(meeting, vault, blocks=None, names=None):
             with open(path, "w", encoding="utf-8") as f:
                 f.write("\n".join(parts))
         return {"ok": True, "path": path}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+    except Exception:
+        return _failure("capture_meeting", ERR_WRITE)
 
 
 def capture_reminder(titre, echeance, vault, now_ts=None):
     """Ajoute un rappel à Rappels/Rappels.md (case à cocher, échéance). Ne lève jamais."""
     try:
         if not vault or not os.path.isdir(vault):
-            return {"ok": False, "error": "coffre introuvable"}
+            return {"ok": False, "error": ERR_NO_VAULT}
         now = _dt.datetime.fromtimestamp(now_ts) if now_ts else _dt.datetime.now()
         path = os.path.join(vault, REMINDERS_DIR, "Rappels.md")
         line = f"- [ ] {(titre or '').strip()} (échéance : {(echeance or '').strip() or 'non précisée'}, dicté le {now.strftime('%Y-%m-%d %H:%M')})"
         with _WRITE_LOCK:
             _append_under_section(path, "## Rappels", line)
         return {"ok": True, "path": path}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+    except Exception:
+        return _failure("capture_reminder", ERR_WRITE)

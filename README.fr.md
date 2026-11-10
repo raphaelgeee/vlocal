@@ -39,8 +39,7 @@ English: [README.md](README.md).
 ## Prérequis
 
 - Mac Apple Silicon (M1 ou plus récent). Les Mac Intel ne sont pas pris en charge.
-- macOS 11 ou plus récent. Le moteur GPU demande macOS 14 ou plus ; en dessous,
-  le moteur CPU prend le relais automatiquement (même modèle, plus lent).
+- macOS 14 ou plus récent (le moteur GPU MLX est construit pour macOS 14).
 - Environ 3 Go de disque pour les modèles, téléchargés au premier lancement.
 
 ## Installation

@@ -33,7 +33,7 @@ from texts import (
     _LOST_DICTATION_TOAST,
     _te,
 )
-from ui_bridge import _refresh_lists_ui, _schedule_overlay_hide, _toast, _ui
+from ui_bridge import _msg, _refresh_lists_ui, _schedule_overlay_hide, _toast, _ui
 
 log = applog.get("dictation")
 
@@ -652,9 +652,12 @@ class DictationController:
                     elif _grab:
                         # 1er échec, sous-système sain : un enregistreur PEUT tenir le
                         # micro. On le mentionne au conditionnel (on n'en est pas certain).
-                        _toast(f"{_grab} est peut-être en train d'utiliser le micro. "
-                               "Réglez son micro sur « Aucun » ou fermez-le, puis "
-                               "relancez votre dictée.", kind="error")
+                        _toast(_msg(f"{_grab} est peut-être en train d'utiliser le micro. "
+                                    "Réglez son micro sur « Aucun » ou fermez-le, puis "
+                                    "relancez votre dictée.",
+                                    f"{_grab} may be using the microphone. Set its "
+                                    "microphone to “None” or quit it, then dictate "
+                                    "again."), kind="error")
                     else:
                         _toast("Micro occupé une seconde, on le remet à neuf. "
                                "Réessayez votre dictée tout de suite.", kind="info")
@@ -1184,7 +1187,7 @@ class DictationController:
                 if notify_ui and not _acc_warned[0] \
                         and not permissions.accessibility_ok():
                     _acc_warned[0] = True
-                    _toast("Texte copié — collez avec Cmd+V. Pour l'insertion "
+                    _toast("Texte copié : collez avec Cmd+V. Pour l'insertion "
                            "automatique au curseur, autorisez Vlocal dans Réglages "
                            "Système > Confidentialité et sécurité > Accessibilité.",
                            kind="info")

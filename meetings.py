@@ -22,7 +22,8 @@ import processor
 from engine import SAMPLE_RATE
 from lifecycle import _begin_activity, _end_activity
 from settings import _APP_SUPPORT, _diarization_enabled, _load_settings, _save_settings
-from ui_bridge import _refresh_lists_ui, _toast, _ui
+from texts import _te
+from ui_bridge import _msg, _refresh_lists_ui, _toast, _ui
 
 log = applog.get("meetings")
 
@@ -918,8 +919,9 @@ def _reunion_transcribe_pipeline_inner(meeting_id, wav_path, audio_duree):
     mins = int(audio_duree // 60)
     secs = int(audio_duree % 60)
     duree_txt = (f"{mins} min" if mins else f"{secs} s")
-    notifier.show("Réunion prête",
-                  f"Transcription terminée ({duree_txt}).",
+    notifier.show(_te("Réunion prête"),
+                  _msg(f"Transcription terminée ({duree_txt}).",
+                       f"Transcription finished ({duree_txt})."),
                   subtitle=None)
     _toast("Réunion prête. Cliquez dessus dans la liste pour la lire ou la "
            "copier.", kind="success")

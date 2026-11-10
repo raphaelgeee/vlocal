@@ -26,7 +26,7 @@ from lifecycle import _arm_freeze_watchdog, _lifecycle_show, _register_quit_hook
 from meetings import _meeting_state
 from recorder import repair_wav_header
 from reminder_flow import _rearm_pending_reminders
-from settings import _SHOW_REQUEST, _load_settings, _onboarding_done
+from settings import _SHOW_REQUEST, _load_settings, _onboarding_done, _save_settings
 from texts import _te
 from ui_bridge import (
     _menubar_labels,
@@ -82,6 +82,7 @@ def on_main_window_loaded():
     il part sur un thread, ce rappel de pywebview ne doit rien attendre. Un retour
     arrière survenu au lancement est annoncé une seule fois."""
     global _rollback_notice
+    updater.mark_window_loaded()
     threading.Thread(target=updater.confirm_startup, args=(appstate.app_version,),
                      name="update-confirm", daemon=True).start()
     version, _rollback_notice = _rollback_notice, None
@@ -89,11 +90,41 @@ def on_main_window_loaded():
         _toast(rollback_message(version), kind="info")
 
 
+def _migrate_legacy_audio_device(open_coreaudio=None):
+    """Réglage hérité de 1.4.3 : `audio_device` (index PortAudio) sans
+    `audio_device_name`. Le nom est retrouvé une seule fois, en lecture
+    CoreAudio (aucune énumération PortAudio dans ce processus), puis enregistré ;
+    introuvable, le micro par défaut du système est retenu. La clé
+    `audio_device_name` écrite, la migration ne rejoue plus."""
+    s = _load_settings()
+    idx = s.get("audio_device")
+    if "audio_device_name" in s or not isinstance(idx, int) or isinstance(idx, bool):
+        return None
+    name = None
+    try:
+        if open_coreaudio is None:
+            import micworker
+            open_coreaudio = micworker.open_coreaudio
+        ca = open_coreaudio()
+        name = ca.device_name_at(idx) if ca is not None else None
+    except Exception:
+        log.warning("[micro] nom du micro hérité introuvable", exc_info=True)
+    if name:
+        _save_settings({"audio_device_name": name})
+        log.info("[micro] réglage hérité : index %s -> « %s »", idx, name)
+    else:
+        _save_settings({"audio_device": None, "audio_device_name": None})
+        log.info("[micro] réglage hérité : index %s inconnu, micro par défaut", idx)
+    return name
+
+
 def after_start():
     """Étapes du démarrage, chacune isolée : un échec n'empêche pas les suivantes."""
     # AVANT le moteur : aucune réunion ne peut être en traitement à cet instant,
     # donc tout statut transitoire en base vient d'un processus interrompu.
     _recover_interrupted_meetings()
+    threading.Thread(target=_migrate_legacy_audio_device, name="mic-migrate",
+                     daemon=True).start()
     # v2 — Charge le moteur Whisper en tâche de fond TOUT DE SUITE (la
     # fenêtre est déjà affichée -> démarrage instantané).
     threading.Thread(target=_load_engine_async, daemon=True).start()

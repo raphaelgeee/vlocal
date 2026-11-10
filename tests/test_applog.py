@@ -44,6 +44,22 @@ class TestJournal(unittest.TestCase):
         self.assertNotIn("invisible", journal)
         self.assertIn("message natif ou print restant", console)
 
+    def test_ancien_journal_orphelin_supprime_une_fois(self):
+        code = ("import sys, os, logging, applog\n"
+                "legacy = os.path.join(sys.argv[1], 'support', 'vlocal.log')\n"
+                "os.makedirs(os.path.dirname(legacy))\n"
+                "open(legacy, 'w').write('ancien')\n"
+                "applog.LEGACY_LOG = legacy\n"
+                "applog.setup(frozen=True, log_dir=os.path.join(sys.argv[1], 'logs'))\n"
+                "assert not os.path.exists(legacy)\n"
+                "applog.remove_legacy_log(logging.getLogger('vlocal'))  # absent : sans erreur\n")
+        with tempfile.TemporaryDirectory() as d:
+            r = _lance(code, d)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            journal = _lit(os.path.join(d, "logs", "vlocal.log"))
+        self.assertEqual(journal.count("ancien journal supprimé"), 1)
+        self.assertNotIn("non supprimé", journal)
+
     def test_developpement_console_sans_fichier(self):
         code = ("import sys, applog\n"
                 "assert applog.setup(frozen=False, log_dir=sys.argv[1]) is None\n"

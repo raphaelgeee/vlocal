@@ -21,6 +21,12 @@ class VersionSyncTests(unittest.TestCase):
         self.assertEqual(version, m.group(1),
                          "VERSION (nom du DMG) et APP_VERSION (mise à jour) divergent")
 
+    def test_minimum_macos_matches_mlx_target(self):
+        spec = open(os.path.join(ROOT, "Vlocal.spec"), encoding="utf-8").read()
+        m = re.search(r'"LSMinimumSystemVersion": "([0-9.]+)"', spec)
+        self.assertIsNotNone(m)
+        self.assertEqual(m.group(1), "14.0", "MLX (moteur GPU) vise macOS 14")
+
     def test_version_is_three_numbers(self):
         version = open(os.path.join(ROOT, "VERSION"), encoding="utf-8").read().strip()
         self.assertRegex(version, r"^\d+\.\d+\.\d+$")

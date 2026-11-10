@@ -57,6 +57,15 @@ def _ui(code: str):
         log.debug("start : échec ignoré", exc_info=True)
 
 
+def _translated(r):
+    """v3.3 — i18n : tout payload {"error": "<FR>"} renvoyé au JS est traduit à
+    la volée selon la langue UI (sinon affiché en FR en mode EN), valeur par
+    défaut d'un échec comprise."""
+    if isinstance(r, dict) and isinstance(r.get("error"), str):
+        r["error"] = _te(r["error"])
+    return r
+
+
 def _api_safe(default=None):
     """v16.1 — Décorateur : une méthode d'API ne doit JAMAIS lever vers le pont
     JS (sinon la promesse est rejetée et l'UI peut rester bloquée). On capture
@@ -65,18 +74,13 @@ def _api_safe(default=None):
         @functools.wraps(fn)
         def wrapper(*a, **k):
             try:
-                _r = fn(*a, **k)
-                # v3.3 — i18n : tout payload {"error": "<FR>"} renvoyé au JS est
-                # traduit à la volée selon la langue UI (sinon affiché en FR en mode EN).
-                if isinstance(_r, dict) and isinstance(_r.get("error"), str):
-                    _r["error"] = _te(_r["error"])
-                return _r
+                return _translated(fn(*a, **k))
             except Exception as e:
                 log.warning(f"[api] {fn.__name__} a échoué : {e}")
                 # v3.2.9 — tour de contrôle : tout échec d'API journalisé (code
                 # stable + méthode + type d'exception, SANS donnée sensible).
                 if _EV: _EV.log(_EV.E.API_GUARD, fn=fn.__name__, err=type(e).__name__)
-                return default() if callable(default) else default
+                return _translated(default() if callable(default) else default)
         return wrapper
     return deco
 

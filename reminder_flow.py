@@ -18,7 +18,8 @@ import obsidian
 import processor
 import reminders
 from settings import _load_settings
-from ui_bridge import _refresh_lists_ui, _refresh_menubar, _toast, _ui
+from texts import _te
+from ui_bridge import _msg, _refresh_lists_ui, _refresh_menubar, _toast, _ui
 
 log = applog.get("reminder_flow")
 
@@ -31,7 +32,7 @@ def _fire_reminder(titre: str):
     titre = (titre or "").strip() or "Rappel"
     # 1) Notification système (osascript, fiable)
     try:
-        notifier.show("Rappel", titre, subtitle=None)
+        notifier.show(_te("Rappel"), titre, subtitle=None)
     except Exception:
         log.debug("notifier.show : échec ignoré", exc_info=True)
     # 2) Bannière in-app prominente + réveil de la fenêtre (macOS)
@@ -225,10 +226,13 @@ def _create_reminder_from_text(raw: str):
         _toast((f"C'est noté : « {titre} ». Vous serez prévenu {when}."
                 if when else f"C'est noté : « {titre} »."), kind="success")
     elif iso_ts and iso_ts <= now_ts:
-        _toast(f"Rappel « {titre} » enregistré, mais l'heure indiquée est déjà "
-               "passée : aucune alerte ne sera envoyée.", kind="error")
+        _toast(_msg(f"Rappel « {titre} » enregistré, mais l'heure indiquée est déjà "
+                    "passée : aucune alerte ne sera envoyée.",
+                    f"Reminder “{titre}” saved, but the time given has already "
+                    "passed: no alert will be sent."), kind="error")
     else:
-        _toast(f"Rappel « {titre} » enregistré.", kind="info")
+        _toast(_msg(f"Rappel « {titre} » enregistré.", f"Reminder “{titre}” saved."),
+               kind="info")
     _refresh_lists_ui(); _refresh_menubar()
 
 

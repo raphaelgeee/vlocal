@@ -399,7 +399,7 @@ def strip_hallucinations(text: str) -> str:
 # Une entrée par ligne dans ~/Library/Application Support/Vlocal/glossary.txt
 # Exemples :
 #   Lemaire
-#   Dr Putcrabey
+#   Dr Martin
 #   Amlor
 #   Oreegami
 #   Captiv

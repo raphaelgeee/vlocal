@@ -237,3 +237,56 @@ class TestFrequenceNative(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WorkerStdoutProtocolTests(unittest.TestCase):
+    """fd 1 du worker ne porte que des trames, même quand QoS et CoreAudio échouent."""
+    SCRIPT = r"""
+import ctypes, sys, types
+sys.path.insert(0, sys.argv[1])
+import micworker
+
+class _Pthread:
+    def pthread_set_qos_class_self_np(self, *a):
+        return 22                       # refus de la QoS : avertissement attendu
+
+def _no_coreaudio():
+    raise OSError("CoreAudio absent")
+
+ctypes.CDLL = lambda *a, **k: _Pthread()
+micworker.CoreAudio = _no_coreaudio
+micworker.sys.platform = "darwin"
+sys.modules["sounddevice"] = types.ModuleType("sounddevice")
+micworker.MicWorker._default_uid = lambda self: None
+micworker.set_thread_qos(micworker.QOS_USER_INTERACTIVE)
+sys.exit(micworker.worker_main([]))
+"""
+
+    def test_only_frames_on_stdout(self):
+        import subprocess
+        import sys
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        r = subprocess.run([sys.executable, "-c", self.SCRIPT, root], input=b"",
+                           capture_output=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr.decode(errors="replace"))
+        out, events = r.stdout, []
+        while out:
+            typ, n = out[:1], struct.unpack(">I", out[1:5])[0]
+            self.assertIn(typ, (b"J", b"A"), out[:80])
+            if typ == b"J":
+                events.append(json.loads(out[5:5 + n])["ev"])
+            out = out[5 + n:]
+        self.assertIn("ready", events)
+        err = r.stderr.decode(errors="replace")
+        self.assertIn("CoreAudio indisponible", err)
+        self.assertIn("[qos]", err)
+
+
+class DeviceNameAtTests(unittest.TestCase):
+    def test_index_maps_to_coreaudio_device_order(self):
+        ca = micworker.CoreAudio.__new__(micworker.CoreAudio)
+        ca._device_ids = lambda: [40, 41]
+        ca._get_str = lambda dev, sel: {40: "Haut-parleurs", 41: "Micro USB"}[dev]
+        self.assertEqual(ca.device_name_at(1), "Micro USB")
+        self.assertIsNone(ca.device_name_at(2))
+        self.assertIsNone(ca.device_name_at(-1))

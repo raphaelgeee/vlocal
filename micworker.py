@@ -102,7 +102,8 @@ def set_thread_qos(qos_class: int) -> bool:
     if err and qos_class not in _QOS_WARNED:
         _QOS_WARNED.add(qos_class)
         print(f"[qos] pthread_set_qos_class_self_np({qos_class:#x}) a renvoyé {err} "
-              "(thread hors système QoS : placement P-core non garanti).")
+              "(thread hors système QoS : placement P-core non garanti).",
+              file=sys.stderr)
     return not err
 
 
@@ -208,6 +209,16 @@ class CoreAudio:
                 "name": self._get_str(dev_id, _K_NAME),
                 "transport": _TRANSPORTS.get(tr, "other") if tr is not None else None}
 
+    def device_name_at(self, index):
+        """Nom du périphérique d'index PortAudio `index`, lu dans CoreAudio sans
+        ouvrir PortAudio : l'hôte CoreAudio de PortAudio énumère les
+        périphériques dans l'ordre de kAudioHardwarePropertyDevices. None si
+        l'index n'existe pas."""
+        ids = self._device_ids()
+        if not isinstance(index, int) or not 0 <= index < len(ids):
+            return None
+        return self._get_str(ids[index], _K_NAME)
+
     def default_input(self):
         """{"uid","name","transport"} du micro par défaut, ou None."""
         dev = self._get(_K_SYSTEM_OBJECT, _K_DEFAULT_INPUT, ctypes.c_uint32)
@@ -260,7 +271,7 @@ def open_coreaudio():
     try:
         return CoreAudio()
     except OSError as e:
-        print(f"[micworker] CoreAudio indisponible : {e}")
+        print(f"[micworker] CoreAudio indisponible : {e}", file=sys.stderr)
         return None
 
 
@@ -797,6 +808,9 @@ def worker_main(argv) -> int:
     (numpy seulement pour rééchantillonner) : spawn rapide, ~30 Mo. Le worker
     ne meurt que sur quit/EOF, ou tué par le parent, ce qui est un mode de
     sortie NORMAL ici."""
+    # fd 1 porte le protocole : tout print() du worker (ou d'une bibliothèque)
+    # part sur stderr, les trames passent par _write_all(1, ...).
+    sys.stdout = sys.stderr
     try:
         import sounddevice as sd
     except Exception as e:

@@ -794,7 +794,7 @@ try{if(localStorage.getItem('vlocal_theme')==='light')document.documentElement.s
       <span class="notice-dot"></span>
       <span class="notice-tx" id="notice-tx"></span>
       <button class="notice-act" id="notice-see" data-i18n="notice.see">Voir</button>
-      <button class="notice-x" id="notice-x" aria-label="Ignorer">✕</button>
+      <button class="notice-x" id="notice-x" aria-label="Ignorer" data-i18n-aria="notice.dismiss">✕</button>
     </div>
     <div class="scroll">
       <!-- ACCUEIL -->
@@ -950,7 +950,7 @@ try{if(localStorage.getItem('vlocal_theme')==='light')document.documentElement.s
           <div class="card sec">
             <div class="st" data-i18n="set.theme">Apparence</div>
             <div class="sh" data-i18n="set.theme.d">Sombre par défaut. Le tableau de bord et la bulle de dictée changent ensemble.</div>
-            <div class="spk-seg theme-seg" id="set-theme" role="radiogroup" aria-label="Apparence">
+            <div class="spk-seg theme-seg" id="set-theme" role="radiogroup" aria-label="Apparence" data-i18n-aria="set.theme">
               <button type="button" class="spk-opt theme-opt" data-theme-opt="dark" role="radio" aria-checked="true"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg><span data-i18n="set.theme.dark">Sombre</span></button>
               <button type="button" class="spk-opt theme-opt" data-theme-opt="light" role="radio" aria-checked="false"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg><span data-i18n="set.theme.light">Clair</span></button>
             </div>
@@ -1191,7 +1191,7 @@ try{if(localStorage.getItem('vlocal_theme')==='light')document.documentElement.s
       "set.reset":"Réinitialiser les statistiques",
       "set.reset.d":"« Réinitialiser » remet les compteurs du tableau de bord à zéro sans supprimer vos transcriptions.",
       "set.lang":"Langue","set.lang.d":"Langue de l'interface Vlocal.",
-      "set.theme":"Apparence","set.theme.d":"Sombre par défaut. Le tableau de bord et la bulle de dictée changent ensemble.","set.theme.dark":"Sombre","set.theme.light":"Clair",
+      "notice.dismiss":"Ignorer","set.theme":"Apparence","set.theme.d":"Sombre par défaut. Le tableau de bord et la bulle de dictée changent ensemble.","set.theme.dark":"Sombre","set.theme.light":"Clair",
       "maj.check":"Vérifier les mises à jour","maj.msg":"Message de l'équipe Vlocal",
       "maj.news":"Nouveautés","maj.notes.empty":"Lancez une vérification pour afficher les notes de version.",
       "md.title":"Préparation de Vlocal","md.sub":"Téléchargement du moteur de transcription (~2,8 Go), une seule fois, en Wi-Fi de préférence. Tout reste local ensuite.","md.fail":"Téléchargement interrompu. Vérifiez votre connexion.","md.retry":"Réessayer","md.help":"Besoin d'aide ? support@vlocal.org",
@@ -1425,7 +1425,7 @@ try{if(localStorage.getItem('vlocal_theme')==='light')document.documentElement.s
       "set.reset":"Reset statistics",
       "set.reset.d":"\"Reset\" sets the dashboard counters back to zero without deleting your transcriptions.",
       "set.lang":"Language","set.lang.d":"Vlocal interface language.",
-      "set.theme":"Appearance","set.theme.d":"Dark by default. The dashboard and the dictation pill switch together.","set.theme.dark":"Dark","set.theme.light":"Light",
+      "notice.dismiss":"Dismiss","set.theme":"Appearance","set.theme.d":"Dark by default. The dashboard and the dictation pill switch together.","set.theme.dark":"Dark","set.theme.light":"Light",
       "maj.check":"Check for updates","maj.msg":"Message from the Vlocal team",
       "maj.news":"What's new","maj.notes.empty":"Run a check to see the release notes.",
       "md.title":"Setting up Vlocal","md.sub":"Downloading the transcription engine (~2.8 GB), one time only, Wi-Fi recommended. Everything stays local afterward.","md.fail":"Download interrupted. Check your connection.","md.retry":"Try again","md.help":"Need help? support@vlocal.org",
@@ -1650,6 +1650,7 @@ try{if(localStorage.getItem('vlocal_theme')==='light')document.documentElement.s
     root.querySelectorAll('[data-i18n]').forEach(function(el){ var k=el.getAttribute('data-i18n'); if(hasKey(k)) setText(el, t(k)); });
     root.querySelectorAll('[data-i18n-html]').forEach(function(el){ var k=el.getAttribute('data-i18n-html'); if(hasKey(k)) el.innerHTML = t(k); });
     root.querySelectorAll('[data-i18n-ph]').forEach(function(el){ var k=el.getAttribute('data-i18n-ph'); if(hasKey(k)) el.setAttribute('placeholder', t(k)); });
+    root.querySelectorAll('[data-i18n-aria]').forEach(function(el){ var k=el.getAttribute('data-i18n-aria'); if(hasKey(k)) el.setAttribute('aria-label', t(k)); });
     root.querySelectorAll('[data-i18n-title]').forEach(function(el){ var k=el.getAttribute('data-i18n-title'); if(hasKey(k)) el.setAttribute('title', t(k)); });
     try{ document.documentElement.lang = LANG; }catch(e){}
   }
@@ -2084,7 +2085,7 @@ try{if(localStorage.getItem('vlocal_theme')==='light')document.documentElement.s
       actions += '<button class="btn" id="mtg-export">'+t('btn.export')+'</button>';
       actions += '<button class="btn" id="mtg-rediar">'+t('btn.rediarize')+'</button>';
     }
-    if(m.status==='error') actions += '<button class="btn" id="mtg-retry">'+t('btn.retry')+'</button>';
+    if(m.status==='error' && m.can_retry) actions += '<button class="btn" id="mtg-retry">'+t('btn.retry')+'</button>';
     actions += '<button class="btn" id="mtg-del">'+t('btn.delete')+'</button>';
     actions += '<button class="btn" id="mtg-close">'+t('btn.close')+'</button>';
 

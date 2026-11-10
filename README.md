@@ -38,8 +38,7 @@ Français : [README.fr.md](README.fr.md).
 ## Requirements
 
 - Mac with Apple Silicon (M1 or later). Intel Macs are not supported.
-- macOS 11 or later. The GPU engine needs macOS 14 or later; on older systems the
-  CPU engine is used automatically (same model, slower).
+- macOS 14 or later (the MLX GPU engine is built for macOS 14).
 - About 3 GB of disk for the models, downloaded on first launch.
 
 ## Install
