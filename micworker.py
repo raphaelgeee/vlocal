@@ -209,6 +209,16 @@ class CoreAudio:
                 "name": self._get_str(dev_id, _K_NAME),
                 "transport": _TRANSPORTS.get(tr, "other") if tr is not None else None}
 
+    def device_name_at(self, index):
+        """Nom du périphérique d'index PortAudio `index`, lu dans CoreAudio sans
+        ouvrir PortAudio : l'hôte CoreAudio de PortAudio énumère les
+        périphériques dans l'ordre de kAudioHardwarePropertyDevices. None si
+        l'index n'existe pas."""
+        ids = self._device_ids()
+        if not isinstance(index, int) or not 0 <= index < len(ids):
+            return None
+        return self._get_str(ids[index], _K_NAME)
+
     def default_input(self):
         """{"uid","name","transport"} du micro par défaut, ou None."""
         dev = self._get(_K_SYSTEM_OBJECT, _K_DEFAULT_INPUT, ctypes.c_uint32)

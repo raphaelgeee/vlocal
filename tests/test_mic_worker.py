@@ -280,3 +280,13 @@ sys.exit(micworker.worker_main([]))
         err = r.stderr.decode(errors="replace")
         self.assertIn("CoreAudio indisponible", err)
         self.assertIn("[qos]", err)
+
+
+class DeviceNameAtTests(unittest.TestCase):
+    def test_index_maps_to_coreaudio_device_order(self):
+        ca = micworker.CoreAudio.__new__(micworker.CoreAudio)
+        ca._device_ids = lambda: [40, 41]
+        ca._get_str = lambda dev, sel: {40: "Haut-parleurs", 41: "Micro USB"}[dev]
+        self.assertEqual(ca.device_name_at(1), "Micro USB")
+        self.assertIsNone(ca.device_name_at(2))
+        self.assertIsNone(ca.device_name_at(-1))

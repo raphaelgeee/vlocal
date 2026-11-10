@@ -112,3 +112,39 @@ class TestAucuneEcritureDirecteDansLesFichiersDEtat(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestMicroHerite143(unittest.TestCase):
+    """Réglage 1.4.3 (index seul) : nom retrouvé une fois via CoreAudio, jamais PortAudio."""
+
+    def _run(self, settings, names):
+        import startup
+        saved = []
+
+        class FakeCA:
+            def device_name_at(self, i):
+                return names[i] if 0 <= i < len(names) else None
+
+        with mock.patch.object(startup, "_load_settings", lambda: dict(settings)), \
+                mock.patch.object(startup, "_save_settings", saved.append), \
+                mock.patch.dict(sys.modules, {"sounddevice": None}):
+            startup._migrate_legacy_audio_device(open_coreaudio=FakeCA)
+        return saved
+
+    def test_index_resolved_to_its_name_once(self):
+        saved = self._run({"audio_device": 1}, ["Haut-parleurs", "Micro USB"])
+        self.assertEqual(saved, [{"audio_device_name": "Micro USB"}])
+        self.assertEqual(self._run({"audio_device": 1, "audio_device_name": "Micro USB"},
+                                   ["Haut-parleurs", "Micro USB"]), [])
+
+    def test_unknown_index_falls_back_to_system_default(self):
+        saved = self._run({"audio_device": 9}, ["Micro intégré"])
+        self.assertEqual(saved, [{"audio_device": None, "audio_device_name": None}])
+
+    def test_nothing_chosen_nothing_written(self):
+        self.assertEqual(self._run({"audio_device": None}, []), [])
+
+    def test_started_at_launch(self):
+        import inspect
+        import startup
+        self.assertIn("_migrate_legacy_audio_device", inspect.getsource(startup.after_start))
