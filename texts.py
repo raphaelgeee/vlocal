@@ -175,7 +175,6 @@ _BT = {
   "Rien à ranger dans le coffre.": "Nothing to save in the vault.",
   "Coffre Obsidian introuvable.": "Obsidian vault not found.",
   "Écriture dans le coffre Obsidian impossible.": "Could not write to the Obsidian vault.",
-  "Réessayer impossible : l'enregistrement de cette réunion n'existe plus.": "Cannot retry: this meeting's recording no longer exists.",
 }
 
 # v3.3 (S3) — préfixes des messages d'erreur INTERPOLÉS (f"<préfixe> : {détail}") :

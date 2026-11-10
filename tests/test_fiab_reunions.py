@@ -192,3 +192,39 @@ class TestReessaiDepuisLInterface(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestReessaiSansWav(_Temp):
+    """« Réessayer » n'apparaît que si le WAV de la réunion en erreur existe."""
+
+    def _meeting(self, wav):
+        return {"id": 7, "status": "error", "wav_path": wav, "titre": "R"}
+
+    def _detail(self, row):
+        from api_meetings import MeetingsApi
+        store = mock.Mock()
+        store.get_meeting.return_value = dict(row)
+        with mock.patch.object(appstate, "store", store):
+            return MeetingsApi().get_meeting(7)
+
+    def test_wav_present_retry_offered(self):
+        wav = os.path.join(self.dir, "r.wav")
+        _wav_interrompu(wav, 10)
+        self.assertTrue(self._detail(self._meeting(wav))["can_retry"])
+
+    def test_wav_absent_retry_hidden_and_api_says_why(self):
+        from api_meetings import MeetingsApi
+        row = self._meeting(os.path.join(self.dir, "disparu.wav"))
+        self.assertFalse(self._detail(row)["can_retry"])
+        store = mock.Mock()
+        store.get_meeting.return_value = dict(row)
+        with mock.patch.object(appstate, "store", store), \
+                mock.patch.object(appstate, "controller", object()), \
+                mock.patch.object(appstate, "ui_lang", "en"):
+            r = MeetingsApi().retry_meeting(7)
+        self.assertEqual(r["ok"], False)
+        self.assertIn("no longer available", r["error"])
+
+    def test_interface_hides_retry_without_wav(self):
+        html = open(os.path.join(RACINE, "vlocal-interface.html"), encoding="utf-8").read()
+        self.assertIn("if(m.status==='error' && m.can_retry)", html)

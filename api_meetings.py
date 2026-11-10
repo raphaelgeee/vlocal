@@ -114,6 +114,12 @@ def _open_meeting_mic(rec, timeout):
     return box["wav"]
 
 
+def _wav_available(m):
+    """Le WAV gardé d'une réunion existe encore (condition d'un réessai)."""
+    wav = m.get("wav_path")
+    return bool(wav) and os.path.exists(wav)
+
+
 class MeetingsApi:
     """Réunions : enregistrement, relecture, locuteurs, export."""
 
@@ -478,10 +484,14 @@ class MeetingsApi:
         if appstate.store is None:
             return None
         try:
-            return appstate.store.get_meeting(int(mid))
+            m = appstate.store.get_meeting(int(mid))
         except Exception:
             log.debug("store.get_meeting : échec ignoré", exc_info=True)
             return None
+        if m is not None:
+            # « Réessayer » n'est proposé que si le WAV gardé existe encore.
+            m["can_retry"] = m.get("status") == "error" and _wav_available(m)
+        return m
 
     @_api_safe(default=False)
     def delete_meeting(self, mid):
@@ -496,7 +506,6 @@ class MeetingsApi:
         diarisation) depuis le WAV sauvegardé, sans ré-enregistrer. Réutilise le
         chemin IMPORT sur le WAV existant et MET À JOUR la réunion en place.
         Récupère notamment les réunions ratées par un ancien build. {ok, id}."""
-        import os as _os
         import wave as _wave
         if appstate.controller is None or appstate.store is None:
             return {"ok": False, "error": "Le moteur se prépare encore, un instant."}
@@ -504,11 +513,11 @@ class MeetingsApi:
         m = appstate.store.get_meeting(mid)
         if not m:
             return {"ok": False, "error": "Réunion introuvable."}
-        wav = m["wav_path"] if "wav_path" in m.keys() else None
-        if not wav or not _os.path.exists(wav):
+        if not _wav_available(m):
             return {"ok": False,
                     "error": "L'audio de cette réunion n'est plus disponible, "
                              "réessai impossible."}
+        wav = m["wav_path"]
         with _meeting_lock:
             if (_meeting_state.get("recording")
                     or _meeting_state.get("pipeline_busy")):

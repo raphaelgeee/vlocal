@@ -2085,7 +2085,7 @@ try{if(localStorage.getItem('vlocal_theme')==='light')document.documentElement.s
       actions += '<button class="btn" id="mtg-export">'+t('btn.export')+'</button>';
       actions += '<button class="btn" id="mtg-rediar">'+t('btn.rediarize')+'</button>';
     }
-    if(m.status==='error') actions += '<button class="btn" id="mtg-retry">'+t('btn.retry')+'</button>';
+    if(m.status==='error' && m.can_retry) actions += '<button class="btn" id="mtg-retry">'+t('btn.retry')+'</button>';
     actions += '<button class="btn" id="mtg-del">'+t('btn.delete')+'</button>';
     actions += '<button class="btn" id="mtg-close">'+t('btn.close')+'</button>';
 
