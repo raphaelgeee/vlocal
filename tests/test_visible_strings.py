@@ -19,11 +19,13 @@ Règles :
 import ast
 import glob
 import os
+import sys
 import unittest
 
-import texts
-
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
+
+import texts  # noqa: E402
 DASH = "—"
 TRANSLATED = {"_te", "_toast"}
 RAW_FORBIDDEN = {("notifier", "show"), ("overlay", "info"), ("overlay", "error")}
@@ -144,6 +146,14 @@ class VisibleStringsTests(unittest.TestCase):
                 keys = [k.value for k in node.value.keys]
                 dup = sorted({k for k in keys if keys.count(k) > 1})
                 self.assertEqual(dup, [], node.targets[0].id)
+
+    def test_every_aria_label_of_the_dashboard_is_translated(self):
+        import re
+        html = open(os.path.join(ROOT, "vlocal-interface.html"), encoding="utf-8").read()
+        bad = [tag for tag in re.findall(r"<[^>]*\baria-label=\"[^\"]+\"[^>]*>", html)
+               if 'aria-label="Vlocal"' not in tag and "data-i18n-aria=" not in tag
+               and "aria-label=\"'+" not in tag]
+        self.assertEqual(bad, [])
 
 
 class ObsidianErrorTests(unittest.TestCase):

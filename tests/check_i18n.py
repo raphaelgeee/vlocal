@@ -37,7 +37,7 @@ def main() -> int:
         print("I18N : JavaScript invalide\n" + r.stderr.strip()[:800])
         return 1
     info = json.loads(r.stdout.strip())
-    used = set(re.findall(r'data-i18n(?:-html|-ph)?="([^"]+)"', s))
+    used = set(re.findall(r'data-i18n(?:-html|-ph|-aria|-title)?="([^"]+)"', s))
     used |= set(re.findall(r"\bt\('([a-z0-9.\-_]+)'", s))
     keys = set(re.findall(r'"([a-z0-9.\-_]+)":"', obj))
     # clés construites dynamiquement (préfixes) : ignorées
