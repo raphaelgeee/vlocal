@@ -37,12 +37,10 @@ METHODES = {
     'get_mode': (),
     'get_storage_info': (),
     'hide_window': (),
-    'import_glossary_suggestions': ('entries',),
     'import_meeting_audio': ('filename', 'base64_data', 'num_speakers'),
     'is_reunion_enabled': (),
     'is_visio_available': (),
     'list_glossary': (),
-    'list_glossary_suggestions': (),
     'list_input_devices': (),
     'list_known_voices': (),
     'list_meetings': (),
@@ -91,7 +89,7 @@ METHODES = {
     'usage_stats': (),
 }
 # Attributs publics qui ne sont pas des méthodes (constantes de classe).
-ATTRIBUTS = {"GLOSSARY_SUGGESTIONS", "MAX_AUDIO_BYTES", "SUPPORTED_AUDIO_EXT"}
+ATTRIBUTS = {"MAX_AUDIO_BYTES", "SUPPORTED_AUDIO_EXT"}
 
 
 class TestApiExposee(unittest.TestCase):

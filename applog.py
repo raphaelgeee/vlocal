@@ -26,6 +26,8 @@ LOG_NAME = "vlocal.log"
 CONSOLE_NAME = "console.log"
 MAX_BYTES = 1_000_000
 BACKUPS = 5
+# Journal des versions d'avant 1.5.0, resté orphelin dans Application Support.
+LEGACY_LOG = os.path.expanduser("~/Library/Application Support/Vlocal/vlocal.log")
 FORMAT = "%(asctime)s %(levelname)s %(name)s.%(funcName)s: %(message)s"
 
 ROOT = "vlocal"
@@ -71,7 +73,21 @@ def setup(frozen=None, log_dir=LOG_DIR, level=None):
     root.addHandler(handler)
     _redirect_console(os.path.join(log_dir, CONSOLE_NAME), root)
     root.info("Vlocal démarre, journal de diagnostic actif.")
+    remove_legacy_log(root)
     return path
+
+
+def remove_legacy_log(root, legacy=None):
+    """Supprime l'ancien journal orphelin d'Application Support. Il n'est plus
+    jamais réécrit : dès qu'il a disparu, l'appel ne fait plus rien."""
+    legacy = legacy or LEGACY_LOG
+    try:
+        os.remove(legacy)
+        root.info("ancien journal supprimé : %s", legacy)
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        root.warning("ancien journal non supprimé (%s) : %s", legacy, e)
 
 
 def _redirect_console(path, root):

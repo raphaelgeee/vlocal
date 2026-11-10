@@ -41,52 +41,9 @@ class SettingsApi:
     """Réglages, glossaire, langue, modèles, diagnostic, Obsidian et télémétrie."""
 
     # ------------------------ v13 : Glossaire personnel ----------------------
-    # Suggestions proposées à la 1ʳᵉ ouverture (l'utilisateur coche celles
-    # qu'il garde, rien n'est imposé). Inspiré du brief v13.
-    GLOSSARY_SUGGESTIONS = [
-        {"incorrect": "Captive",       "correct": "Captiv",     "notes": "Plateforme produit"},
-        {"incorrect": "Néolife",       "correct": "Neolife",    "notes": "Client récurrent"},
-        {"incorrect": "Oréégami",      "correct": "Oreegami",   "notes": "Client bootcamp marketing"},
-        {"incorrect": "DoWino",        "correct": "DOWiNO",     "notes": "Casse exacte"},
-        {"incorrect": "Made in IA",    "correct": "Made in AI", "notes": "Nom société (AI en anglais)"},
-        {"incorrect": "Padcrabé",      "correct": "Putcrabey",  "notes": "Nom propre — interlocuteur"},
-        {"incorrect": "Anthropique",   "correct": "Anthropic",  "notes": "Société Claude (anglais)"},
-        {"incorrect": "SuperBase",     "correct": "Supabase",   "notes": "BaaS"},
-        {"incorrect": "à Pifi",        "correct": "Apify",      "notes": "Scraping API"},
-        {"incorrect": "Full on Reach", "correct": "FullEnrich", "notes": "Enrichissement B2B"},
-        {"incorrect": "NOLIF",         "correct": "Neolife",    "notes": "Erreur Whisper observée"},
-        {"incorrect": "Hopco",         "correct": "OPCO",       "notes": "Acronyme formation pro"},
-        {"incorrect": "BGOM 3",        "correct": "BGE-M3",     "notes": "Modèle embedding"},
-        {"incorrect": "Qdrand",        "correct": "Qdrant",     "notes": "Vector DB"},
-        {"incorrect": "H Saint",       "correct": "H100",       "notes": "GPU Nvidia"},
-        # v2 — Stack IA/dev courant : biaise le moteur dès le départ.
-        {"incorrect": "Fulenrich",     "correct": "FullEnrich", "notes": "Enrichissement B2B"},
-        {"incorrect": "Haïku",         "correct": "Haiku",      "notes": "Modèle Claude Haiku"},
-        {"incorrect": "Anthropique",   "correct": "Anthropic",  "notes": "Société Claude"},
-        {"incorrect": "Moku",          "correct": "mockup",     "notes": "Maquette UI"},
-        {"incorrect": "Linked In",     "correct": "LinkedIn",   "notes": "Réseau pro"},
-        {"incorrect": "prongs",        "correct": "prompts",    "notes": "Prompts LLM"},
-        {"incorrect": "I C P",         "correct": "ICP",        "notes": "Ideal Customer Profile"},
-        {"incorrect": "Webhook",       "correct": "webhook",    "notes": "Intégration"},
-    ]
-
     @_api_safe(default=list)
     def list_glossary(self):
         return appstate.store.list_glossary() if appstate.store else []
-
-    @_api_safe(default=list)
-    def list_glossary_suggestions(self):
-        """Suggestions non encore présentes dans la base (case insensitive)."""
-        if appstate.store is None:
-            return list(self.GLOSSARY_SUGGESTIONS)
-        existing = {
-            (e.get("incorrect") or "").strip().lower()
-            for e in appstate.store.list_glossary()
-        }
-        return [
-            s for s in self.GLOSSARY_SUGGESTIONS
-            if s["incorrect"].strip().lower() not in existing
-        ]
 
     @_api_safe(default=None)
     def add_glossary_entry(self, incorrect, correct, notes=""):
@@ -121,24 +78,6 @@ class SettingsApi:
             return False
         appstate.store.delete_snippet(int(snippet_id))
         return True
-
-    @_api_safe(default=0)
-    def import_glossary_suggestions(self, entries):
-        """v13 — Import en lot des suggestions cochées par l'utilisateur.
-        entries : liste de dicts {incorrect, correct, notes?}."""
-        if appstate.store is None or not entries:
-            return 0
-        n = 0
-        for e in entries:
-            try:
-                if appstate.store.add_glossary_entry(
-                    e.get("incorrect", ""), e.get("correct", ""), e.get("notes", "")
-                ):
-                    n += 1
-            except Exception:
-                log.debug("store.add_glossary_entry : échec ignoré", exc_info=True)
-        _refresh_whisper_bias()
-        return n
 
     @_api_safe(default=False)
     def set_lang(self, lang):
