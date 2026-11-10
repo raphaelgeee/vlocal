@@ -181,7 +181,7 @@ app = BUNDLE(
         "CFBundleDisplayName": "Vlocal",
         "CFBundleShortVersionString": VLOCAL_VERSION,
         "CFBundleVersion": VLOCAL_VERSION,
-        "LSMinimumSystemVersion": "11.0",
+        "LSMinimumSystemVersion": "14.0",
         "NSHighResolutionCapable": True,
         "NSMicrophoneUsageDescription":
             "Vlocal utilise le microphone pour transcrire votre voix, "
