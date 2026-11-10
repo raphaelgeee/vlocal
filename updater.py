@@ -59,8 +59,8 @@ EXPECTED_TEAM_ID = "LW8B2TTQ4W"
 # le chien de garde de l'installateur n'est plus là (redémarrage du Mac pendant
 # l'attente). Le chien de garde, lui, décide en quelques dizaines de secondes.
 MAX_UNCONFIRMED_STARTS = 3
-# Une nouvelle version encore en vie après ce délai a démarré : confirmation
-# automatique, même si app.py n'appelle pas confirm_startup() plus tôt.
+# Après ce délai, la confirmation est rejouée si la fenêtre principale a chargé
+# (mark_window_loaded) ; une version vivante mais sans fenêtre n'est pas confirmée.
 AUTO_CONFIRM_DELAY = 20.0
 # Réglages du chien de garde (secondes).
 INSTALLER_TIMING = {"poll": 1, "pid_wait": 60, "confirm_timeout": 300,
@@ -959,8 +959,29 @@ def _in_background(fn):
     threading.Thread(target=fn, daemon=True).start()
 
 
+# Posé par la fenêtre principale quand elle a réellement chargé
+# (startup.on_main_window_loaded -> mark_window_loaded).
+_window_loaded = threading.Event()
+
+
+def mark_window_loaded():
+    """La fenêtre principale a chargé : seule preuve qu'un démarrage a réussi."""
+    _window_loaded.set()
+
+
+def _auto_confirm(version):
+    """Filet de la confirmation : rejoue confirm_startup si la fenêtre a chargé.
+    Sans fenêtre chargée, ne confirme rien : le démarrage reste non confirmé et
+    le retour arrière peut jouer au démarrage suivant."""
+    if not _window_loaded.is_set():
+        _log("fenêtre non chargée après %ds : version %s non confirmée"
+             % (AUTO_CONFIRM_DELAY, version))
+        return False
+    return confirm_startup(version)
+
+
 def _schedule_auto_confirm(version):
-    t = threading.Timer(AUTO_CONFIRM_DELAY, confirm_startup, kwargs={"version": version})
+    t = threading.Timer(AUTO_CONFIRM_DELAY, _auto_confirm, args=(version,))
     t.daemon = True
     t.start()
 

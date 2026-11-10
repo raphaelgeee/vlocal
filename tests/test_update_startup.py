@@ -16,6 +16,9 @@ from test_update_support import IsolatedCase, make_app
 
 import updater
 
+# La vraie programmation de la confirmation automatique (IsolatedCase la remplace).
+_REAL_SCHEDULE = updater._schedule_auto_confirm
+
 REAL_SPAWN = updater._spawn_installer      # capturé avant les doublures de setUp
 
 
@@ -126,6 +129,46 @@ class StartupTransitionTests(StartupCase):
         r = updater.cleanup_leftovers("9.0.0")
         self.assertEqual((r["status"], r["attempts"]), ("confirming", 1))
         updater._schedule_auto_confirm.assert_called_once_with("9.0.0")
+
+    def _fire_auto_confirm(self):
+        """Programme la confirmation automatique et déclenche son minuteur tout de suite."""
+        timers = []
+
+        class FakeTimer:
+            def __init__(self, delay, fn, args=(), kwargs=None):
+                timers.append(lambda: fn(*args, **(kwargs or {})))
+                self.daemon = False
+
+            def start(self):
+                pass
+
+        with mock.patch.object(updater.threading, "Timer", FakeTimer):
+            _REAL_SCHEDULE("9.0.0")
+        self.assertEqual(len(timers), 1)
+        timers[0]()
+
+    def test_auto_confirm_without_loaded_window_does_not_confirm(self):
+        self.pending()
+        with mock.patch.object(updater, "_window_loaded", __import__("threading").Event()):
+            self._fire_auto_confirm()
+        self.assertIsNotNone(self.read_pending(), "le retour arrière doit rester possible")
+        self.assertFalse(os.path.exists(os.path.join(self.state, "confirmed")))
+
+    def test_auto_confirm_after_window_loaded_confirms(self):
+        self.pending()
+        loaded = __import__("threading").Event()
+        with mock.patch.object(updater, "_window_loaded", loaded):
+            updater.mark_window_loaded()
+            self._fire_auto_confirm()
+        self.assertTrue(loaded.is_set())
+        self.assertIsNone(self.read_pending())
+
+    def test_main_window_loaded_marks_the_window(self):
+        import startup
+        with mock.patch.object(updater, "mark_window_loaded") as mark, \
+                mock.patch.object(updater, "confirm_startup"):
+            startup.on_main_window_loaded()
+        mark.assert_called_once_with()
 
     def test_confirm_startup_finalizes_and_removes_backup(self):
         self.pending()

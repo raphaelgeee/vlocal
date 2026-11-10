@@ -82,6 +82,7 @@ def on_main_window_loaded():
     il part sur un thread, ce rappel de pywebview ne doit rien attendre. Un retour
     arrière survenu au lancement est annoncé une seule fois."""
     global _rollback_notice
+    updater.mark_window_loaded()
     threading.Thread(target=updater.confirm_startup, args=(appstate.app_version,),
                      name="update-confirm", daemon=True).start()
     version, _rollback_notice = _rollback_notice, None
