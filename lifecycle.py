@@ -312,7 +312,7 @@ def _self_relaunch(reason: str = "") -> None:
         _last_self_relaunch[0] = now
         log.warning(f"[auto-heal] RELANCE de l'app ({reason}) : {bundle}")
         try:
-            notifier.show("Vlocal redémarre",
+            notifier.show(_te("Vlocal redémarre"),
                           _te("La dictée était bloquée. Vlocal se relance, réessayez dans un instant."),
                           subtitle=None)
         except Exception:

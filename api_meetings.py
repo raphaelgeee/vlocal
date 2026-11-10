@@ -727,7 +727,7 @@ class MeetingsApi:
             head = f"# {titre}\n\n_{created}_\n\n"
             if blocks:
                 return head + "\n\n".join(
-                    f"**{label(b.get('speaker'))}** — {b.get('text', '').strip()}"
+                    f"**{label(b.get('speaker'))}** : {b.get('text', '').strip()}"
                     for b in blocks) + "\n"
             return head + texte + "\n"
         # txt (défaut)
