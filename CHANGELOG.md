@@ -22,7 +22,7 @@ Dates are publication dates on the update channel. Earlier internal versions
 - **GPU first, less memory.** A GPU refusal is retried after 1, 5, 15 then 30
   minutes instead of never; a fast GPU error is retried on the GPU before the
   CPU; the CPU fallback has a real time budget. Encoder evaluated layer by layer
-  (−37 % peak GPU memory, meeting transcription −42 %). Models are unloaded on
+  (−37 % peak GPU memory, meetings about 30 % faster). Models are unloaded on
   real memory pressure, not on fixed timers. Dropped-file transcription now runs
   on the GPU.
 - **Safer updates.** Resumable download, disk space checked first, signature,
